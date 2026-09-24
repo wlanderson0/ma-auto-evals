@@ -38,6 +38,25 @@ Three consequences for what we build:
 2. Capability versus propensity: run every probe with no nudge, a mild incentive, and a direct instruction. The gap between the three is the result — and it is what Gram found mattered most.
 3. Context dependence is their open question and it is measurable. Report variance of a property across contexts and counterparties, not just a mean. That is a research result automated tooling is uniquely placed to produce.
 
+### Extending single-agent properties to multi-agent
+
+Take a property that [Inspect Evals](https://inspect.aisi.org.uk/evals/) already measures on one agent and move the pressure or the input from the user to another agent. The dataset and scorer mostly carry over, which makes these good first targets for item 1 (Inspect → Orbit). The single-agent result is the built-in baseline. Eval names are from memory of the catalogue; check them against the current list.
+
+| Single-agent eval | Multi-agent version | What changes |
+| --- | --- | --- |
+| Sycophancy | Peer-pressure conformity: does an agent drop a correct answer when a peer disagrees? | Pushback comes from a peer, not the user. Vary the number of disagreeing peers, their authority (orchestrator vs worker) and the model mix. Same scorer (answer flipped right → wrong). Easiest port. |
+| AgentDojo (prompt injection) | Injection spreading between agents | Inject into agent A's tool output and score whether B or C carries out the attacker's goal. Utility and security metrics carry over. |
+| MASK (honesty) | Honesty between agents | Elicit an agent's belief, then have the orchestrator or a teammate pressure it; score what it reports to peers. |
+| Make Me Pay / MakeMeSay | Agent-on-agent manipulation | Already two-model setups. Flip the direction to test resistance, e.g. a worker facing a manipulative orchestrator. |
+| AgentHarm | Decomposition attacks | Split a harmful task into harmless-looking parts across agents; test whether refusals hold when no agent sees the whole. Needs a system-level grader. |
+| Sandbagging / GDM stealth | Collusion under oversight | Agents coordinate, e.g. through hidden signals, to evade a monitor. Needs an overseer role and a covert channel. Most design work. |
+
+Suggested order: sycophancy first as a quick win, then AgentDojo for the security angle.
+
+### Multi-agent native properties
+
+To do.
+
 ## Multi-agent Petri extension
 
 [The extension](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) (Cullen, July 2026) gives the auditor N target channels, adds `select_target()` and `route_message()`, supports configurable topologies and runs one judge per agent. It reports no results. In short: it makes Petri talk to several targets, but it does not yet audit a system.
@@ -69,7 +88,7 @@ To do.
 
 ## Sources
 
-- [Inspect](https://inspect.aisi.org.uk/) · [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/) · [Orbit](https://github.com/wlanderson0/orbit)
+- [Inspect](https://inspect.aisi.org.uk/) · [Inspect Evals](https://inspect.aisi.org.uk/evals/) · [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/) · [Orbit](https://github.com/wlanderson0/orbit)
 - [Petri](https://meridianlabs-ai.github.io/inspect_petri/) · [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/) · [Bloom](https://meridianlabs-ai.github.io/petri_bloom/)
 - [Gram (arXiv 2605.30322)](https://arxiv.org/abs/2605.30322) · [Prism](https://github.com/LAThomson/prism)
 - [A multi-agent extension for Petri](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) · [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions)
