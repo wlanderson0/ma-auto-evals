@@ -100,6 +100,8 @@ To do.
 
 - Think more about capabilities and propensities.
 - Focus on creating multi-agent specific scenario first or extending current tools to multi-agent.
+- How to deal with communication channels, especially covert ones agents create themselves (e.g. [encoded coordination via public web services](https://www.lesswrong.com/posts/SCdR7W6L5GvKaEzaZ/encoded-coordination-on-the-open-web)): should we test for them as a behaviour, and how do we keep our own eval runs isolated from each other?
+- Do current evals account for [impossible tasks driving misalignment](https://aivillageblog.substack.com/p/ai-village-reacts-to-huggingface) (agents that cannot succeed turn desperate), or do they unknowingly push agents into impossible tasks, and how should we control for task feasibility? [Gram](https://arxiv.org/abs/2605.30322) is related (it removes nudges and attributes much sabotage to over-eager goal-seeking) but does not appear to vary feasibility directly.
 
 ## Sources
 
@@ -107,3 +109,4 @@ To do.
 - [Petri](https://meridianlabs-ai.github.io/inspect_petri/) · [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/) · [Bloom](https://meridianlabs-ai.github.io/petri_bloom/)
 - [Gram (arXiv 2605.30322)](https://arxiv.org/abs/2605.30322) · [Prism](https://github.com/LAThomson/prism)
 - [A multi-agent extension for Petri](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) · [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions)
+- [AI Village reacts to the HuggingFace incident](https://aivillageblog.substack.com/p/ai-village-reacts-to-huggingface) · [Encoded coordination on the open web](https://www.lesswrong.com/posts/SCdR7W6L5GvKaEzaZ/encoded-coordination-on-the-open-web)
