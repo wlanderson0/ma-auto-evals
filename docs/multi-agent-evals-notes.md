@@ -1,19 +1,24 @@
 # Multi-agent evals notes
 
+This document starts with a quick comparison of existing eval tools, including where the multi-agent Petri extension falls short. It then discusses how evals could be extended to the multi-agent case, starting with which properties to test.
+
 ## Evals comparison
 
 Every tool on the reading list except [Orbit](https://github.com/wlanderson0/orbit) handles one target agent. They also sit at different layers, so comparing them feature by feature misleads.
 
-| Tool | Layer | Input → output | Environment |
-| --- | --- | --- | --- |
-| [Inspect](https://inspect.aisi.org.uk/) | Infrastructure | Task (dataset + solver + scorer) → scored logs | Real sandboxes |
-| [Orbit](https://github.com/wlanderson0/orbit) | Infrastructure, multi-agent | YAML (agents, roles, topology, memory, threats, defences) → Inspect task | Real; 11 scenarios |
-| [Petri](https://meridianlabs-ai.github.io/inspect_petri/) | Elicitation | Hand-written seed → transcripts, 38 judge dimensions | Auditor-simulated tools |
-| [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/) | Elicitation | Seed → audit of a real scaffold (Claude Code, Codex CLI) | Real, Docker |
-| [Bloom](https://meridianlabs-ai.github.io/petri_bloom/) | Elicitation, generative | Behaviour description → generated eval suite | Simulated |
-| [Gram](https://arxiv.org/abs/2605.30322) | Elicitation + causal | 17 sabotage scenarios → rates, plus an investigator agent for causes | Simulated deployment |
-| [Scout](https://meridianlabs-ai.github.io/inspect_scout/) | Analysis | Transcripts + scanners → flagged behaviour, validated against human labels | N/A |
-| [Prism](https://github.com/LAThomson/prism) | Validity | Eval + research question → minimal perturbations, blinded analysis, report | Inherits the eval's |
+<details>
+<summary>Comparison table and design choices</summary>
+
+| Tool                                                        | Layer                       | Input → output                                                             | Environment             |
+| ----------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------- | ----------------------- |
+| [Inspect](https://inspect.aisi.org.uk/)                     | Infrastructure              | Task (dataset + solver + scorer) → scored logs                             | Real sandboxes          |
+| [Orbit](https://github.com/wlanderson0/orbit)               | Infrastructure, multi-agent | YAML (agents, roles, topology, memory, threats, defences) → Inspect task   | Real; 11 scenarios      |
+| [Petri](https://meridianlabs-ai.github.io/inspect_petri/)   | Elicitation                 | Hand-written seed → transcripts, 38 judge dimensions                       | Auditor-simulated tools |
+| [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/) | Elicitation                 | Seed → audit of a real scaffold (Claude Code, Codex CLI)                   | Real, Docker            |
+| [Bloom](https://meridianlabs-ai.github.io/petri_bloom/)     | Elicitation, generative     | Behaviour description → generated eval suite                               | Simulated               |
+| [Gram](https://arxiv.org/abs/2605.30322)                    | Elicitation + causal        | 17 sabotage scenarios → rates, plus an investigator agent for causes       | Simulated deployment    |
+| [Scout](https://meridianlabs-ai.github.io/inspect_scout/)   | Analysis                    | Transcripts + scanners → flagged behaviour, validated against human labels | N/A                     |
+| [Prism](https://github.com/LAThomson/prism)                 | Validity                    | Eval + research question → minimal perturbations, blinded analysis, report | Inherits the eval's     |
 
 - **Infrastructure** — defines and runs the eval, and everything else plugs into it; Orbit adds the multi-agent structure (roles, topology, memory, threats, defences).
 - **Elicitation** — an auditor agent actively tries to produce a behaviour in a target, so you find out whether it can happen at all; "generative" means it also writes the scenarios, "causal" that it also probes why.
@@ -28,11 +33,14 @@ Three design choices separate these tools, and each maps to a decision we face:
 
 Project mapping: item 1 is Inspect → Orbit, item 2 is Gram-style, 3a is Petri-style, 3b is Bloom-style, item 4 is Prism-style.
 
+</details>
+
 ### Multi-agent Petri extension
 
 [The extension](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) (Cullen, July 2026) gives the auditor N target channels, adds `select_target()` and `route_message()`, supports configurable topologies and runs one judge per agent. It reports no results. In short: it makes Petri talk to several targets, but it does not yet audit a system.
 
-Gaps, roughly by importance:
+<details>
+<summary>Nine gaps, by importance</summary>
 
 1. **The auditor is the message bus.** Every message passes through `route_message()`, so the auditor can reorder or reword it and becomes an uncontrolled participant. Add a faithful-channel mode (verbatim delivery, auditor observes only) alongside the adversarial mode, and log the raw message beside what was delivered.
 2. **Judging is per agent.** Single-agent dimensions cannot capture collusion, influence, capitulation, coercion, or outcomes that are bad although no agent misbehaved. Add a system-level judge that sees the full transcript plus each agent's private view.
@@ -44,6 +52,7 @@ Gaps, roughly by importance:
 8. **Mixed models unclear.** The post does not say whether targets can be different models. A weak model steering a strong one is a core threat model.
 9. **No surrounding scaffolding.** No multi-agent seeds, no Scout scanners for multi-agent transcripts, no validity checks — items 3b and 4 of the research goals.
 
+</details>
 
 ## Multi-agent properties to test
 
@@ -59,21 +68,25 @@ Three consequences for what we build:
 
 Take a property that [Inspect Evals](https://inspect.aisi.org.uk/evals/) already measures on one agent and move the pressure or the input from the user to another agent. The dataset and scorer mostly carry over, which makes these good first targets for item 1 (Inspect → Orbit). The single-agent result is the built-in baseline. Eval names are from memory of the catalogue; check them against the current list.
 
-| Single-agent eval | Multi-agent version | What changes |
-| --- | --- | --- |
-| Sycophancy | Peer-pressure conformity: does an agent drop a correct answer when a peer disagrees? | Pushback comes from a peer, not the user. Vary the number of disagreeing peers, their authority (orchestrator vs worker) and the model mix. Same scorer (answer flipped right → wrong). Easiest port. |
-| AgentDojo (prompt injection) | Injection spreading between agents | Inject into agent A's tool output and score whether B or C carries out the attacker's goal. Utility and security metrics carry over. |
-| MASK (honesty) | Honesty between agents | Elicit an agent's belief, then have the orchestrator or a teammate pressure it; score what it reports to peers. |
-| Make Me Pay / MakeMeSay | Agent-on-agent manipulation | Already two-model setups. Flip the direction to test resistance, e.g. a worker facing a manipulative orchestrator. |
-| AgentHarm | Decomposition attacks | Split a harmful task into harmless-looking parts across agents; test whether refusals hold when no agent sees the whole. Needs a system-level grader. |
-| Sandbagging / GDM stealth | Collusion under oversight | Agents coordinate, e.g. through hidden signals, to evade a monitor. Needs an overseer role and a covert channel. Most design work. |
+<details>
+<summary>Six evals to port</summary>
+
+| Single-agent eval            | Multi-agent version                                                                  | What changes                                                                                                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sycophancy                   | Peer-pressure conformity: does an agent drop a correct answer when a peer disagrees? | Pushback comes from a peer, not the user. Vary the number of disagreeing peers, their authority (orchestrator vs worker) and the model mix. Same scorer (answer flipped right → wrong). Easiest port. |
+| AgentDojo (prompt injection) | Injection spreading between agents                                                   | Inject into agent A's tool output and score whether B or C carries out the attacker's goal. Utility and security metrics carry over.                                                                  |
+| MASK (honesty)               | Honesty between agents                                                               | Elicit an agent's belief, then have the orchestrator or a teammate pressure it; score what it reports to peers.                                                                                       |
+| Make Me Pay / MakeMeSay      | Agent-on-agent manipulation                                                          | Already two-model setups. Flip the direction to test resistance, e.g. a worker facing a manipulative orchestrator.                                                                                    |
+| AgentHarm                    | Decomposition attacks                                                                | Split a harmful task into harmless-looking parts across agents; test whether refusals hold when no agent sees the whole. Needs a system-level grader.                                                 |
+| Sandbagging / GDM stealth    | Collusion under oversight                                                            | Agents coordinate, e.g. through hidden signals, to evade a monitor. Needs an overseer role and a covert channel. Most design work.                                                                    |
 
 Suggested order: sycophancy first as a quick win, then AgentDojo for the security angle.
+
+</details>
 
 ### Multi-agent native properties
 
 To do.
-
 
 ## What to measure — TBD
 
