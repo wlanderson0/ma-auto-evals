@@ -93,6 +93,19 @@ Closely paraphrased from [Foundational Challenges in Assuring Alignment and Safe
 
 LLM agents should be evaluated in adversarial settings to assess whether their behaviour is consistent across different contexts (Scheurer et al., 2023a; Chan et al., 2023b; Akata et al., 2023).
 
+Some properties only exist for pairs, groups or the whole system.
+
+- [Multi-agent risks from advanced AI](https://arxiv.org/abs/2502.14143) (Hammond et al., 2025): three failure modes defined by incentives — miscoordination, conflict, collusion — and seven risk factors: information asymmetries, network effects, selection pressures, destabilising dynamics, commitment and trust, emergent agency, multi-agent security.
+- [Open challenges in multi-agent security](https://arxiv.org/abs/2505.02077) (Schroeder de Witt et al., 2025): threats specific to interacting agents — steganographic collusion, swarm and heterogeneous attacks, attacks on overseers, cascading failures, privacy leakage. Notes that benchmarks are single-agent and names missing evals: steganography detection rates, cascade propagation, swarm scalability, attribution under collusion.
+
+The first list (Anwar et al., 2024) covers one agent's traits in a multi-agent setting. These papers add candidates at three levels:
+
+- **Agent, relative to peers:** coordinating with unseen partners, deceiving under information asymmetry, keeping commitments or making threats, calibrating trust in peers and orchestrators.
+- **Group:** unprompted collusion, covert-channel capacity past a monitor, attacks on the overseer.
+- **System:** goal drift along delegation chains, infection and cascade thresholds, correlated failures in single-model systems, harmful capability that emerges although each agent refuses alone, escalation over repeated rounds, and whether the responsible agent can be identified.
+
+Model mix (same-model vs mixed) matters most at the group and system levels. Negotiation and coordination skill are capabilities labs could hill-climb on, so the group and system levels are the safety-relevant core.
+
 ## What to measure — TBD
 
 Following Tilli's post, the unit should be a property that causally drives interaction outcomes, not a catalogue of scenarios (prisoner's dilemma etc): pick the property, then build scenarios to measure it. Properties would need to be both tractable to measure and safety-relevant.
@@ -116,4 +129,5 @@ To do.
 - [Gram (arXiv 2605.30322)](https://arxiv.org/abs/2605.30322) · [Prism](https://github.com/LAThomson/prism)
 - [A multi-agent extension for Petri](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) · [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions)
 - [Foundational Challenges in Assuring Alignment and Safety of LLMs (arXiv 2404.09932)](https://arxiv.org/abs/2404.09932)
+- [Multi-agent risks from advanced AI (arXiv 2502.14143)](https://arxiv.org/abs/2502.14143) · [Open challenges in multi-agent security (arXiv 2505.02077)](https://arxiv.org/abs/2505.02077)
 - [AI Village reacts to the HuggingFace incident](https://aivillageblog.substack.com/p/ai-village-reacts-to-huggingface) · [Encoded coordination on the open web](https://www.lesswrong.com/posts/SCdR7W6L5GvKaEzaZ/encoded-coordination-on-the-open-web)
