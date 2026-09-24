@@ -28,6 +28,23 @@ Three design choices separate these tools, and each maps to a decision we face:
 
 Project mapping: item 1 is Inspect → Orbit, item 2 is Gram-style, 3a is Petri-style, 3b is Bloom-style, item 4 is Prism-style.
 
+### Multi-agent Petri extension
+
+[The extension](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) (Cullen, July 2026) gives the auditor N target channels, adds `select_target()` and `route_message()`, supports configurable topologies and runs one judge per agent. It reports no results. In short: it makes Petri talk to several targets, but it does not yet audit a system.
+
+Gaps, roughly by importance:
+
+1. **The auditor is the message bus.** Every message passes through `route_message()`, so the auditor can reorder or reword it and becomes an uncontrolled participant. Add a faithful-channel mode (verbatim delivery, auditor observes only) alongside the adversarial mode, and log the raw message beside what was delivered.
+2. **Judging is per agent.** Single-agent dimensions cannot capture collusion, influence, capitulation, coercion, or outcomes that are bad although no agent misbehaved. Add a system-level judge that sees the full transcript plus each agent's private view.
+3. **No search over system structure.** Topology, model mix, roles, memory visibility and monitors are fixed inputs, not things the auditor can vary. This is exactly item 3a, and Orbit already has it.
+4. **No single-agent baseline.** A behaviour seen in a multi-agent run may be something the model does on its own. Every run needs a comparison: the same task with one agent, with scripted peers, and with a different model mix. Without those, "the agents colluded" can just mean "the model does this anyway".
+5. **Collusion needs an overseer and a covert channel.** Neither monitor roles nor private channels exist here.
+6. **More agents, more tells that this is a test.** In a single-agent audit the target can only notice that its tools are fake; here it can also notice that its peers are. Every extra agent adds another chance to spot the setup, and nothing measures per-agent realism or eval awareness. Bloom scores both; Dish and Orbit offer real environments.
+7. **Rollback and turn-taking are single-agent ideas.** Rolling back one agent leaves the others inconsistent, so we need joint snapshots. Turn order is sequential and auditor-chosen, so there is no asynchrony or timing, and the auditor's context grows with N, capping scale at a handful of agents.
+8. **Mixed models unclear.** The post does not say whether targets can be different models. A weak model steering a strong one is a core threat model.
+9. **No surrounding scaffolding.** No multi-agent seeds, no Scout scanners for multi-agent transcripts, no validity checks — items 3b and 4 of the research goals.
+
+
 ## Multi-agent properties to test
 
 [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions) (Tilli, Nov 2025) argues scenario simulation is weak evidence: it oversimplifies, LLM behaviour is context-dependent, and situational awareness is hard to control. The author proposes measuring the agent properties that causally drive outcomes, in five clusters — motivational drivers, modelling self and others, communication and commitments, normative intelligence, strategic intelligence — and names two eval directions we should keep separate: agent assessment (does the model have property P?) and causal testing (does varying P change the outcome?).
@@ -57,21 +74,6 @@ Suggested order: sycophancy first as a quick win, then AgentDojo for the securit
 
 To do.
 
-## Multi-agent Petri extension
-
-[The extension](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) (Cullen, July 2026) gives the auditor N target channels, adds `select_target()` and `route_message()`, supports configurable topologies and runs one judge per agent. It reports no results. In short: it makes Petri talk to several targets, but it does not yet audit a system.
-
-Gaps, roughly by importance:
-
-1. **The auditor is the message bus.** Every message passes through `route_message()`, so the auditor can reorder or reword it and becomes an uncontrolled participant. Add a faithful-channel mode (verbatim delivery, auditor observes only) alongside the adversarial mode, and log the raw message beside what was delivered.
-2. **Judging is per agent.** Single-agent dimensions cannot capture collusion, influence, capitulation, coercion, or outcomes that are bad although no agent misbehaved. Add a system-level judge that sees the full transcript plus each agent's private view.
-3. **No search over system structure.** Topology, model mix, roles, memory visibility and monitors are fixed inputs, not things the auditor can vary. This is exactly item 3a, and Orbit already has it.
-4. **No single-agent baseline.** A behaviour seen in a multi-agent run may be something the model does on its own. Every run needs a comparison: the same task with one agent, with scripted peers, and with a different model mix. Without those, "the agents colluded" can just mean "the model does this anyway".
-5. **Collusion needs an overseer and a covert channel.** Neither monitor roles nor private channels exist here.
-6. **More agents, more tells that this is a test.** In a single-agent audit the target can only notice that its tools are fake; here it can also notice that its peers are. Every extra agent adds another chance to spot the setup, and nothing measures per-agent realism or eval awareness. Bloom scores both; Dish and Orbit offer real environments.
-7. **Rollback and turn-taking are single-agent ideas.** Rolling back one agent leaves the others inconsistent, so we need joint snapshots. Turn order is sequential and auditor-chosen, so there is no asynchrony or timing, and the auditor's context grows with N, capping scale at a handful of agents.
-8. **Mixed models unclear.** The post does not say whether targets can be different models. A weak model steering a strong one is a core threat model.
-9. **No surrounding scaffolding.** No multi-agent seeds, no Scout scanners for multi-agent transcripts, no validity checks — items 3b and 4 of the research goals.
 
 ## What to measure — TBD
 
