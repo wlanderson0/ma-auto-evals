@@ -1,8 +1,6 @@
-# Multi-agent evals: gaps, behaviours, tooling
+# Multi-agent evals notes
 
-Sep 24, 2026 · @Sarah
-
-## Where the tools sit
+## Evals comparison
 
 Every tool on the reading list except [Orbit](https://github.com/wlanderson0/orbit) handles one target agent. They also sit at different layers, so comparing them feature by feature misleads.
 
@@ -22,7 +20,7 @@ Every tool on the reading list except [Orbit](https://github.com/wlanderson0/orb
 - **Analysis** — scans transcripts after the run to find behaviour nobody thought to look for, without running anything itself.
 - **Validity** — stress-tests a claimed finding by perturbing the eval and re-analysing it, to check the result means what we think it means.
 
-Three design choices separate these tools more sharply than their feature lists, and each maps to a decision we face:
+Three design choices separate these tools, and each maps to a decision we face:
 
 - **How much you must specify up front** — a whole scenario (Petri, Dish), just a behaviour (Bloom), a research question (Prism), or only a scanner over logs you already have (Scout).
 - **How real the environment is** — simulated tools versus real scaffolds and sandboxes. Gram found realism and fewer nudges cut sabotage to near zero, so this decides whether a null result means anything.
@@ -30,7 +28,7 @@ Three design choices separate these tools more sharply than their feature lists,
 
 Project mapping: item 1 is Inspect → Orbit, item 2 is Gram-style, 3a is Petri-style, 3b is Bloom-style, item 4 is Prism-style.
 
-## The properties reframe
+## Multi-agent properties to test
 
 [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions) (Tilli, Nov 2025) argues scenario simulation is weak evidence: it oversimplifies, LLM behaviour is context-dependent, and situational awareness is hard to control. The author proposes measuring the agent properties that causally drive outcomes, in five clusters — motivational drivers, modelling self and others, communication and commitments, normative intelligence, strategic intelligence — and names two eval directions we should keep separate: agent assessment (does the model have property P?) and causal testing (does varying P change the outcome?).
 
@@ -40,7 +38,7 @@ Three consequences for what we build:
 2. Capability versus propensity: run every probe with no nudge, a mild incentive, and a direct instruction. The gap between the three is the result — and it is what Gram found mattered most.
 3. Context dependence is their open question and it is measurable. Report variance of a property across contexts and counterparties, not just a mean. That is a research result automated tooling is uniquely placed to produce.
 
-## What the multi-agent Petri extension misses
+## Multi-agent Petri extension
 
 [The extension](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) (Cullen, July 2026) gives the auditor N target channels, adds `select_target()` and `route_message()`, supports configurable topologies and runs one judge per agent. It reports no results. In short: it makes Petri talk to several targets, but it does not yet audit a system.
 
@@ -67,7 +65,6 @@ To do.
 ## Open questions
 
 - Think more about capabilities and propensities.
-- Is a property-profile-per-model output in scope, or is the project strictly tooling?
 - Focus on creating multi-agent specific scenario first or extending current tools to multi-agent.
 
 ## Sources
