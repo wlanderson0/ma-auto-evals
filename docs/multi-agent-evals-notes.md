@@ -86,7 +86,12 @@ Suggested order: sycophancy first as a quick win, then AgentDojo for the securit
 
 ### Multi-agent native properties
 
-To do.
+Closely paraphrased from [Foundational Challenges in Assuring Alignment and Safety of LLMs](https://arxiv.org/pdf/2404.09932) (Anwar et al., 2024), §2.6.1: different benchmarks are needed to understand dispositions and capabilities in multi-agent settings, such as:
+
+- Dispositional traits: helpfulness, altruism, selfishness, human emotions like spite or jealousy, and awareness of or adherence to various norms and conventions.
+- Capabilities: negotiation (Fu et al., 2023b), theory of mind (Shapira et al., 2023; Zhou et al., 2023a), manipulation (Ward et al., 2023), or making and fulfilling credible commitments (Park et al., 2023a).
+
+LLM agents should be evaluated in adversarial settings to assess whether their behaviour is consistent across different contexts (Scheurer et al., 2023a; Chan et al., 2023b; Akata et al., 2023).
 
 ## What to measure — TBD
 
@@ -99,6 +104,7 @@ To do.
 ## Open questions
 
 - Think more about capabilities and propensities.
+    - What can be easily generalised not be too scenario-specific.
 - Focus on creating multi-agent specific scenario first or extending current tools to multi-agent.
 - How to deal with communication channels, especially covert ones agents create themselves (e.g. [encoded coordination via public web services](https://www.lesswrong.com/posts/SCdR7W6L5GvKaEzaZ/encoded-coordination-on-the-open-web)): should we test for them as a behaviour, and how do we keep our own eval runs isolated from each other?
 - Do current evals account for [impossible tasks driving misalignment](https://aivillageblog.substack.com/p/ai-village-reacts-to-huggingface) (agents that cannot succeed turn desperate), or do they unknowingly push agents into impossible tasks, and how should we control for task feasibility? [Gram](https://arxiv.org/abs/2605.30322) is related (it removes nudges and attributes much sabotage to over-eager goal-seeking) but does not appear to vary feasibility directly.
@@ -109,4 +115,5 @@ To do.
 - [Petri](https://meridianlabs-ai.github.io/inspect_petri/) · [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/) · [Bloom](https://meridianlabs-ai.github.io/petri_bloom/)
 - [Gram (arXiv 2605.30322)](https://arxiv.org/abs/2605.30322) · [Prism](https://github.com/LAThomson/prism)
 - [A multi-agent extension for Petri](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) · [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions)
+- [Foundational Challenges in Assuring Alignment and Safety of LLMs (arXiv 2404.09932)](https://arxiv.org/abs/2404.09932)
 - [AI Village reacts to the HuggingFace incident](https://aivillageblog.substack.com/p/ai-village-reacts-to-huggingface) · [Encoded coordination on the open web](https://www.lesswrong.com/posts/SCdR7W6L5GvKaEzaZ/encoded-coordination-on-the-open-web)
