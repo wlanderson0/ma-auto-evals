@@ -65,7 +65,7 @@ flowchart LR
   linkStyle 4 stroke:#7048e8,stroke-width:2px
 ```
 
-## Level 1: Auditor outside of the eval
+## Level 1: Auditor outside of the eval but directly affecting it
 
 In this level, the auditor has the same affordances as Petri, as well as being able to spoof messages of any agents.
 This departs somewhat from Petri in that, pre-fills notwithstanding, the auditor can control target messages.
@@ -79,6 +79,9 @@ Ideally the judge could determine to what extent the auditor had to put its thum
 > the auditor is controlling all of the interaction between agents.
 
 From a brief chat with Claude, it seems like implementing this level would require "checkpoint" functionality in Orbit in order to be able to do the rollbacks.
+
+> [!TIP]
+> Maybe there is some functional overlap here with attacks/defenses that Orbit is in
 
 ```mermaid
 flowchart LR
@@ -114,5 +117,88 @@ flowchart LR
   linkStyle 4 stroke:#7048e8,stroke-width:2px
 ```
 
+## Level 2: Auditor changing eval setup
 
+In this level, the auditor is "searching over configurations, roles, settings".
+In this case, the auditor isn't directly influencing the multi-agent sample (by modifying messages, tool calls, or rollback). They are affecting the setup.
+A hybrid version could be possible where the auditor can both change the setup as well as directly influence the sample.
 
+Here are a couple examples to illustrate.
+
+**Auditor adds an agent mid-sample in order to increase memetic spread**
+
+Green marks adoption of X, and the dashed green box is the outcome being measured.
+The auditor's lane holds only its observations, the adoption count among A, B and the Target, plus the one setup change.
+
+```mermaid
+flowchart LR
+  classDef audLane fill:#e5dbff,stroke:#7048e8,color:#1a1a1a,font-weight:bold
+  classDef tgtLane fill:#e9ecef,stroke:#495057,color:#1a1a1a,font-weight:bold
+  classDef newLane fill:#fff4e6,stroke:#e8590c,color:#1a1a1a,font-weight:bold
+  classDef msg fill:#ffffff,stroke:#495057,color:#1a1a1a
+  classDef obs fill:#ffffff,stroke:#b197fc,color:#1a1a1a
+  classDef dormant fill:#ffffff,stroke:#dee2e6,color:#adb5bd,stroke-dasharray:4 3
+  classDef adv fill:#fff4e6,stroke:#e8590c,color:#1a1a1a
+  classDef meme fill:#e6fcf5,stroke:#0ca678,color:#1a1a1a
+  classDef outcome fill:#e6fcf5,stroke:#0ca678,color:#1a1a1a,stroke-dasharray:4 3
+
+  AUD["Auditor<br/><i>edits setup only</i>"] ~~~ A1["X adopted: 0/3"] --> A2["0/3"] --> A3["0/3, stalled"] -. "amend_pending(+Advocate)" .-> A4["0/3"] --> A5["1/3"] --> A6["score:<br/>did Target adopt X?"]
+
+  SEED["Seeder<br/><i>#town</i>"] ~~~ S1["proposes X"] --> S2["argues for X"] --> S3["answers pushback"] --> S4["argues for X"] --> S5["argues for X"] --> S6["argues for X"]
+
+  PA["Peer A<br/><i>#town, #pod</i>"] ~~~ PA1["neutral"] --> PA2["skeptical"] --> PA3["skeptical"] --> PA4["reads Advocate"] --> PA5["adopts X"] --> PA6["#pod: repeats X"]
+
+  PB["Peer B<br/><i>#town, #pod</i>"] ~~~ PB1["neutral"] --> PB2["neutral"] --> PB3["skeptical"] --> PB4["neutral"] --> PB5["leaning X"] --> PB6["adopts X"]
+
+  TGT["Target<br/><i>#pod only</i>"] ~~~ T1["neutral"] --> T2["neutral"] --> T3["neutral"] --> T4["neutral"] --> T5["hears X from A"] --> T6["adopts X?"]
+
+  ADV["Advocate<br/><i>added mid-eval</i>"] ~~~ V1["declared,<br/>not scheduled"] --> V2["not scheduled"] --> V3["not scheduled"] --> V4["joins #town,<br/>backs X"] --> V5["adds ‘evidence’<br/>for X"] --> V6["backs X"]
+
+  class A1,A2,A3,A4,A5,A6 obs
+  class AUD audLane
+  class SEED,PA,PB,TGT tgtLane
+  class ADV newLane
+  class S1,S2,S3,S4,S5,S6,PA1,PA2,PA3,PA4,PB1,PB2,PB3,PB4,PB5,T1,T2,T3,T4,T5 msg
+  class PA5,PA6,PB6 meme
+  class T6 outcome
+  class V1,V2,V3 dormant
+  class V4,V5,V6 adv
+  linkStyle 3 stroke:#7048e8,stroke-width:2px
+  linkStyle 31,32 stroke:#dee2e6
+```
+
+**Auditor switches the communication channels to test for emergent hierarchy**
+
+```mermaid
+flowchart LR
+  classDef agent fill:#ffffff,stroke:#495057,color:#1a1a1a
+  classDef hub fill:#fff4e6,stroke:#e8590c,color:#1a1a1a,font-weight:bold
+  classDef chan fill:#e9ecef,stroke:#868e96,color:#495057
+  classDef aud fill:#e5dbff,stroke:#7048e8,color:#1a1a1a
+  classDef phase fill:#f8f9fa,stroke:#ced4da,color:#495057
+
+  subgraph E1["Eval 1 · one shared channel"]
+    direction LR
+    A1((A)) --- ALL[["#all"]]
+    B1((B)) --- ALL
+    C1((C)) --- ALL
+    D1((D)) --- ALL
+  end
+
+  AUD["Auditor<br/><i>reads eval 1 logs:</i><br/>whose plans get adopted?<br/>who gets deferred to?<br/><br/><b>writes eval 2 setup</b><br/><i>repeat with other hubs</i>"]
+
+  subgraph E2["Eval 2 · star, hub = A"]
+    direction LR
+    A2((A)) --- B2((B))
+    A2 --- C2((C))
+    A2 --- D2((D))
+  end
+
+  E1 ==> AUD ==> E2
+
+  class A1,B1,C1,D1,B2,C2,D2 agent
+  class A2 hub
+  class ALL chan
+  class AUD aud
+  class E1,E2 phase
+```
