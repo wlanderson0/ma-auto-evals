@@ -25,7 +25,7 @@ Short glossary (auditor, target, timestep, checkpoint, fork, seed, dimension) so
 
 ## 2. How this differs from Multi-Agent Petri
 
-Comparison with [Petri\_MultiAgent](https://github.com/carissacullen/Petri_MultiAgent_/tree/main) ([write-up](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri)).
+Comparison with [Petri_MultiAgent](https://github.com/carissacullen/Petri_MultiAgent_/tree/main) ([write-up](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri)).
 
 - What's missing and why we are doing this.
 - Technical comparison:
@@ -154,15 +154,15 @@ Which models we run as auditor, judge and targets.
 
 - Start with weaker models.
 
-## 10. Comparison with other eval frameworks
+## 9. Comparison with other eval frameworks
 
 A short table positioning this work against [Petri](https://meridianlabs-ai.github.io/inspect_petri/), [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/), [Bloom](https://meridianlabs-ai.github.io/petri_bloom/), [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/), [Gram](https://arxiv.org/abs/2605.30322) and [Prism](https://github.com/LAThomson/prism) (single vs multi-agent, who drives the interaction, what is searched over).
 
-## 11. (Optional) Open questions
+## 10. (Optional) Open questions
 
-## 12. References
+## 11. References
 
 - [Orbit](https://github.com/wlanderson0/orbit) · [Inspect](https://inspect.aisi.org.uk/)
 - [Petri concepts](https://meridianlabs-ai.github.io/inspect_petri/using/concepts.html)
-- [A multi-agent extension for Petri](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) · [Petri\_MultiAgent repo](https://github.com/carissacullen/Petri_MultiAgent_/tree/main)
+- [A multi-agent extension for Petri](https://www.lesswrong.com/posts/DhFgiMzWjg7XboPDz/a-multi-agent-extension-for-petri) · [Petri_MultiAgent repo](https://github.com/carissacullen/Petri_MultiAgent_/tree/main)
 - [Agent properties for safe interactions](https://www.cooperativeai.com/post/agent-properties-for-safe-interactions)
