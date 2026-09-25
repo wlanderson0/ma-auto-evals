@@ -1,4 +1,4 @@
-# Orbit Spec — Outline
+# Spec — Outline
 
 This is the skeleton of the spec for adding Petri-style automated auditing to Orbit.
 
@@ -6,7 +6,7 @@ This is the skeleton of the spec for adding Petri-style automated auditing to Or
 
 ### 1.1 Motivation
 
-Why single-agent auditors (Petri, Bloom, etc.) miss behaviours that only emerge from interactions between agents, and why Orbit is the right base.
+Why single-agent auditors (Petri, Bloom, etc.) miss behaviours that only emerge from interactions between agents, and why we build on Orbit.
 
 ### 1.2 Goal and research question
 
@@ -21,7 +21,7 @@ What this spec covers now versus later, and what is explicitly out of scope.
 
 ### 1.4 (Optional) Terminology
 
-Short glossary (auditor, target, timestep, checkpoint, fork, seed, dimension) so we all use the same words.
+Short glossary (auditor, target, timestep, checkpoint, fork, seed) so we all use the same words.
 
 ## 2. How this differs from Multi-Agent Petri
 
@@ -31,8 +31,6 @@ Comparison with [Petri_MultiAgent](https://github.com/carissacullen/Petri_MultiA
 - Technical comparison:
   - Who generates inter-agent messages
     - Auditor-scripted interactions versus real agent-to-agent communication over Orbit channels.
-  - What the auditor can control
-    - Which ability each system gives the auditor (messages, tools, rollback, setup changes).
   - Implications for validity
     - How much each approach distorts the interaction being measured, and what that means for interpreting results.
 
@@ -48,21 +46,17 @@ Defines what one timestep is when several agents are running and at which points
 
 ### 3.3 Auditor role
 
-What the auditor sees, what it can do, and its budget and stopping criteria.
+What the auditor sees and what it can do.
 
 ### 3.4 Target and non-target agents
 
-Which agents are under evaluation, which are scripted or auditor-controllable, and what each can see.
+Which agents are under evaluation and which the auditor can take over.
 
 ### 3.5 Tools: real versus simulated
 
 When tool results are real Orbit tools and when the auditor simulates them.
 
-### 3.6 Transcript
-
-How a multi-agent, possibly branched run is recorded so the judge can cite evidence.
-
-### 3.7 Checkpoints, rollback and forking
+### 3.6 Checkpoints, rollback and forking
 
 How eval state is saved, restored and branched, including when real tools have side effects.
 
@@ -82,6 +76,8 @@ Petri's affordances plus taking over or spoofing any agent, with rollback.
 
 The auditor searches over configurations, roles, topologies and mid-sample changes (e.g. adding an agent) rather than editing messages.
 
+- Open question: how do we guide the auditor in generating scenarios?
+
 ### 4.4 Hybrid
 
 Whether and how one auditor combines Level 1 and Level 2 actions.
@@ -92,7 +88,7 @@ The programmatic objects and tools the auditor uses to inspect and act on an Orb
 
 ### 5.1 Transcript object
 
-A compact representation of the run that the auditor can query and edit in code.
+How a multi-agent, possibly branched run is recorded, as a compact object the auditor can query and edit in code.
 
 - Must support: loading by timestep range, advancing one timestep, stepping back, editing portions, and running subagents on portions.
 
@@ -116,19 +112,7 @@ The concrete tool calls (e.g. send as agent, simulate tool, rollback, fork, amen
 
 ## 6. Judging and scoring
 
-How a judge scores multi-agent transcripts, including across branches and forked runs.
-
-### 6.1 Behaviour dimensions
-
-The per-property rubrics the judge scores against.
-
-### 6.2 Audit-quality dimensions
-
-How much the auditor "put its thumb on the scale" and whether the scenario stayed realistic.
-
-### 6.3 Aggregation across runs
-
-How scores combine across seeds, forks and Level 2 configuration sweeps.
+How a judge scores multi-agent transcripts, including how much the auditor had to "put its thumb on the scale" of the sample.
 
 ## 7. Target properties
 
@@ -140,23 +124,24 @@ We start by testing for the following properties:
 
 ### 7.1 Seed scenarios per property
 
-The starter seeds and expected signals for each of the three properties.
+The starter seeds for each of the three properties.
 
 Following Tili's post we want to consider multiple scenario for each property.
 
 ## 8. Validation
 
-How we know results are real: baselines, sanity checks, human review, and robustness to auditor intervention.
+How we know we are getting real results.
 
 ### 8.1 Models
 
 Which models we run as auditor, judge and targets.
 
 - Start with weaker models.
+- Support Jev / System One models for quick eval-awareness checks.
 
 ## 9. Comparison with other eval frameworks
 
-A short table positioning this work against [Petri](https://meridianlabs-ai.github.io/inspect_petri/), [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/), [Bloom](https://meridianlabs-ai.github.io/petri_bloom/), [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/), [Gram](https://arxiv.org/abs/2605.30322) and [Prism](https://github.com/LAThomson/prism) (single vs multi-agent, who drives the interaction, what is searched over).
+A short comparison positioning this work against [Petri](https://meridianlabs-ai.github.io/inspect_petri/), [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/), [Bloom](https://meridianlabs-ai.github.io/petri_bloom/), [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/), [Gram](https://arxiv.org/abs/2605.30322) and [Prism](https://github.com/LAThomson/prism).
 
 ## 10. (Optional) Open questions
 
