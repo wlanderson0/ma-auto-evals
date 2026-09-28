@@ -42,7 +42,20 @@ What a multi-agent seed looks like (scenario, agents, roles, topology, target be
 
 ### 3.2 Turn cycle and timesteps
 
-Defines what one timestep is when several agents are running and at which points the auditor can step in.
+*Defines what one timestep is when several agents are running and at which points the auditor can step in.*
+
+Orbit structures an eval as a series of **turns**. In scheduled execution, each turn has one or more agent **activations**.
+An activation contains one or more generations and the tool calls they request, depending on its **quantum**.
+See [Orbit's documentation for details](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#activation-plans).
+
+Possible points for the auditor to step in:
+1. **During any agent's generation**: the auditor can let the agent's LLM generate as usual, or write that generation's output itself, including messages to other agents.
+   In a multi-agent eval, messages a target receives come from other agents, so the auditor sends them *as* one of those agents.
+1. **Before a target's generation**: it stages content that doesn't come from another agent (user or environment input) into the target's state.
+   Messages from other agents must go through point 1.
+1. **Between a target's generation and tool execution**: it sees the proposed tool calls and allows, blocks or modifies them.
+1. **After a target's tool execution**: it sees the real results and optionally overrides them before the next generation.
+1. **Between turns**: it changes pending activations or halts the run.
 
 ### 3.3 Auditor role
 
