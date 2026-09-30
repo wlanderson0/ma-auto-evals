@@ -18,6 +18,7 @@ What this spec covers now versus later, and what is explicitly out of scope.
 
 - Evaluation awareness is out of scope; we mitigate by starting with weaker models and optionally checking verbalised eval awareness in open-weight models.
 - Covert communication channel is out-of-scope.
+- The first implementation slice uses sequential activations and simulated or disposable tools; broader concurrency and external side effects need explicit support before auditing them.
 
 ### 1.4 (Optional) Terminology
 
@@ -73,6 +74,12 @@ When tool results are real Orbit tools and when the auditor simulates them.
 
 How eval state is saved, restored and branched, including when real tools have side effects.
 
+- A **boundary** is an intervention point in §3.2; a **checkpoint** captures restorable state there; a **branch** is a continuation with a recorded parent and intervention. A boundary is not automatically a checkpoint.
+- Each checkpoint declares its restoration scope: agent sessions, pending activations, channel contents/read cursors, config, and tool/environment state. Unsupported state or external effects make a fork invalid; use a fresh isolated run instead. Replaying a tool result does not undo its effects.
+- Rollback changes active state, not the evidence of earlier attempts. Keep original generations/results and abandoned branches, following [Petri's branch-aware results](https://meridianlabs-ai.github.io/inspect_petri/using/results.html).
+
+[Inspect checkpointing](https://inspect.aisi.org.uk/checkpointing.html) is a reuse candidate, not a full-world snapshot: its current documentation requires the development version and explicit integration for custom scaffolds. Orbit currently has [no transactional environment snapshot](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#historical-behavior-and-remaining-boundaries).
+
 ## 4. Auditor levels
 
 The levels of auditor following John's doc.
@@ -101,9 +108,10 @@ The programmatic objects and tools the auditor uses to inspect and act on an Orb
 
 ### 5.1 Transcript object
 
-How a multi-agent, possibly branched run is recorded, as a compact object the auditor can query and edit in code.
+How a multi-agent, possibly branched run is recorded, as a compact object the auditor can query in code. Edits are interventions on the run, not rewrites of recorded evidence.
 
-- Must support: loading by timestep range, advancing one timestep, stepping back, editing portions, and running subagents on portions.
+- Must support: loading by timestep/agent/branch, advancing, restoring supported checkpoints, proposing edits, and running analysis subagents on portions.
+- Canonical evidence is append-only within an audit. Reuse [Inspect events and timelines](https://inspect.aisi.org.uk/reference/inspect_ai.event.html) and Orbit's native communication/schedule evidence; add only the intervention/branch index needed to link actor, affected agents/resources, boundary, original/replacement content references and outcome. This is our recording contract, not a claim that upstream log files are immutable.
 
 ### 5.2 Config object
 
@@ -119,13 +127,48 @@ Which config changes can be applied mid-sample (as a fork) and which require a f
 
 What format and level of detail the auditor receives, and whether it explores state agentically or gets it as a message.
 
+Orbit's runtime state is authoritative; the auditor queries projections rather than maintaining a second editable copy:
+
+- **Agent view:** the actual model inputs and available tools for a given agent/session/generation.
+- **System view:** participants, roles/models, topology and schedule revisions, pending communication, and tool/environment effects.
+- **Auditor view:** observations, interventions, search decisions and all attempted branches, including discarded ones.
+
+Keep sent, read, delivered and actually exposed content distinct: only the final model request establishes exposure. Track shared files, memory and tool-mediated information flow too, and mark gaps rather than inferring visibility from channel membership. This follows [Orbit's visibility and evidence model](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#channels-and-visibility). Auditor-only material must not enter target requests.
+
 ### 5.5 Auditor tool list
 
 The concrete tool calls (e.g. send as agent, simulate tool, rollback, fork, amend config, end audit) with signatures.
 
+- Use eval-extensible, typed control operations rather than a fixed action enum. Each operation declares its versioned payload schema, allowed §3.2 boundaries, affected agents/resources, expected state revision and restoration requirements. Validate before mutation; reject stale or unsupported requests without partial effects.
+- Include partial generation replacement before delivery/execution, forced calls before tool dispatch, and result overrides after execution but before exposure. Preserve the original and replacement plus authorship; validate tool arguments and call/result pairing. Agent-to-agent interventions still pass through the sending agent and Orbit's communication rules.
+- Start with sequential execution. Later concurrent controls must quiesce their declared affected scope; this does not require a permanent global lock.
+
+Investigate direct reuse of [Petri's typed staging and target interface](https://meridianlabs-ai.github.io/inspect_petri/reference/inspect_petri.target.html) before choosing an adapter. Its extension hooks are relevant, but compatibility with Orbit's multi-agent lifecycle and restoration scope remains to be tested.
+
+```mermaid
+flowchart LR
+  A[Auditor] -->|query| V[State and evidence projections]
+  R[Orbit runtime] -->|live state| V
+  R -->|native events| E[Append-only audit evidence]
+  E --> V
+  A -->|typed operation| C[Boundary and revision checks]
+  C -->|validated control| R
+  C -->|intervention outcome| E
+```
+
+This keeps state changes on one validated path: querying or editing a view cannot silently change the run or erase evidence.
+
+### 5.6 Audit limits and termination
+
+Use [Inspect's native limits](https://inspect.aisi.org.uk/setting-limits.html) for execution, plus an audit-wide ledger for spend across agents, auditor/judge calls, branches and retries. Restoration must not refund spent budget; replayed evidence is not a new model call. Bound branch/intervention counts as well. Record limit termination, invalid interventions, tool/replay failures and infrastructure errors separately from a negative behavioural finding.
+
 ## 6. Judging and scoring
 
 How a judge scores multi-agent transcripts, including how much the auditor had to "put its thumb on the scale" of the sample.
+
+- Separate **search** (choosing interventions), **scoring** (a fixed rubric for an attempt) and **scanning** (finding patterns across attempts). Retain all attempts and report selection/search budget so a discovered example is not mistaken for a prevalence estimate.
+- Scorers and scanners must be multi-agent-native: use roles/models, time-varying topology, actual exposure paths and branch provenance to judge per-agent behaviour, cross-agent propagation and system outcomes. Distinguish auditor-authored behaviour from autonomous responses, and exposure from agreement or action. Findings cite source events; missing evidence yields an explicit unknown/incomplete result.
+- Reuse [Inspect scorers](https://inspect.aisi.org.uk/scorers.html), [Petri's branch-aware judge](https://meridianlabs-ai.github.io/inspect_petri/reference/inspect_petri.html#audit_judge) and [Scout's multi-agent timelines](https://meridianlabs-ai.github.io/inspect_scout/multi_agent.html), with shared evidence projections. Scout supplies per-span scanning; cross-agent aggregation and system-level rubrics are our contribution, not something a flat transcript scorer supplies automatically.
 
 ## 7. Target properties
 
@@ -151,6 +194,10 @@ Which models we run as auditor, judge and targets.
 
 - Start with weaker models.
 - Support Jev / System One models for quick eval-awareness checks.
+
+### 8.2 Correctness and behavioural controls
+
+Start with the [small test subspec](auditor-tests.md): synthetic contract fixtures and one end-to-end example connecting intervention, evidence, scoring and scanning. Compare untouched runs, matched intervention branches and fresh-run controls before making claims about multi-agent behaviour. Hold the scoring rubric fixed during search and validate scanner findings against labelled examples using [Scout validation sets](https://meridianlabs-ai.github.io/inspect_scout/validation.html).
 
 ## 9. Comparison with other eval frameworks
 
