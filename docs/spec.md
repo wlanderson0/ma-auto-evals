@@ -53,7 +53,7 @@ Possible points for the auditor to step in:
 1. **During any agent's generation**: the auditor can let the agent's LLM generate as usual, or write that generation's output itself, including messages to other agents.
    In a multi-agent eval, messages a target receives come from other agents, so the auditor sends them *as* one of those agents.
 1. **Before a target's generation**: it stages content that doesn't come from another agent (user or environment input) into the target's state.
-   Messages from other agents must go through point 1.
+   Messages from other agents must go through point 1, and can also edit it. 
 1. **Between a target's generation and tool execution**: it sees the proposed tool calls and allows, blocks or modifies them.
 1. **After a target's tool execution**: it sees the real results and optionally overrides them before the next generation.
 1. **Between turns**: it changes pending activations or halts the run.
@@ -96,7 +96,7 @@ Petri's affordances plus taking over or spoofing any agent, with rollback.
 
 The auditor searches over configurations, roles, topologies and mid-sample changes (e.g. adding an agent) rather than editing messages.
 
-- Open question: how do we guide the auditor in generating scenarios?
+- Open question: how do we guide the auditor in generating scenarios? Iterate on this (research-ey, based on results, etc.)
 
 ### 4.4 Hybrid
 
@@ -144,6 +144,8 @@ The concrete tool calls (e.g. send as agent, simulate tool, rollback, fork, amen
 - Start with sequential execution. Later concurrent controls must quiesce their declared affected scope; this does not require a permanent global lock.
 
 Investigate direct reuse of [Petri's typed staging and target interface](https://meridianlabs-ai.github.io/inspect_petri/reference/inspect_petri.target.html) before choosing an adapter. Its extension hooks are relevant, but compatibility with Orbit's multi-agent lifecycle and restoration scope remains to be tested.
+
+Note: Also look at Petri's tools to log auditor actions themselves.
 
 ```mermaid
 flowchart LR
