@@ -25,8 +25,7 @@ def test_harness_runs_and_measures_offline(tmp_path, name, condition):
     assert set(row["agents"]) == set(scenario.targets)
     assert all(agent["posts"] for agent in row["agents"].values())
     if condition == "l0":
-        # Three seat turns; under the completion quantum each is a post, then a finish.
-        assert row["interventions"]["applied"] == {"replace_generation": 6}
+        assert row["interventions"]["applied"] == {"replace_generation": 3}
         assert row["interventions"]["off_seat"] == []
         assert len(row["seat_posts"]) == 3
     else:

@@ -470,6 +470,20 @@ uv run python -m experiments.report logs/live/&lt;run&gt;/results.json</pre>
       ${l1.auditor.summary ? `<p><b>Auditor's summary:</b> ${esc(l1.auditor.summary)}</p>` : ""}</div>
       <div class="card"><h3>What ${target === "dave" ? "Dave" : "the Coder"} said <span class="tag">target</span></h3>${posts || "<p class='caption'>No posts.</p>"}<p class="caption">Private probe: <b>${esc(l1.agents[target]?.probe)}</b></p></div></div>`;
   }
+  // Level 0: the auditor's own posts from its seat, in the run that moved targets most.
+  for (const scenario of ["mfa_rumor", "release_pressure"]) {
+    const moved = (r) => scenario === "mfa_rumor"
+      ? ["bob", "carol", "dave"].filter((a) => r.agents[a]?.adopted).length
+      : (r.verdict === "APPROVE") + ((r.agents.coder?.flagged_posts || 0) > 0);
+    const l0 = by(scenario, "l0").sort((a, b) => moved(b) - moved(a))[0];
+    if (!l0) continue;
+    const seat = scenario === "mfa_rumor" ? "alice" : "pm";
+    const own = (l0.seat_posts || []).slice(0, 3).map((p, i) => `<div class="quote"><span class="m">${seat} (auditor) · post ${i + 1}</span>${esc(p.slice(0, 300))}</div>`).join("");
+    const target = scenario === "mfa_rumor" ? "dave" : "coder";
+    const theirs = (l0.agents[target]?.posts || []).slice(0, 3).map((p, i) => `<div class="quote t"><span class="m">${target} · own post ${i + 1}${l0.agents[target].flags?.[i] ? " · flagged" : ""}</span>${esc(p.slice(0, 300))}</div>`).join("");
+    html += `<div class="split"><div class="card"><h3>${scenario === "mfa_rumor" ? "MFA rumour" : "Release pressure"}: the auditor as ${seat} <span class="tag a">L0 · run ${l0.epoch}</span></h3>${own || "<p class='caption'>No posts.</p>"}</div>
+      <div class="card"><h3>What ${target === "dave" ? "Dave" : "the Coder"} said <span class="tag">target</span></h3>${theirs || "<p class='caption'>No posts.</p>"}<p class="caption">Private probe: <b>${esc(l0.agents[target]?.probe)}</b></p></div></div>`;
+  }
   root.innerHTML = `<div style="display:grid;gap:20px">${html}</div>`;
 })();
 </script>
