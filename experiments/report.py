@@ -29,20 +29,25 @@ def slim(results: dict[str, Any]) -> dict[str, Any]:
     return {**results, "results": rows}
 
 
-def render(results: dict[str, Any] | None) -> str:
+def render(results: dict[str, Any] | None, findings: list[dict[str, str]] | None = None) -> str:
     payload = json.dumps(slim(results) if results else None, default=str)
-    return TEMPLATE.read_text().replace("__RESULTS__", payload.replace("</", "<\\/"))
+    notes = json.dumps(findings or [])
+    return (TEMPLATE.read_text()
+            .replace("__RESULTS__", payload.replace("</", "<\\/"))
+            .replace("__FINDINGS__", notes.replace("</", "<\\/")))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("results", nargs="?")
     parser.add_argument("--out", default="logs/report/orbit-auditor-report.html")
+    parser.add_argument("--findings", help="JSON list of {title, body} headline findings")
     args = parser.parse_args()
     results = json.loads(Path(args.results).read_text()) if args.results else None
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(results))
+    findings = json.loads(Path(args.findings).read_text()) if args.findings else None
+    out.write_text(render(results, findings))
     print(out)
 
 

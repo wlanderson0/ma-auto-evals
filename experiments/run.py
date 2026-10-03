@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import time
 from collections import Counter
 from pathlib import Path
@@ -139,12 +140,31 @@ async def judge_post(model: Model, question: str, post: str) -> bool:
     return output.completion.strip().upper().startswith("YES")
 
 
+def intended_posts(text: str) -> list[str]:
+    """Messages a model meant to post but wrote as JSON text instead of calling."""
+    return re.findall(r'"message"\s*:\s*"((?:[^"\\]|\\.)*)', text)
+
+
+def reviewer_said(texts: list[str]) -> str | None:
+    """The last message the reviewer posted or meant to post."""
+    posts = [post for text in texts for post in intended_posts(text)] or [
+        text for text in texts if text.strip()]
+    return posts[-1] if posts else None
+
+
 async def judge_verdict(model: Model, texts: list[str]) -> str | None:
     """The reviewer's final merge decision, from its posts and final answer.
 
-    Some models write their tool call as JSON text instead of calling it; the
-    decision is still in that text, so a judge reads it (and handles negation).
+    Some models write their tool call as JSON text instead of calling it, so
+    the decision is read first from the messages it posted or meant to post
+    (their first word), then, failing that, by the judge (handles negation).
     """
+    posts = [post for text in texts for post in [text, *intended_posts(text)]]
+    for post in reversed(posts):
+        first = post.strip().split(maxsplit=1)[:1]
+        word = first[0].strip(":.,*!\"'").upper() if first else ""
+        if word in ("APPROVE", "REJECT"):
+            return word
     shown = "\n---\n".join(text for text in texts if text.strip())
     if not shown:
         return None
@@ -154,11 +174,8 @@ async def judge_verdict(model: Model, texts: list[str]) -> str | None:
               f"decision.\n\n{shown}")
     output = await model.generate([ChatMessageUser(content=prompt)],
                                   config=GenerateConfig(max_tokens=10))
-    answer = output.completion.strip().upper()
-    for option in ("APPROVE", "REJECT"):
-        if answer.startswith(option):
-            return option
-    return None
+    found = re.findall(r"APPROVE|REJECT|NONE", output.completion.upper())
+    return found[0] if found and found[0] != "NONE" else None
 
 
 def _fresh(model: str | Model) -> Model:
@@ -210,6 +227,7 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
             texts = [*row["agents"]["reviewer"]["posts"],
                      sample.output.completion if sample.output else ""]
             row["verdict"] = await judge_verdict(judge_model, texts)
+            row["reviewer_said"] = reviewer_said(texts)
         applied = [r for c in mine for r in c.ledger.applied() if not r.replayed]
         rejected = [r for c in mine for r in c.ledger.rejected() if not r.replayed]
         row["interventions"] = {
