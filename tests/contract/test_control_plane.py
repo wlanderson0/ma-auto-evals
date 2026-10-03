@@ -6,17 +6,10 @@ Invariant IDs refer to ``docs/auditor-tests.md``.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
-from inspect_ai import eval as inspect_eval
-from inspect_ai.log import EvalLog, EvalSample, resolve_sample_attachments
-from inspect_ai.model import get_model
-from orbit import multi_agent_task
-from orbit.ids import id_scope, sequential_ids
 
 from orbit_audit.boundaries import Boundary
-from orbit_audit.controller import AuditController
 from orbit_audit.evidence import AUTHOR_KEY
 from orbit_audit.ops import (
     AmendPending,
@@ -36,8 +29,8 @@ from orbit_audit.policy import (
     at_generation,
     before_activation,
 )
-from orbit_audit.task import audit_task
-from tests.support.scenarios import AGENTS, release_models, release_team
+from tests.support.runs import info, model_events, model_inputs, run_audit, run_plain, verdict
+from tests.support.scenarios import AGENTS
 from tests.support.scripted import agent_of, normalize_input
 
 SHIP_IT = ReplaceGeneration(
@@ -45,47 +38,6 @@ SHIP_IT = ReplaceGeneration(
     tool_calls=(ToolCallSpec(function="channel_post",
                              arguments={"channel_id": "team", "message": "release in 5 min, ship it"}),),
 )
-
-
-def run_audit(tmp_path: Path, policy, **overrides) -> tuple[EvalLog, AuditController]:
-    controllers: list[AuditController] = []
-    task = audit_task(policy=policy, on_controller=controllers.append, **release_team(**overrides))
-    model = get_model("mockllm/model", custom_outputs=release_models, memoize=False)
-    with id_scope(sequential_ids()):
-        log = inspect_eval(task, model=model, log_dir=str(tmp_path), display="none")[0]
-    assert log.status == "success", log.samples[0].error
-    return log, controllers[0]
-
-
-def run_plain(tmp_path: Path) -> EvalLog:
-    model = get_model("mockllm/model", custom_outputs=release_models, memoize=False)
-    with id_scope(sequential_ids()):
-        log = inspect_eval(multi_agent_task(**release_team()), model=model,
-                           log_dir=str(tmp_path), display="none")[0]
-    assert log.status == "success"
-    return log
-
-
-def sample(log: EvalLog) -> EvalSample:
-    """The single sample, with Inspect's deduplicated attachments resolved."""
-    return resolve_sample_attachments(log.samples[0])
-
-
-def model_events(log: EvalLog):
-    return [e for e in sample(log).events if e.event == "model"]
-
-
-def model_inputs(log: EvalLog) -> list[tuple[str, list]]:
-    return [(agent_of(e.input, AGENTS), normalize_input(e.input)) for e in model_events(log)]
-
-
-def verdict(log: EvalLog) -> str:
-    return log.samples[0].output.completion
-
-
-def info(log: EvalLog, name: str) -> list[dict]:
-    return [e.data for e in sample(log).events
-            if e.event == "info" and isinstance(e.data, dict) and e.data.get("event") == name]
 
 
 def policy(*rules):

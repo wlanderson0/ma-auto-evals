@@ -29,7 +29,7 @@ constraint-dependencies = ["inspect-ai==0.3.263"]
 [tool.uv.sources]
 # Pinned fork of wlanderson0/orbit. For local co-development against
 # ../orbit, see README ("Working on Orbit and orbit_audit together").
-orbit = { git = "https://github.com/Danhelo/orbit", rev = "145edc0043dd2a8b00adfb2bd5c56ae6f03c89e4" }
+orbit = { git = "https://github.com/Danhelo/orbit", rev = "4c2dcf8cef6d407ec0fc10a449d60ac7e665a9d7" }
 
 [build-system]
 requires = ["hatchling>=1.25"]

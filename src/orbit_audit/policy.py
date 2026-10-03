@@ -33,10 +33,15 @@ class BoundaryView:
     """For ``GENERATION``: the delivered model request."""
     tools: tuple[str, ...] = ()
     """For ``GENERATION``: names of tools offered to the agent."""
+    tool_name: str | None = None
+    """For ``TOOL_CALL`` / ``TOOL_RESULT``: the called tool."""
+    tool_call_id: str | None = None
+    tool_arguments: dict[str, Any] = field(default_factory=dict)
+    tool_result: Any = None
+    """For ``TOOL_RESULT``: what the tool returned (a copy)."""
     schedule_revision: int | None = None
     """For ``BETWEEN_TURNS``: pass to ``AmendPending.schedule_revision``."""
     pending_steps: tuple[tuple[str, ...], ...] = ()
-    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class AuditPolicy:
@@ -106,5 +111,19 @@ def after_turn(turn: int, op: ControlOp) -> Rule:
         if (view.boundary, view.turn) == (Boundary.BETWEEN_TURNS, turn):
             return op
         return None
+
+    return rule
+
+
+def at_tool(boundary: Boundary, agent: str, tool: str, op: ControlOp, occurrence: int = 0) -> Rule:
+    """Rule: apply ``op`` at the ``occurrence``-th call of ``tool`` by ``agent``."""
+    seen = 0
+
+    def rule(view: BoundaryView) -> ControlOp | None:
+        nonlocal seen
+        if (view.boundary, view.agent, view.tool_name) != (boundary, agent, tool):
+            return None
+        seen += 1
+        return op if seen - 1 == occurrence else None
 
     return rule

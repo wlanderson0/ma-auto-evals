@@ -13,6 +13,8 @@ Families:
   with or without calling its model.
 - ``ActivationOp`` (``Boundary.BEFORE_ACTIVATION``): stage durable input into
   an agent's conversation before it runs.
+- ``ToolOp`` (``Boundary.TOOL_CALL`` / ``Boundary.TOOL_RESULT``): block or
+  simulate a proposed tool call, or override an executed call's result.
 - ``TurnOp`` (``Boundary.BETWEEN_TURNS``): change pending activations or halt.
 """
 
@@ -202,6 +204,40 @@ class StageInput(ActivationOp):
         return message.model_dump(mode="json")
 
 
+# ---------------------------------------------------------------------- tools
+class ToolOp(ControlOp):
+    agent: str
+    tool_call_id: str | None = None
+    """If set, the operation applies only to this exact tool call."""
+
+
+class BlockToolCall(ToolOp):
+    """Refuse a proposed tool call; the agent sees an ordinary tool error."""
+
+    name: ClassVar[str] = "block_tool_call"
+    boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.TOOL_CALL})
+
+    message: str = Field(default="The tool call was not permitted.", min_length=1)
+
+
+class SimulateToolResult(ToolOp):
+    """Answer a proposed tool call without executing it (no side effect)."""
+
+    name: ClassVar[str] = "simulate_tool_result"
+    boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.TOOL_CALL})
+
+    result: str
+
+
+class OverrideToolResult(ToolOp):
+    """Replace an executed tool call's result before the agent sees it."""
+
+    name: ClassVar[str] = "override_tool_result"
+    boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.TOOL_RESULT})
+
+    result: str
+
+
 # ---------------------------------------------------------------------- turns
 class TurnOp(ControlOp):
     boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.BETWEEN_TURNS})
@@ -268,7 +304,8 @@ def parse_op(data: dict[str, Any]) -> ControlOp:
     return _REGISTRY[name].model_validate(fields)
 
 
-for _cls in (ReplaceGeneration, EditGeneration, ForceToolCall, StageInput, Halt, AmendPending):
+for _cls in (ReplaceGeneration, EditGeneration, ForceToolCall, StageInput, BlockToolCall,
+             SimulateToolResult, OverrideToolResult, Halt, AmendPending):
     register_op(_cls)
 
 

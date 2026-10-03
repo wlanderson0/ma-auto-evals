@@ -14,26 +14,33 @@ operation alone, before it has any effect.
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from inspect_ai.model import ChatMessage, ModelOutput
+from inspect_ai.tool import ToolError
 from orbit.execution.control import (
     ActivationContext,
     GenerationRequest,
     RuntimeController,
     RuntimeHandles,
+    ToolCallRequest,
 )
 
 from orbit_audit.boundaries import Boundary
 from orbit_audit.evidence import AUDITOR, EvidenceLedger, auditor_as
 from orbit_audit.ops import (
     ActivationOp,
+    BlockToolCall,
     ControlOp,
     GenerationOp,
     OpError,
+    OverrideToolResult,
+    SimulateToolResult,
+    ToolOp,
     TurnOp,
     summarize,
     tool_schemas,
@@ -121,6 +128,40 @@ class AuditController(RuntimeController):
                 continue
             self._apply_record(view, op, author=AUDITOR, replacement=added)
 
+    async def tool_call(self, call: ToolCallRequest, execute) -> Any:
+        fields = dict(agent=call.agent_name, tool_name=call.function,
+                      tool_call_id=call.tool_call_id,
+                      tool_arguments=copy.deepcopy(call.arguments))
+        refs = {"tool_call_id": call.tool_call_id, **_orbit_refs(call)}
+        view = self._view(Boundary.TOOL_CALL, **fields)
+        ops = await self._decide(view, ToolOp)
+        if len(ops) > 1:
+            self._reject_all(view, ops, "at most one operation may decide a tool call")
+            ops = []
+        if ops:
+            op = ops[0]
+            if isinstance(op, BlockToolCall):
+                self._apply_record(view, op, author=AUDITOR, replacement=op.message, orbit=refs)
+                raise ToolError(op.message)
+            if isinstance(op, SimulateToolResult):
+                self._apply_record(view, op, author=AUDITOR, replacement=op.result, orbit=refs)
+                return op.result
+            raise TypeError(f"no tool-call handling for {op.name}")
+
+        result = await execute()
+        view = self._view(Boundary.TOOL_RESULT, tool_result=copy.deepcopy(result), **fields)
+        ops = await self._decide(view, ToolOp)
+        if len(ops) > 1:
+            self._reject_all(view, ops, "at most one operation may replace a tool result")
+            ops = []
+        for op in ops:
+            if not isinstance(op, OverrideToolResult):
+                raise TypeError(f"no tool-result handling for {op.name}")
+            self._apply_record(view, op, author=AUDITOR, original=_jsonable(result),
+                               replacement=op.result, orbit=refs)
+            return op.result
+        return result
+
     async def after_turn(self, turn: int, results: Sequence[Any]) -> None:
         schedule = self.runtime.schedule if self.runtime else None
         view = self._view(
@@ -178,6 +219,9 @@ class AuditController(RuntimeController):
             return f"unknown agents {unknown}"
         if view.agent is not None and op.agents() and op.agents() != (view.agent,):
             return f"{op.name} targets {list(op.agents())} but this boundary is {view.agent!r}'s"
+        pinned = getattr(op, "tool_call_id", None)
+        if pinned is not None and pinned != view.tool_call_id:
+            return f"{op.name} is for tool call {pinned!r}, not {view.tool_call_id!r}"
         return None
 
     def _reject(self, view: BoundaryView, op: ControlOp, reason: str) -> None:
@@ -204,7 +248,16 @@ class AuditController(RuntimeController):
         ))
 
 
-def _orbit_refs(request: GenerationRequest) -> dict[str, Any]:
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, str | int | float | bool | None):
+        return value
+    try:
+        return [item.model_dump(mode="json") for item in value]
+    except (TypeError, AttributeError):
+        return repr(value)
+
+
+def _orbit_refs(request: GenerationRequest | ToolCallRequest) -> dict[str, Any]:
     identity = request.identity
     if identity is None:
         return {}

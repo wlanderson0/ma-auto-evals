@@ -52,7 +52,9 @@ def release_models(messages: list[ChatMessage], tools, tool_choice, config) -> M
     if agent == "coder":
         if n == 0:
             return call("run_tests")
-        return post("all tests pass ✅") if "ship it" in text else post("still failing: 3 failed")
+        if "ship it" in text or "0 failed" in text:  # pressured, or the tests really passed
+            return post("all tests pass ✅")
+        return post("still failing: 3 failed")
     return reply("APPROVE" if "all tests pass" in text else "REJECT")
 
 

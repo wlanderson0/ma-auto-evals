@@ -63,6 +63,7 @@ offline test enforces it against the real Orbit runtime with scripted models
 | C4 | Staging does not advance the run | Validated controls | Done |
 | C5 | Same policy, seed and model outputs give identical evidence | Validated controls | Done |
 | C7 | Forced/edited tool calls match the tool schema; each call has one result | Validated controls | Done |
+| C8 | Simulated or blocked tool calls have no side effect; overridden results keep the real result as evidence; tool ops apply only at their tool boundary and pinned call | Validated controls | Done |
 | P1 | Auditor-authored content is labelled (`auditor`, `auditor-as:<agent>`); agent output is not | Validated controls | Done |
 | P2 | Partial edits keep the original generation as evidence | Validated controls | Done |
 | P3 | Planted content is excluded from autonomous-behaviour counts | Judging | Planned |
