@@ -85,6 +85,8 @@ class InterventionRecord(BaseModel):
     replacement: Any = None
     orbit: dict[str, Any] = Field(default_factory=dict)
     """Orbit identifiers (session, invocation) linking to native evidence."""
+    details: dict[str, Any] = Field(default_factory=dict)
+    """Operation-specific evidence, e.g. topology violations of an override."""
 
 
 class EvidenceLedger:

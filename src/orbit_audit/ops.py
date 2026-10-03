@@ -15,6 +15,8 @@ Families:
   an agent's conversation before it runs.
 - ``ToolOp`` (``Boundary.TOOL_CALL`` / ``Boundary.TOOL_RESULT``): block or
   simulate a proposed tool call, or override an executed call's result.
+- ``MessageOp`` (any boundary): rewrite, drop or inject agent-to-agent channel
+  messages for chosen recipients, through a delivery overlay.
 - ``TurnOp`` (``Boundary.BETWEEN_TURNS``): change pending activations or halt.
 """
 
@@ -38,6 +40,8 @@ from orbit_audit.evidence import AUDITOR, auditor_as, tag
 
 if TYPE_CHECKING:
     from orbit.execution.control import ActivationContext, GenerationRequest, RuntimeHandles
+
+    from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
 
 
 class OpError(ValueError):
@@ -238,6 +242,120 @@ class OverrideToolResult(ToolOp):
     result: str
 
 
+# ------------------------------------------------------------------- messages
+class MessageOp(ControlOp):
+    """Change what recipients receive on channels; canonical messages never change."""
+
+    boundaries: ClassVar[frozenset[Boundary]] = frozenset(Boundary)
+
+    def apply(self, overlay: DeliveryOverlay, world: CommunicationWorld) -> dict[str, Any]:
+        """Validate against ``world``, update ``overlay``; return evidence fields."""
+        raise NotImplementedError
+
+
+class _ExistingMessageOp(MessageOp):
+    message_id: str
+    recipients: tuple[str, ...] | None = None
+    """Recipients whose view changes; ``None`` means every intended recipient."""
+
+    def agents(self) -> tuple[str, ...]:
+        return tuple(sorted(self.recipients or ()))
+
+    def _target(self, overlay: DeliveryOverlay, world: CommunicationWorld):
+        from orbit_audit.delivery import recipients_or_all
+
+        message = world.messages.get(self.message_id)
+        if message is None:
+            raise OpError(f"no channel message {self.message_id!r}")
+        targets = recipients_or_all(message, self.recipients)
+        outside = targets - set(message.recipients)
+        if outside:
+            raise OpError(f"{sorted(outside)} are not recipients of {self.message_id!r}")
+        seen = targets & overlay.delivered_to(self.message_id)
+        if seen:
+            raise OpError(
+                f"{self.message_id!r} was already delivered to {sorted(seen)}; "
+                "a delivered message cannot be changed (roll back instead)"
+            )
+        keys = [(self.message_id, None)] if self.recipients is None else [
+            (self.message_id, recipient) for recipient in sorted(targets)]
+        return message, keys
+
+
+class RewriteMessage(_ExistingMessageOp):
+    """Deliver different content for a message, still attributed to its sender."""
+
+    name: ClassVar[str] = "rewrite_message"
+
+    content: str = Field(min_length=1)
+
+    def apply(self, overlay, world):
+        message, keys = self._target(overlay, world)
+        for key in keys:
+            overlay.rewrites[key] = self.content
+        return {"author": auditor_as(message.sender), "original": message.content,
+                "replacement": self.content}
+
+
+class DropMessage(_ExistingMessageOp):
+    """Withhold a message from recipients; the sender's own view is unchanged."""
+
+    name: ClassVar[str] = "drop_message"
+
+    def apply(self, overlay, world):
+        message, keys = self._target(overlay, world)
+        overlay.drops.update(keys)
+        return {"original": message.content}
+
+
+class InjectMessage(MessageOp):
+    """Deliver a new message attributed to ``sender`` that ``sender`` never sent.
+
+    Respects the channel's writers/readers and the setup's communication edges
+    unless ``override_topology`` is set; overrides are recorded as such.
+    """
+
+    name: ClassVar[str] = "inject_message"
+
+    channel_id: str
+    sender: str
+    content: str = Field(min_length=1)
+    recipients: tuple[str, ...] = Field(min_length=1)
+    override_topology: bool = False
+
+    def agents(self) -> tuple[str, ...]:
+        return tuple(sorted({self.sender, *self.recipients}))
+
+    def apply(self, overlay, world):
+        from orbit.communication import CommunicationMessage, allocate_message_sequence
+        from orbit.ids import new_id_hex
+
+        channel = world.channels.get(self.channel_id)
+        if channel is None:
+            raise OpError(f"no channel {self.channel_id!r}")
+        if self.sender in self.recipients:
+            raise OpError("an injected message cannot be addressed to its own sender")
+        violations = []
+        if self.sender not in world.writers(channel):
+            violations.append(f"{self.sender} cannot write to {self.channel_id}")
+        for recipient in self.recipients:
+            if recipient not in world.readers(channel):
+                violations.append(f"{recipient} cannot read {self.channel_id}")
+            elif not world.route_allowed(self.sender, recipient):
+                violations.append(f"no route {self.sender}->{recipient}")
+        if violations and not self.override_topology:
+            raise OpError(
+                "off-topology injection needs override_topology: " + "; ".join(violations))
+        message = CommunicationMessage(
+            id=f"message-auditor-{new_id_hex()}", channel_id=self.channel_id, sender=self.sender,
+            recipients=tuple(self.recipients), content=self.content,
+            sequence=allocate_message_sequence(),
+        )
+        overlay.injections.append(message)
+        return {"author": auditor_as(self.sender), "replacement": message.model_dump(mode="json"),
+                "details": {"topology_violations": violations}}
+
+
 # ---------------------------------------------------------------------- turns
 class TurnOp(ControlOp):
     boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.BETWEEN_TURNS})
@@ -305,7 +423,8 @@ def parse_op(data: dict[str, Any]) -> ControlOp:
 
 
 for _cls in (ReplaceGeneration, EditGeneration, ForceToolCall, StageInput, BlockToolCall,
-             SimulateToolResult, OverrideToolResult, Halt, AmendPending):
+             SimulateToolResult, OverrideToolResult, RewriteMessage, DropMessage, InjectMessage,
+             Halt, AmendPending):
     register_op(_cls)
 
 

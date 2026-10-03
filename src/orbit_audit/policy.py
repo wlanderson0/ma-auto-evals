@@ -41,6 +41,8 @@ class BoundaryView:
     """For ``TOOL_RESULT``: what the tool returned (a copy)."""
     schedule_revision: int | None = None
     """For ``BETWEEN_TURNS``: pass to ``AmendPending.schedule_revision``."""
+    messages: tuple[dict[str, Any], ...] = ()
+    """Canonical channel messages so far (id, channel, sender, recipients, content)."""
     pending_steps: tuple[tuple[str, ...], ...] = ()
 
 

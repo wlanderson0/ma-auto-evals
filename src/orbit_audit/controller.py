@@ -24,6 +24,7 @@ from inspect_ai.model import ChatMessage, ModelOutput
 from inspect_ai.tool import ToolError
 from orbit.execution.control import (
     ActivationContext,
+    DeliveryRequest,
     GenerationRequest,
     RuntimeController,
     RuntimeHandles,
@@ -31,12 +32,14 @@ from orbit.execution.control import (
 )
 
 from orbit_audit.boundaries import Boundary
+from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
 from orbit_audit.evidence import AUDITOR, EvidenceLedger, auditor_as
 from orbit_audit.ops import (
     ActivationOp,
     BlockToolCall,
     ControlOp,
     GenerationOp,
+    MessageOp,
     OpError,
     OverrideToolResult,
     SimulateToolResult,
@@ -74,6 +77,7 @@ class AuditController(RuntimeController):
         self.runtime: RuntimeHandles | None = None
         self.turn: int | None = None
         self.generations: list[GenerationTrace] = []
+        self.overlay = DeliveryOverlay()
         self._generation_counts: dict[str, int] = defaultdict(int)
 
     # ------------------------------------------------------------ lifecycle
@@ -179,6 +183,9 @@ class AuditController(RuntimeController):
                 continue
             self._apply_record(view, op, original=original)
 
+    def deliver(self, request: DeliveryRequest):
+        return self.overlay.deliver(request)
+
     # ------------------------------------------------------------ queries
     def agent_view(self, agent: str, index: int) -> GenerationTrace:
         """The request given to ``agent``'s ``index``-th generation in this run."""
@@ -192,10 +199,12 @@ class AuditController(RuntimeController):
         self.revision += 1
         return BoundaryView(
             boundary=boundary, revision=self.revision,
-            turn=self.turn if turn is None else turn, **fields,
+            turn=self.turn if turn is None else turn,
+            messages=CommunicationWorld.current().summary(), **fields,
         )
 
     async def _decide(self, view: BoundaryView, family: type[ControlOp]) -> list[ControlOp]:
+        """Validate the policy's batch; apply message ops; return the ``family`` ops."""
         ops = list(await self.policy.decide(view))
         for op in ops:
             if not isinstance(op, ControlOp):
@@ -206,10 +215,21 @@ class AuditController(RuntimeController):
                 self._reject(view, op, problems[id(op)]
                              or "rejected with its batch: another operation was invalid")
             return []
-        return ops
+        for op in ops:
+            if isinstance(op, MessageOp):
+                self._apply_message(view, op)
+        return [op for op in ops if not isinstance(op, MessageOp)]
+
+    def _apply_message(self, view: BoundaryView, op: MessageOp) -> None:
+        try:
+            fields = op.apply(self.overlay, CommunicationWorld.current())
+        except OpError as error:
+            self._reject(view, op, str(error))
+            return
+        self._apply_record(view, op, **fields)
 
     def _problem(self, view: BoundaryView, op: ControlOp, family: type[ControlOp]) -> str | None:
-        if view.boundary not in op.boundaries or not isinstance(op, family):
+        if view.boundary not in op.boundaries or not isinstance(op, family | MessageOp):
             return f"{op.name} is not allowed at boundary {view.boundary.value}"
         if op.expected_revision is not None and op.expected_revision != view.revision:
             return f"stale: prepared for revision {op.expected_revision}, now {view.revision}"
@@ -217,7 +237,8 @@ class AuditController(RuntimeController):
         unknown = [agent for agent in op.agents() if known and agent not in known]
         if unknown:
             return f"unknown agents {unknown}"
-        if view.agent is not None and op.agents() and op.agents() != (view.agent,):
+        targeted = not isinstance(op, MessageOp)
+        if targeted and view.agent is not None and op.agents() and op.agents() != (view.agent,):
             return f"{op.name} targets {list(op.agents())} but this boundary is {view.agent!r}'s"
         pinned = getattr(op, "tool_call_id", None)
         if pinned is not None and pinned != view.tool_call_id:
