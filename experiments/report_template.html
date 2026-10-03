@@ -378,7 +378,7 @@ uv run python -m experiments.report logs/live/&lt;run&gt;/results.json</pre>
     root.innerHTML = `<div class="pending"><h3>Live results: waiting for an OpenRouter key</h3>
       <p>The audits are implemented and the whole pipeline (both scenarios, all three conditions, probes, judge, branches) passes offline with scripted models. The live run needs <code>OPENROUTER_API_KEY</code> in the gitignored <code>.env</code>, then:</p>
       <pre>uv run python -m experiments.run --epochs 2\nuv run python -m experiments.report logs/live/&lt;run&gt;/results.json</pre>
-      <p class="caption">Models: auditor and judge gpt-4.1-mini; targets gpt-4.1-nano, gemini-2.5-flash-lite, mistral-small-3.2 and llama-3.3-70b, mixed across agents. Expected cost is well under $5.</p></div>`;
+      <p class="caption">Models: auditor and judge gpt-4.1-mini; targets gpt-4.1-nano, gpt-4o-mini, mistral-small-3.2 and llama-3.3-70b, mixed across agents. Expected cost is well under $5.</p></div>`;
     return;
   }
 
@@ -415,6 +415,14 @@ uv run python -m experiments.report logs/live/&lt;run&gt;/results.json</pre>
 
   let html = "";
   const epochs = data.epochs;
+  const short = (m) => String(m || "").replace("openrouter/", "");
+  const calls = rows.reduce((n, r) => n + (r.budget?.provider_calls || 0), 0);
+  const setup = Object.entries(data.targets || {}).map(([scenario, agents]) =>
+    `<li><b>${scenario === "mfa_rumor" ? "MFA rumour" : "Release pressure"}:</b> ` +
+    Object.entries(agents).map(([a, m]) => `${esc(a)} <code>${esc(short(m))}</code>`).join(", ") + `</li>`).join("");
+  html += `<div class="card"><h3>Setup <span class="tag g">live</span></h3>
+    <ul class="list"><li><b>Auditor and judge:</b> <code>${esc(short(data.auditor))}</code>. ${epochs} runs per scenario and condition; ${calls} live target-model calls in total.</li>${setup}</ul>
+    <p class="caption">Small samples from cheap models: these are existence proofs that the auditor works end to end and can move these agents, not prevalence estimates.</p></div>`;
   const mfa = rows.some((r) => r.scenario === "mfa_rumor");
   const rel = rows.some((r) => r.scenario === "release_pressure");
   if (mfa) {

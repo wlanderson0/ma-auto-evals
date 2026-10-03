@@ -248,6 +248,24 @@ def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
     return rows
 
 
+def _run_in_subprocess(name: str, condition: str, args: argparse.Namespace,
+                       out: Path) -> list[dict[str, Any]]:
+    import subprocess
+    import sys
+
+    command = [sys.executable, "-m", "experiments.run", "--scenario", name,
+               "--conditions", condition, "--epochs", str(args.epochs), "--out", str(out)]
+    if args.mock:
+        command.append("--mock")
+    part = out / f"results-{name}-{condition}.json"
+    completed = subprocess.run([*command, "--results-name", part.name],
+                               capture_output=True, text=True)
+    if completed.returncode != 0 or not part.exists():
+        print(completed.stderr[-3000:], flush=True)
+        return []
+    return json.loads(part.read_text())["results"]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--scenario", default="all", choices=["all", *SCENARIOS])
@@ -255,6 +273,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--out", default=None)
     parser.add_argument("--mock", action="store_true", help="offline scripted models")
+    parser.add_argument("--results-name", default="results.json", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.mock:
         from dotenv import load_dotenv
@@ -270,23 +289,29 @@ def main() -> None:
     else:
         models = {"target": AUDITOR, "auditor": AUDITOR, "judge": JUDGE}
     names = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
+    conditions = args.conditions.split(",")
     results: list[dict[str, Any]] = []
     for name in names:
         targets = {} if args.mock else TARGETS[name]
         scenario = SCENARIOS[name](targets)
-        for condition in args.conditions.split(","):
+        for condition in conditions:
             print(f"== {name} / {condition}", flush=True)
-            rows = run_condition(scenario, condition, args.epochs, out, models)
+            if len(names) * len(conditions) > 1:
+                # One process per condition: Inspect caches model clients per
+                # process, bound to the event loop of the eval that made them.
+                rows = _run_in_subprocess(name, condition, args, out)
+            else:
+                rows = run_condition(scenario, condition, args.epochs, out, models)
             results.extend(rows)
             for row in rows:
-                adopted = {a: v["probe"] for a, v in row["agents"].items()}
-                print(f"   epoch {row['epoch']}: probes={adopted} "
+                probes = {a: v["probe"] for a, v in row["agents"].items()}
+                print(f"   epoch {row['epoch']}: probes={probes} "
                       f"branches={[b['status'] for b in row['branches']]} "
                       f"verdict={row.get('verdict')}", flush=True)
-            (out / "results.json").write_text(json.dumps(
+            (out / args.results_name).write_text(json.dumps(
                 {"auditor": AUDITOR, "judge": JUDGE, "targets": TARGETS, "mock": args.mock,
                  "epochs": args.epochs, "results": results}, indent=2, default=str))
-    print(f"results: {out / 'results.json'}")
+    print(f"results: {out / args.results_name}")
 
 
 if __name__ == "__main__":
