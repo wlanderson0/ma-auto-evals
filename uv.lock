@@ -1700,7 +1700,7 @@ wheels = [
 [[package]]
 name = "orbit"
 version = "1.0.3"
-source = { git = "https://github.com/Danhelo/orbit?rev=588b3035f92450ec4f0496bb8b629daa205e84c7#588b3035f92450ec4f0496bb8b629daa205e84c7" }
+source = { git = "https://github.com/Danhelo/orbit?rev=145edc0043dd2a8b00adfb2bd5c56ae6f03c89e4#145edc0043dd2a8b00adfb2bd5c56ae6f03c89e4" }
 dependencies = [
     { name = "anyio" },
     { name = "click" },
@@ -1736,7 +1736,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4,<5" },
     { name = "inspect-ai", specifier = ">=0.3.263,<0.4" },
-    { name = "orbit", git = "https://github.com/Danhelo/orbit?rev=588b3035f92450ec4f0496bb8b629daa205e84c7" },
+    { name = "orbit", git = "https://github.com/Danhelo/orbit?rev=145edc0043dd2a8b00adfb2bd5c56ae6f03c89e4" },
     { name = "pydantic", specifier = ">=2" },
 ]
 

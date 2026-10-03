@@ -9,10 +9,10 @@ in its own asyncio task with a copied context and a fresh Inspect ``Store``,
 inside a ``span(type="branch")``, re-invoking ``mas_orchestrator``.
 
 This module is deliberately self-contained: it records/replays inside the mock
-model, and simulates the missing Orbit ID-provider seam (S0) by patching
-``uuid4``. It will be superseded by ``orbit_audit.branches`` (PR 4), which
-replays at the generation interceptor (S3) instead. Two findings are pinned as
-tests below so they stay visible until the seams land.
+model and uses Orbit's ID-provider seam (S0, ``orbit.ids.id_scope``) for
+deterministic identifiers. It will be superseded by ``orbit_audit.branches``
+(PR 4), which replays at the generation seam (S3) instead. Two findings are
+pinned as tests below.
 
 Scenario (``docs/auditor-tests.md`` §3): PM / Coder / Reviewer. Branch 0 is
 untouched. Branch 1 replays the first ``FORK_AT`` calls, then the auditor
@@ -25,9 +25,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
-import importlib
 import json
-import uuid
+from contextlib import nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,6 +50,7 @@ from orbit import (
     ToolFactory,
     multi_agent_task,
 )
+from orbit.ids import id_scope, sequential_ids
 from orbit.solvers.orchestrator import mas_orchestrator
 
 from tests.support.scripted import (
@@ -66,20 +66,6 @@ from tests.support.scripted import (
 
 AGENTS = ("pm", "coder", "reviewer")
 FORK_AT = 3  # index of PM's second generation in the global call order
-
-# Orbit modules that call uuid4() directly (some IDs reach model-visible text).
-ORBIT_UUID_MODULES = (
-    "orbit.defenses.boundaries",
-    "orbit.execution.sessions",
-    "orbit.execution.errors",
-    "orbit.execution.agent_scheduler",
-    "orbit.execution.communication",
-    "orbit.attacks.outcome",
-    "orbit.communication.delivery",
-    "orbit.communication.dialogue",
-    "orbit.communication.runtime",
-)
-
 
 # --------------------------------------------------------------------- scenario
 class RepoEnv(StoreModel):
@@ -146,16 +132,7 @@ class Recorder:
 
 
 _recorder: ContextVar[Recorder] = ContextVar("spike_recorder")
-_id_counter: ContextVar[list[int] | None] = ContextVar("spike_id_counter", default=None)
 _deterministic_ids = True
-
-
-def _branch_uuid4() -> uuid.UUID:
-    counter = _id_counter.get()
-    if counter is None:
-        return uuid.uuid4()
-    counter[0] += 1
-    return uuid.UUID(int=counter[0])
 
 
 def mock_generate(messages, tools, tool_choice, config) -> ModelOutput:
@@ -181,10 +158,10 @@ async def run_branch(base: TaskState, inner: Solver, generate: Generate, rec: Re
         state = fresh_state(base)
         init_subtask_store(state.store)  # context-local to this task
         _recorder.set(rec)
-        if _deterministic_ids:
-            _id_counter.set([0])
-        async with span(rec.name, type="branch"):
-            state = await inner(state, generate)
+        ids = id_scope(sequential_ids()) if _deterministic_ids else nullcontext()
+        with ids:
+            async with span(rec.name, type="branch"):
+                state = await inner(state, generate)
         return state, json.loads(json.dumps(dict(store().items()), default=str))
 
     loop = asyncio.get_running_loop()
@@ -274,16 +251,7 @@ def run_spike(log_dir: str, deterministic_ids: bool) -> tuple[Any, dict[str, Any
 
 
 @pytest.fixture(scope="module")
-def uuid_seam():
-    """Simulate seam S0 (injectable ID provider) by patching Orbit's uuid4."""
-    with pytest.MonkeyPatch.context() as mp:
-        for name in ORBIT_UUID_MODULES:
-            mp.setattr(importlib.import_module(name), "uuid4", _branch_uuid4)
-        yield
-
-
-@pytest.fixture(scope="module")
-def spike(offline_module, uuid_seam, scratch_dir):
+def spike(offline_module, scratch_dir):
     log, results = run_spike(str(scratch_dir / "logs-spike"), deterministic_ids=True)
     assert log.status == "success", log.samples[0].error
     return log, results
@@ -353,6 +321,6 @@ def test_replayed_calls_emit_no_model_events(spike):
 
 
 def test_random_ids_break_replay_without_id_seam(offline_module, scratch_dir):
-    """Finding (a): Orbit puts random IDs into model-visible text, so S0 is required."""
+    """Finding (a): Orbit puts random IDs into model-visible text, so replay needs S0."""
     _, r = run_spike(str(scratch_dir / "logs-spike-random"), deterministic_ids=False)
     assert "branch1_desync" in r
