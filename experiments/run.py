@@ -259,6 +259,7 @@ def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
     task = audit_task(
         policy=lambda: make_policy(condition, scenario, models["auditor"]),
         on_controller=controllers.append, tool_replay=scenario.tool_replay, limits=LIMITS,
+        scope=scenario.scope,
         epochs=epochs, **scenario.task,
     )
     started = time.monotonic()

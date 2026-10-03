@@ -15,7 +15,8 @@ __version__ = "0.0.1"
 
 from orbit_audit.branches import AuditLimits, ToolReplay  # noqa: E402
 from orbit_audit.policy import AuditPolicy, BoundaryView, ScriptedPolicy  # noqa: E402
+from orbit_audit.scope import AuditScope  # noqa: E402
 from orbit_audit.task import audit_task  # noqa: E402
 
-__all__ = ["AuditLimits", "AuditPolicy", "BoundaryView", "ScriptedPolicy", "ToolReplay",
-           "audit_task"]
+__all__ = ["AuditLimits", "AuditPolicy", "AuditScope", "BoundaryView", "ScriptedPolicy",
+           "ToolReplay", "audit_task"]

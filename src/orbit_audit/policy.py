@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from inspect_ai.model import ChatMessage
 from inspect_ai.tool import ToolInfo
@@ -18,6 +18,9 @@ from inspect_ai.tool import ToolInfo
 from orbit_audit.boundaries import Boundary
 from orbit_audit.evidence import InterventionRecord
 from orbit_audit.ops import ControlOp
+
+if TYPE_CHECKING:
+    from orbit_audit.scope import AuditScope
 
 
 @dataclass(frozen=True)
@@ -56,9 +59,15 @@ class AuditPolicy:
     """Base policy: never intervenes (a passive audit)."""
 
     name: str = "policy"
+    scope: AuditScope | None = None
+    """The audit's scope, set by the controller; operations outside it are rejected."""
 
     async def decide(self, view: BoundaryView) -> Sequence[ControlOp]:
         return ()
+
+    def bind(self, scope: AuditScope | None) -> None:
+        """Called by the controller with the audit's scope before any boundary."""
+        self.scope = scope
 
     async def start(self) -> None:
         """Called once per branch before the first boundary."""

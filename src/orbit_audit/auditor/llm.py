@@ -167,6 +167,9 @@ class LLMAuditor(AuditPolicy):
             names[:0] = ["amend_pending"]
         elif view.boundary == Boundary.BEFORE_ACTIVATION:
             names[:0] = ["stage_input"]
+        if self.scope is not None:
+            names = [name for name in names
+                     if name in ("continue_run", "end_audit") or self.scope.allows_op(name)]
         infos = []
         for name in names:
             definition = ToolDef(_TOOL_SIGNATURES[name], name=name)
@@ -179,6 +182,8 @@ class LLMAuditor(AuditPolicy):
         lines = [f"[{view.branch} · revision {view.revision} · {view.boundary.value}"
                  + (f" · agent {view.agent}" if view.agent else "")
                  + (f" · turn {view.turn}" if view.turn is not None else "") + "]"]
+        if self.wakes == 1 and self.scope is not None:
+            lines.append(f"Your scope ({self.scope.describe()}); anything else is rejected.")
         if new_branch and view.branch != "branch-0":
             lines.append(f"This is the first boundary of {view.branch}, forked at this "
                          "revision. The agents remember nothing after it; you do.")

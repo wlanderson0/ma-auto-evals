@@ -70,6 +70,7 @@ from orbit_audit.ops import (
     tool_schemas,
 )
 from orbit_audit.policy import AuditPolicy, BoundaryView
+from orbit_audit.scope import AuditScope
 
 
 @dataclass(frozen=True)
@@ -93,8 +94,11 @@ class AuditController(RuntimeController):
         branch_index: int = 0, replay: Replay | None = None,
         budget: BudgetLedger | None = None, ids: BranchIds | None = None,
         tool_replay: dict[str, ToolReplay] | None = None,
+        scope: AuditScope | None = None,
     ) -> None:
         self.policy = policy
+        self.scope = scope
+        policy.bind(scope)
         self.actor = actor or f"orbit_audit:{policy.name}"
         self.ledger = ledger if ledger is not None else EvidenceLedger()
         self.branch = branch
@@ -357,6 +361,8 @@ class AuditController(RuntimeController):
         raise self._end(RollbackRequested(op))
 
     def _rollback_problem(self, view: BoundaryView, op: Rollback) -> str | None:
+        if self.scope is not None and (problem := self.scope.problem(op)):
+            return problem
         if op.expected_revision is not None and op.expected_revision != view.revision:
             return f"stale: prepared for revision {op.expected_revision}, now {view.revision}"
         if op.to_revision > view.revision:
@@ -383,6 +389,8 @@ class AuditController(RuntimeController):
         self._apply_record(view, op, **fields)
 
     def _problem(self, view: BoundaryView, op: ControlOp, family: type[ControlOp]) -> str | None:
+        if self.scope is not None and (problem := self.scope.problem(op)):
+            return problem
         if view.boundary not in op.boundaries or not isinstance(op, family | MessageOp):
             return f"{op.name} is not allowed at boundary {view.boundary.value}"
         if op.expected_revision is not None and op.expected_revision != view.revision:

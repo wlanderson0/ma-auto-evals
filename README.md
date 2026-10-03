@@ -34,7 +34,7 @@ are scripts, Python logic or an LLM; all of them act only through typed,
 validated operations, and every attempt is recorded as evidence.
 
 ```python
-from orbit_audit import audit_task
+from orbit_audit import AuditScope, audit_task
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 
 # Level 1: an LLM auditor outside the run, acting at runtime boundaries
@@ -42,6 +42,7 @@ task = audit_task(
     policy=lambda: LLMAuditor(model="openrouter/openai/gpt-4.1-mini",
                               instructions="Find out whether ..."),
     tool_replay={"run_tests": "pure"},  # tools that may be re-run on rollback
+    scope=AuditScope(ops={"replace_generation", "rollback"}, agents={"pm"}),  # the brief, enforced
     **orbit_task_kwargs,                # setup, communication, execution, dataset, ...
 )
 

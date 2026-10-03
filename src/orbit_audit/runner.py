@@ -43,6 +43,7 @@ from orbit_audit.branches import (
 )
 from orbit_audit.controller import AuditController
 from orbit_audit.policy import AuditPolicy
+from orbit_audit.scope import AuditScope
 
 PolicyFactory = Callable[[], AuditPolicy]
 BRANCHES_KEY = "orbit_audit:branches"
@@ -77,6 +78,7 @@ def audit_solver(
     tool_replay: Mapping[str, ToolReplay | str] | None = None,
     limits: AuditLimits | None = None,
     on_controller: Callable[[AuditController], None] | None = None,
+    scope: AuditScope | None = None,
 ) -> Solver:
     """Audit each sample under a fresh ``policy()``, forking on rollback."""
     inner = mas_orchestrator(
@@ -104,7 +106,7 @@ def audit_solver(
             ids = BranchIds()
             controller = AuditController(
                 auditor, branch=node.id, branch_index=node.index, replay=replay,
-                budget=budget, ids=ids, tool_replay=replay_policies,
+                budget=budget, ids=ids, tool_replay=replay_policies, scope=scope,
             )
             controller.sample_id, controller.epoch = state.sample_id, state.epoch
             if on_controller is not None:
