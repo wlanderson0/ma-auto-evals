@@ -18,6 +18,8 @@ Families:
 - ``MessageOp`` (any boundary): rewrite, drop or inject agent-to-agent channel
   messages for chosen recipients, through a delivery overlay.
 - ``TurnOp`` (``Boundary.BETWEEN_TURNS``): change pending activations or halt.
+- ``Rollback`` (any boundary): fork a new branch from an earlier revision with
+  interventions, ending the current branch (``orbit_audit.branches``).
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from inspect_ai.model import (
     ModelOutput,
 )
 from inspect_ai.tool import ToolCall, ToolInfo
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny, field_validator
 
 from orbit_audit.boundaries import Boundary
 from orbit_audit.evidence import AUDITOR, auditor_as, tag
@@ -397,6 +399,37 @@ class AmendPending(TurnOp):
         return {"before": before}
 
 
+# ------------------------------------------------------------------ branches
+class Rollback(ControlOp):
+    """Fork a new branch that replays this one up to ``to_revision``.
+
+    At ``to_revision`` the new branch applies ``interventions`` (validated
+    there like any operation), then continues live under the same policy. The
+    current branch ends. It must be the only operation in its batch.
+    """
+
+    name: ClassVar[str] = "rollback"
+    boundaries: ClassVar[frozenset[Boundary]] = frozenset(Boundary)
+
+    to_revision: int = Field(ge=1)
+    interventions: tuple[SerializeAsAny[ControlOp], ...] = ()
+
+    @field_validator("interventions", mode="before")
+    @classmethod
+    def _parse(cls, value: Any) -> Any:
+        ops = [parse_op(item) if isinstance(item, dict) else item for item in value or ()]
+        if any(isinstance(op, Rollback) for op in ops):
+            raise ValueError("a rollback cannot contain another rollback")
+        return tuple(ops)
+
+    def agents(self) -> tuple[str, ...]:
+        return tuple(sorted({agent for op in self.interventions for agent in op.agents()}))
+
+    def payload(self) -> dict[str, Any]:
+        return {"to_revision": self.to_revision,
+                "interventions": [{"op": op.name, **op.payload()} for op in self.interventions]}
+
+
 # -------------------------------------------------------------------- registry
 _REGISTRY: dict[str, type[ControlOp]] = {}
 
@@ -424,7 +457,7 @@ def parse_op(data: dict[str, Any]) -> ControlOp:
 
 for _cls in (ReplaceGeneration, EditGeneration, ForceToolCall, StageInput, BlockToolCall,
              SimulateToolResult, OverrideToolResult, RewriteMessage, DropMessage, InjectMessage,
-             Halt, AmendPending):
+             Halt, AmendPending, Rollback):
     register_op(_cls)
 
 

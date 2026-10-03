@@ -44,6 +44,8 @@ class BoundaryView:
     messages: tuple[dict[str, Any], ...] = ()
     """Canonical channel messages so far (id, channel, sender, recipients, content)."""
     pending_steps: tuple[tuple[str, ...], ...] = ()
+    branch: str = "branch-0"
+    """The branch this view belongs to; revisions are per branch."""
 
 
 class AuditPolicy:

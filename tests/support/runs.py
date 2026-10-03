@@ -17,13 +17,20 @@ from tests.support.scripted import agent_of, normalize_input
 
 
 def run_audit(tmp_path: Path, policy, **overrides) -> tuple[EvalLog, AuditController]:
+    log, controllers = run_branches(tmp_path, policy, **overrides)
+    return log, controllers[0]
+
+
+def run_branches(tmp_path: Path, policy, *, models=release_models,
+                 **overrides) -> tuple[EvalLog, list[AuditController]]:
+    """Run an audit; return the log and every branch's controller, in order."""
     controllers: list[AuditController] = []
     task = audit_task(policy=policy, on_controller=controllers.append, **release_team(**overrides))
-    model = get_model("mockllm/model", custom_outputs=release_models, memoize=False)
+    model = get_model("mockllm/model", custom_outputs=models, memoize=False)
     with id_scope(sequential_ids()):
         log = inspect_eval(task, model=model, log_dir=str(tmp_path), display="none")[0]
     assert log.status == "success", log.samples[0].error
-    return log, controllers[0]
+    return log, controllers
 
 
 def run_plain(tmp_path: Path) -> EvalLog:

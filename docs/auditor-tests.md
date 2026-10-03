@@ -68,8 +68,8 @@ offline test enforces it against the real Orbit runtime with scripted models
 | P2 | Partial edits keep the original generation as evidence | Validated controls | Done |
 | P3 | Planted content is excluded from autonomous-behaviour counts | Judging | Planned |
 | A1–A5 | Agent-to-agent rewrite/drop/inject: canonical messages immutable (A1), per-recipient delivered version recorded (A2), no rewrite after delivery (A3), off-topology injection needs an explicit, recorded override (A4), dropped messages never reach the recipient and senders keep their own view (A5) | Exposure | Done (delay = drop, then inject later) |
-| R1–R6 | Fork by deterministic re-execution: restore fidelity, replay equivalence, replay is not live, append-only branches, scope honesty, no cross-branch leakage | Restoration | Spike only (`test_fork_spike.py`) |
-| B1–B2 | Monotone audit budget across branches; distinct terminal statuses | Limits and failures | Planned |
+| R1–R6 | Fork by deterministic re-execution: restore fidelity, replay equivalence, replay is not live, append-only branches, scope honesty, no cross-branch leakage | Restoration | Done (`tests/contract/test_rollback.py`; effectful tools and defenses: fork rejected) |
+| B1–B2 | Monotone audit budget across branches; distinct terminal statuses | Limits and failures | Done (`tests/contract/test_rollback.py`) |
 | L0-1, L0-2 | Auditor seat obeys channel rules; Level 0 equals Level 1 "take seat" | — | Planned |
 
 Batches are all-or-nothing: if one operation proposed at a boundary is

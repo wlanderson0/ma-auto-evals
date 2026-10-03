@@ -10,6 +10,10 @@ invalid, none is applied and each is recorded as rejected. A generation can
 be produced by at most one operation. Problems only detectable while applying
 (an edit whose text is absent, a schedule revision Orbit rejects) reject that
 operation alone, before it has any effect.
+
+The controller also records each boundary as a ``branches.Step`` and, when
+given a ``Replay``, re-executes a parent branch's prefix instead of asking
+the policy (see ``orbit_audit.branches``).
 """
 
 from __future__ import annotations
@@ -32,6 +36,22 @@ from orbit.execution.control import (
 )
 
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import (
+    DEFAULT_TOOL_REPLAY,
+    AuditLimits,
+    BranchEnded,
+    BranchIds,
+    BudgetExhausted,
+    BudgetLedger,
+    Replay,
+    ReplayDesync,
+    RollbackRequested,
+    Step,
+    ToolReplay,
+    fingerprint,
+    fork_problem,
+    label,
+)
 from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
 from orbit_audit.evidence import AUDITOR, EvidenceLedger, auditor_as
 from orbit_audit.ops import (
@@ -42,6 +62,7 @@ from orbit_audit.ops import (
     MessageOp,
     OpError,
     OverrideToolResult,
+    Rollback,
     SimulateToolResult,
     ToolOp,
     TurnOp,
@@ -68,11 +89,23 @@ class AuditController(RuntimeController):
 
     def __init__(
         self, policy: AuditPolicy, *, actor: str | None = None,
-        ledger: EvidenceLedger | None = None,
+        ledger: EvidenceLedger | None = None, branch: str = "branch-0",
+        branch_index: int = 0, replay: Replay | None = None,
+        budget: BudgetLedger | None = None, ids: BranchIds | None = None,
+        tool_replay: dict[str, ToolReplay] | None = None,
     ) -> None:
         self.policy = policy
         self.actor = actor or f"orbit_audit:{policy.name}"
         self.ledger = ledger if ledger is not None else EvidenceLedger()
+        self.branch = branch
+        self.branch_index = branch_index
+        self.replay = replay
+        self.budget = budget if budget is not None else BudgetLedger(AuditLimits())
+        self.ids = ids
+        self.tool_replay = {**DEFAULT_TOOL_REPLAY, **(tool_replay or {})}
+        self.steps: list[Step] = []
+        self.ending: BranchEnded | None = None
+        """Set once the branch must end; every later boundary raises it again."""
         self.revision = 0
         self.runtime: RuntimeHandles | None = None
         self.turn: int | None = None
@@ -89,6 +122,7 @@ class AuditController(RuntimeController):
         self.turn = turn
 
     async def generate(self, request: GenerationRequest, proceed) -> ModelOutput:
+        self._guard()
         agent = request.agent_name
         index = self._generation_counts[agent]
         self._generation_counts[agent] += 1
@@ -97,6 +131,7 @@ class AuditController(RuntimeController):
             input=tuple(m.model_copy(deep=True) for m in request.input),
             tools=tuple(sorted(tool_schemas(request.tools))),
         )
+        proceed = self._proceed(view, proceed)
         ops = await self._decide(view, GenerationOp)
         if len(ops) > 1:
             self._reject_all(view, ops, "at most one operation may produce a generation")
@@ -122,6 +157,7 @@ class AuditController(RuntimeController):
         return output
 
     async def before_activation(self, activation: ActivationContext) -> None:
+        self._guard()
         view = self._view(Boundary.BEFORE_ACTIVATION, agent=activation.agent_name,
                           turn=activation.turn)
         for op in await self._decide(view, ActivationOp):
@@ -133,6 +169,7 @@ class AuditController(RuntimeController):
             self._apply_record(view, op, author=AUDITOR, replacement=added)
 
     async def tool_call(self, call: ToolCallRequest, execute) -> Any:
+        self._guard()
         fields = dict(agent=call.agent_name, tool_name=call.function,
                       tool_call_id=call.tool_call_id,
                       tool_arguments=copy.deepcopy(call.arguments))
@@ -152,6 +189,12 @@ class AuditController(RuntimeController):
                 return op.result
             raise TypeError(f"no tool-call handling for {op.name}")
 
+        step = self.steps[view.revision - 1]
+        step.tool, step.executed = call.function, True
+        if self.replaying(view) and self.tool_replay.get(call.function) is not ToolReplay.PURE:
+            raise self._end(ReplayDesync(
+                f"revision {view.revision}: replay would re-execute {call.function!r}, "
+                "which is not declared pure"))
         result = await execute()
         view = self._view(Boundary.TOOL_RESULT, tool_result=copy.deepcopy(result), **fields)
         ops = await self._decide(view, ToolOp)
@@ -167,6 +210,7 @@ class AuditController(RuntimeController):
         return result
 
     async def after_turn(self, turn: int, results: Sequence[Any]) -> None:
+        self._guard()
         schedule = self.runtime.schedule if self.runtime else None
         view = self._view(
             Boundary.BETWEEN_TURNS, turn=turn,
@@ -194,21 +238,90 @@ class AuditController(RuntimeController):
                 return trace
         raise KeyError((agent, index))
 
+    def replaying(self, view: BoundaryView) -> bool:
+        """True while re-executing the parent's prefix (before the fork point)."""
+        return self.replay is not None and view.revision < self.replay.fork_revision
+
     # ------------------------------------------------------------ internals
+    def _guard(self) -> None:
+        if self.ending is not None:
+            raise self.ending
+
+    def _end(self, error: BranchEnded) -> BranchEnded:
+        self.ending = error
+        return error
+
     def _view(self, boundary: Boundary, *, turn: int | None = None, **fields: Any) -> BoundaryView:
         self.revision += 1
-        return BoundaryView(
+        view = BoundaryView(
             boundary=boundary, revision=self.revision,
             turn=self.turn if turn is None else turn,
-            messages=CommunicationWorld.current().summary(), **fields,
+            messages=CommunicationWorld.current().summary(), branch=self.branch, **fields,
         )
+        step = Step(revision=view.revision, boundary=boundary, agent=view.agent, turn=view.turn,
+                    fingerprint=fingerprint(view), label=label(view))
+        self.steps.append(step)
+        replay = self.replay
+        if replay is not None and view.revision <= replay.fork_revision:
+            recorded = replay.step(view.revision)
+            if recorded.fingerprint != step.fingerprint:
+                raise self._end(ReplayDesync(
+                    f"revision {view.revision}: replay reached {step.label} "
+                    f"but {replay.parent} recorded {recorded.label} with different content"))
+            if view.revision == replay.fork_revision and self.ids is not None:
+                self.ids.diverge(self.branch_index)  # from here on, this branch's own IDs
+        return view
+
+    def _proceed(self, view: BoundaryView, proceed):
+        """``proceed`` for this generation: replayed, or live and budgeted."""
+        step = self.steps[view.revision - 1]
+        if self.replaying(view):
+            recorded = iter(self.replay.step(view.revision).outputs)
+
+            async def replayed(*, input=None) -> ModelOutput:
+                output = next(recorded, None)
+                if output is None:
+                    raise self._end(ReplayDesync(
+                        f"revision {view.revision}: more model calls than {self.replay.parent}"))
+                output = await proceed(input=input, replay=output)
+                step.outputs.append(output.model_copy(deep=True))
+                return output
+
+            return replayed
+
+        async def live(*, input=None) -> ModelOutput:
+            spent = self.budget.exhausted()
+            if spent:
+                raise self._end(BudgetExhausted(spent))
+            output = await proceed(input=input)
+            self.budget.spend(output)
+            step.outputs.append(output.model_copy(deep=True))
+            return output
+
+        return live
 
     async def _decide(self, view: BoundaryView, family: type[ControlOp]) -> list[ControlOp]:
-        """Validate the policy's batch; apply message ops; return the ``family`` ops."""
-        ops = list(await self.policy.decide(view))
+        """Validate the batch for this boundary; apply message ops; return ``family`` ops.
+
+        The batch comes from the policy, or, while replaying, from the parent's
+        recording; at the fork revision it is the rollback's interventions
+        followed by whatever the policy adds.
+        """
+        replay = self.replay
+        if replay is not None and view.revision < replay.fork_revision:
+            ops = list(replay.step(view.revision).decisions)
+        else:
+            ops = list(await self.policy.decide(view))
+            if replay is not None and view.revision == replay.fork_revision:
+                ops = [*replay.interventions, *ops]
         for op in ops:
             if not isinstance(op, ControlOp):
                 raise TypeError(f"{self.policy.name} returned {op!r}, not a ControlOp")
+        self.steps[view.revision - 1].decisions = tuple(ops)
+        rollbacks = [op for op in ops if isinstance(op, Rollback)]
+        if rollbacks:
+            self._rollback(view, ops, rollbacks)
+            return []
         problems = {id(op): self._problem(view, op, family) for op in ops}
         if any(problems.values()):
             for op in ops:
@@ -219,6 +332,43 @@ class AuditController(RuntimeController):
             if isinstance(op, MessageOp):
                 self._apply_message(view, op)
         return [op for op in ops if not isinstance(op, MessageOp)]
+
+    def _rollback(
+        self, view: BoundaryView, ops: list[ControlOp], rollbacks: list[Rollback],
+    ) -> None:
+        if self.replaying(view):
+            self._reject_all(view, ops, "rollbacks are not re-applied during replay")
+            return
+        if len(ops) > 1:
+            self._reject_all(view, ops, "a rollback must be the only operation in its batch")
+            return
+        [op] = rollbacks
+        problem = self._rollback_problem(view, op)
+        if problem:
+            self._reject(view, op, problem)
+            return
+        target = self.steps[op.to_revision - 1]
+        self._apply_record(view, op, details={"to_revision": op.to_revision,
+                                              "fork_boundary": target.label})
+        raise self._end(RollbackRequested(op))
+
+    def _rollback_problem(self, view: BoundaryView, op: Rollback) -> str | None:
+        if op.expected_revision is not None and op.expected_revision != view.revision:
+            return f"stale: prepared for revision {op.expected_revision}, now {view.revision}"
+        if op.to_revision > view.revision:
+            return f"cannot roll forward to revision {op.to_revision} (now {view.revision})"
+        target = self.steps[op.to_revision - 1]
+        for intervention in op.interventions:
+            if target.boundary not in intervention.boundaries:
+                return (f"{intervention.name} is not allowed at revision {op.to_revision} "
+                        f"({target.label})")
+        config = self.runtime.config if self.runtime else None
+        if config is not None and any(defense.enabled for defense in config.defenses):
+            return "rollback is not supported for samples with defenses or model filters yet"
+        limits = self.budget.limits
+        if self.budget.branches >= limits.max_branches:
+            return f"branch budget spent ({self.budget.branches}/{limits.max_branches})"
+        return fork_problem(tuple(self.steps), self.tool_replay)
 
     def _apply_message(self, view: BoundaryView, op: MessageOp) -> None:
         try:
@@ -258,7 +408,8 @@ class AuditController(RuntimeController):
     def _record(self, view: BoundaryView, op: ControlOp, **fields: Any) -> None:
         self.ledger.record(
             op=op.name, op_version=op.version, boundary=view.boundary, actor=self.actor,
-            agents=op.agents(), turn=view.turn, revision=view.revision,
+            agents=op.agents(), turn=view.turn, revision=view.revision, branch=self.branch,
+            replayed=self.replaying(view),
             payload={"op": op.name, **op.payload()}, **fields,
         )
 

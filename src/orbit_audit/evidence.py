@@ -79,6 +79,9 @@ class InterventionRecord(BaseModel):
     revision: int
     """Audit state revision the operation was validated against."""
     outcome: Outcome
+    branch: str = "branch-0"
+    replayed: bool = False
+    """True when re-applied from the parent's recording while replaying a prefix."""
     reason: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
     original: Any = None
@@ -107,6 +110,7 @@ class EvidenceLedger:
         return tuple(self._records)
 
     def applied(self) -> tuple[InterventionRecord, ...]:
+        """Applied in this branch's timeline, including replayed prefix operations."""
         return tuple(r for r in self._records if r.outcome == "applied")
 
     def rejected(self) -> tuple[InterventionRecord, ...]:
