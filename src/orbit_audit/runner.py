@@ -106,6 +106,7 @@ def audit_solver(
                 auditor, branch=node.id, branch_index=node.index, replay=replay,
                 budget=budget, ids=ids, tool_replay=replay_policies,
             )
+            controller.sample_id, controller.epoch = state.sample_id, state.epoch
             if on_controller is not None:
                 on_controller(controller)
             outcome = await _run_branch(initial, inner, generate, controller, ids, node.id)

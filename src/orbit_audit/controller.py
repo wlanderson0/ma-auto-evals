@@ -103,6 +103,8 @@ class AuditController(RuntimeController):
         self.budget = budget if budget is not None else BudgetLedger(AuditLimits())
         self.ids = ids
         self.tool_replay = {**DEFAULT_TOOL_REPLAY, **(tool_replay or {})}
+        self.sample_id: int | str | None = None
+        self.epoch: int | None = None
         self.steps: list[Step] = []
         self.ending: BranchEnded | None = None
         """Set once the branch must end; every later boundary raises it again."""

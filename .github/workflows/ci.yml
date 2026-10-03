@@ -39,6 +39,6 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked
       - name: Lint
-        run: uv run --locked ruff check src tests
+        run: uv run --locked ruff check src tests experiments
       - name: Run offline tests
         run: uv run --locked pytest -q --tb=short --durations=10
