@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from inspect_ai.model import ChatMessage
+from inspect_ai.tool import ToolInfo
 
 from orbit_audit.boundaries import Boundary
+from orbit_audit.evidence import InterventionRecord
 from orbit_audit.ops import ControlOp
 
 
@@ -33,6 +35,8 @@ class BoundaryView:
     """For ``GENERATION``: the delivered model request."""
     tools: tuple[str, ...] = ()
     """For ``GENERATION``: names of tools offered to the agent."""
+    tool_specs: tuple[ToolInfo, ...] = ()
+    """For ``GENERATION``: schemas of the tools offered to the agent."""
     tool_name: str | None = None
     """For ``TOOL_CALL`` / ``TOOL_RESULT``: the called tool."""
     tool_call_id: str | None = None
@@ -58,6 +62,9 @@ class AuditPolicy:
 
     async def start(self) -> None:
         """Called once per branch before the first boundary."""
+
+    def notice(self, record: InterventionRecord) -> None:
+        """Called with the outcome of every operation this policy's controller tried."""
 
 
 Rule = Callable[[BoundaryView], ControlOp | Sequence[ControlOp] | None]

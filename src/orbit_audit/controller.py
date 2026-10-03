@@ -126,10 +126,12 @@ class AuditController(RuntimeController):
         agent = request.agent_name
         index = self._generation_counts[agent]
         self._generation_counts[agent] += 1
+        schemas = tool_schemas(request.tools)
         view = self._view(
             Boundary.GENERATION, agent=agent, generation=index,
             input=tuple(m.model_copy(deep=True) for m in request.input),
-            tools=tuple(sorted(tool_schemas(request.tools))),
+            tools=tuple(sorted(schemas)),
+            tool_specs=tuple(schemas[name] for name in sorted(schemas)),
         )
         proceed = self._proceed(view, proceed)
         ops = await self._decide(view, GenerationOp)
@@ -406,12 +408,13 @@ class AuditController(RuntimeController):
         self._record(view, op, outcome="applied", reason=op.reason, **fields)
 
     def _record(self, view: BoundaryView, op: ControlOp, **fields: Any) -> None:
-        self.ledger.record(
+        record = self.ledger.record(
             op=op.name, op_version=op.version, boundary=view.boundary, actor=self.actor,
             agents=op.agents(), turn=view.turn, revision=view.revision, branch=self.branch,
             replayed=self.replaying(view),
             payload={"op": op.name, **op.payload()}, **fields,
         )
+        self.policy.notice(record)
 
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:
         self.generations.append(GenerationTrace(

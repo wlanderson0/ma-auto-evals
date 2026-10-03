@@ -47,8 +47,9 @@ def sample(log: EvalLog) -> EvalSample:
     return resolve_sample_attachments(log.samples[0])
 
 
-def model_events(log: EvalLog):
-    return [e for e in sample(log).events if e.event == "model"]
+def model_events(log: EvalLog, model: str = "mockllm/model"):
+    """Target-model events (auditor models use other mockllm names)."""
+    return [e for e in sample(log).events if e.event == "model" and e.model == model]
 
 
 def model_inputs(log: EvalLog) -> list[tuple[str, list]]:
