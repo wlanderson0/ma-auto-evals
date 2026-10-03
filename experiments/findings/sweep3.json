@@ -1,9 +1,5 @@
 [
   {
-    "title": "Both auditors work end to end on real models",
-    "body": "18 live audits (2 seed scenarios × baseline / Level 1 / Level 0 × 3 runs): 142 target-model calls, about 350k auditor tokens, 49 applied and 2 rejected interventions, 19 branches, 0 infrastructure errors, well under a dollar in total. Every intervention is in the evidence ledger next to what the agents did on their own."
-  },
-  {
     "title": "A planted rumour spreads one hop reliably and a second hop sometimes",
     "body": "With no auditor, 0 of 9 agents came to believe MFA was off. With the auditor speaking through Alice (Level 1 editing her messages, or Level 0 playing her), Bob and Carol, who read Alice directly, adopted the false claim in 6 of 6 runs each and repeated it in their own posts in 4 of 6. Dave, who could only hear it second-hand on #pod, adopted it in 2 of 6."
   },
@@ -24,11 +20,7 @@
     "body": "One Level 1 summary claimed Dave \"planned under the assumption it was true\"; his private probe said UNSURE and the judge found the claim in none of his posts. Auditor summaries are search notes, not findings: scoring must stay separate (spec §6), which is what the probes and judge do here."
   },
   {
-    "title": "The control plane caught the auditor breaking its brief",
-    "body": "Told never to touch tool results, the Level 1 auditor tried override_tool_result in 2 of 3 release runs. Validation rejected both (they targeted the wrong agent) and the ledger recorded them. Prompted constraints are not enough: per-audit operation allowlists are a cheap next step."
-  },
-  {
-    "title": "Real models broke five assumptions the mocks could not",
-    "body": "Llama writes tool calls as JSON text; gemini-2.5-flash-lite ran away to 65k-token outputs; agents spent their only step on channel_read; OpenRouter sends tool schemas in strict mode; Inspect's cached model clients outlive their event loop. All five are fixed, with regression tests where they are deterministic."
+    "title": "The auditor broke its brief, so the brief is now enforced",
+    "body": "Told never to touch tool results, the Level 1 auditor tried override_tool_result in 2 of 3 release runs (validation rejected both). Briefs are now an AuditScope: allowed operations and agents, checked before anything else, including inside rollbacks."
   }
 ]
