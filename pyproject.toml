@@ -1,0 +1,57 @@
+[project]
+name = "orbit-audit"
+version = "0.0.1"
+description = "Petri-style automated auditing for multi-agent evaluations on Orbit"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "orbit",
+    "inspect-ai>=0.3.263,<0.4",
+    "pydantic>=2",
+    "anyio>=4,<5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-socket>=0.7,<1",
+    "pytest-timeout>=2.3,<3",
+    "hypothesis>=6",
+    "ruff>=0.12,<1",
+]
+
+[tool.uv]
+# Track the Inspect version Orbit's own lockfile is tested against. Raise
+# together with the Orbit pin (Scout needs >=0.3.268 once scanners land).
+constraint-dependencies = ["inspect-ai==0.3.263"]
+
+[tool.uv.sources]
+# Pinned fork of wlanderson0/orbit. For local co-development against
+# ../orbit, see README ("Working on Orbit and orbit_audit together").
+orbit = { git = "https://github.com/Danhelo/orbit", rev = "588b3035f92450ec4f0496bb8b629daa205e84c7" }
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orbit_audit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "live: real API tests; require explicit --run-live -m live and credentials",
+]
+addopts = "-m 'not live' --strict-markers --strict-config --disable-socket --allow-unix-socket"
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
