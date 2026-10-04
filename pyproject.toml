@@ -43,6 +43,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "live: real API tests; require explicit --run-live -m live and credentials",
+    "slow: offline but long (many full runs); skip with -m 'not live and not slow'",
 ]
 addopts = "-m 'not live' --strict-markers --strict-config --disable-socket --allow-unix-socket"
 asyncio_mode = "strict"
