@@ -35,7 +35,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import UUID
 
 from inspect_ai.log import transcript
 from inspect_ai.model import ModelOutput
@@ -116,10 +115,13 @@ DEFAULT_TOOL_REPLAY: Mapping[str, ToolReplay] = {
 class BranchIds:
     """Orbit identifier provider for one branch.
 
-    Before the fork point it yields exactly what ``orbit.ids.sequential_ids``
-    yields, so a replayed prefix allocates the parent's identifiers. ``diverge``
-    switches to identifiers unique to this branch, so objects created after the
-    fork never share an identifier with another branch's objects.
+    Identifiers are a hash of (branch prefix, counter): deterministic,
+    so a replayed prefix allocates exactly the parent's identifiers, but with no
+    visible structure. Orbit renders message ids into model inputs (inbox
+    headers, channel tool results), so an id that encoded the branch index would
+    let an agent tell it is on a forked branch. ``diverge`` switches to the
+    branch's own prefix, so objects created after the fork never share an
+    identifier with another branch's objects.
     """
 
     def __init__(self) -> None:
@@ -131,7 +133,7 @@ class BranchIds:
 
     def __call__(self) -> str:
         self.count += 1
-        return UUID(int=(self.prefix << 64) | self.count).hex
+        return hashlib.blake2b(f"{self.prefix}:{self.count}".encode(), digest_size=16).hexdigest()
 
 
 # ------------------------------------------------------------- recording

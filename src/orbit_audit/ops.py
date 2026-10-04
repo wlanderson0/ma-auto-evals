@@ -349,7 +349,7 @@ class InjectMessage(MessageOp):
             raise OpError(
                 "off-topology injection needs override_topology: " + "; ".join(violations))
         message = CommunicationMessage(
-            id=f"message-auditor-{new_id_hex()}", channel_id=self.channel_id, sender=self.sender,
+            id=f"message-{new_id_hex()}", channel_id=self.channel_id, sender=self.sender,
             recipients=tuple(self.recipients), content=self.content,
             sequence=allocate_message_sequence(),
         )
@@ -483,7 +483,7 @@ def _message_id() -> str:
     """Deterministic under ``orbit.ids.id_scope``, unlike Inspect's default IDs."""
     from orbit.ids import new_id_hex
 
-    return f"auditor-message-{new_id_hex()}"
+    return f"message-{new_id_hex()}"
 
 
 def _validated_call(spec: ToolCallSpec, tools: Any) -> ToolCall:
@@ -503,7 +503,7 @@ def _validated_call(spec: ToolCallSpec, tools: Any) -> ToolCall:
         raise OpError(f"tool {spec.function!r} got unknown arguments {sorted(unknown)}")
     from orbit.ids import new_id_hex
 
-    return ToolCall(id=f"auditor-call-{new_id_hex()}", function=spec.function,
+    return ToolCall(id=f"call_{new_id_hex()}", function=spec.function,
                     arguments=dict(spec.arguments))
 
 

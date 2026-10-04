@@ -133,6 +133,7 @@ def test_c7_forced_tool_call_is_schema_checked_and_paired_with_one_result(tmp_pa
     log, controller = run_audit(tmp_path, policy(at_generation("coder", 1, force)))
     [record] = controller.ledger.applied()
     forced_id = record.replacement["tool_calls"][0]["id"]
+    assert "auditor" not in forced_id  # tool-call ids are sent to the model
     later = [e for e in model_events(log) if agent_of(e.input, AGENTS) == "coder"][-1].input
     results = [m for m in later if m.role == "tool" and m.tool_call_id == forced_id]
     assert len(results) == 1 and "3 failed" in results[0].text

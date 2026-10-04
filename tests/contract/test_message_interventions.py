@@ -119,6 +119,7 @@ def test_a4_overridden_injection_is_delivered_and_flagged(tmp_path):
     assert record.author == "auditor-as:pm"
     assert record.payload["override_topology"] is True
     assert record.details["topology_violations"] == ["no route pm->reviewer"]
+    assert "auditor" not in record.replacement["id"]  # ids are rendered in the inbox
     assert "QA signed off" not in "\n".join(canonical_contents(log))
     [event] = info(log, "orbit_delivery_control")
     assert list(event["added"]) == [record.replacement["id"]]

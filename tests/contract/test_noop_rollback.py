@@ -10,8 +10,10 @@ a replay bug, not model noise.
 
 Step fingerprints are compared only within one run (child prefix vs parent),
 not against the separate reference run: they hash raw ids that legitimately
-differ across runs (mockllm tool-call UUIDs, branch-tagged Orbit ids), so the
-cross-run checks compare id-renumbered content instead.
+differ across runs (mockllm tool-call UUIDs, and Orbit ids minted after the
+fork, which are unique to each branch), so the cross-run checks compare
+id-renumbered content instead. Those ids reach the models, so they must also
+carry no visible structure that would reveal the branch.
 """
 
 from __future__ import annotations
@@ -54,8 +56,8 @@ class NoopRollback(AuditPolicy):
         return []
 
 
-# mockllm tool-call UUIDs, and Orbit ids, which BranchIds tags with the branch
-# index after a fork (e.g. message-0000000000000001...). Both are renumbered.
+# mockllm tool-call UUIDs, and Orbit ids, which differ per branch after a fork.
+# Both are renumbered.
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
                   r"|\b[a-z_]+-[0-9a-f]{32}\b")
 
@@ -64,12 +66,23 @@ def renumber(text: str) -> str:
     """Replace ids by their order of first use.
 
     Two separate runs never share mockllm's tool-call ids, and a child branch's
-    Orbit ids carry its branch index by design. NOTE: those Orbit ids appear in
-    agents' inbox text, so the branch index is model-visible; this test treats
-    that as known and checks everything else is identical.
+    Orbit ids differ from its parent's after the fork, by design.
     """
     seen: dict[str, str] = {}
     return UUID.sub(lambda m: seen.setdefault(m.group(), f"id{len(seen)}"), text)
+
+
+# An Orbit id with a run of 8+ zeros has visible structure: sequential ids
+# (message-000...0001) or the branch index packed into the high bits
+# (message-0000000000000001...). For a hashed id the chance is ~1e-8.
+STRUCTURED_ID = re.compile(r"\b[a-z_]+-(?=[0-9a-f]{32}\b)[0-9a-f]*0{8}[0-9a-f]*")
+
+
+def structured_ids(controller) -> set[str]:
+    """Orbit ids with visible structure anywhere in the models' inputs."""
+    return set(STRUCTURED_ID.findall(json.dumps(
+        [[m.model_dump(mode="json", exclude={"id"}) for m in g.input]
+         for g in controller.generations], default=str)))
 
 
 def strip_ids(controller) -> str:
@@ -119,6 +132,8 @@ def test_r7_noop_rollback_reproduces_the_plain_run_at_every_fork_point(reference
                             f"({len(child.steps)} vs {len(ref.steps)} steps)")
         if strip_ids(child) != strip_ids(ref):
             problems.append(f"k={k}: model inputs differ")
+        if leaked := structured_ids(child):
+            problems.append(f"k={k}: model-visible ids reveal the branch: {sorted(leaked)[:3]}")
         if verdict(log) != verdict(ref_log):
             problems.append(f"k={k}: verdict {verdict(log)!r} != {verdict(ref_log)!r}")
         runs, ref_runs = (sample(x).store.get("RepoEnv:test_runs") for x in (log, ref_log))

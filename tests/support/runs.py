@@ -10,6 +10,7 @@ from inspect_ai.model import get_model
 from orbit import multi_agent_task
 from orbit.ids import id_scope, sequential_ids
 
+from orbit_audit.branches import BranchIds
 from orbit_audit.controller import AuditController
 from orbit_audit.task import audit_task
 from tests.support.scenarios import AGENTS, release_models, release_team
@@ -34,8 +35,13 @@ def run_branches(tmp_path: Path, policy, *, models=release_models,
 
 
 def run_plain(tmp_path: Path) -> EvalLog:
+    """Plain Orbit, with the root branch's deterministic id provider.
+
+    Orbit's default ids are random; the audit's ``BranchIds`` makes them
+    reproducible, so the plain baseline uses the same provider for ids to match.
+    """
     model = get_model("mockllm/model", custom_outputs=release_models, memoize=False)
-    with id_scope(sequential_ids()):
+    with id_scope(BranchIds()):
         log = inspect_eval(multi_agent_task(**release_team()), model=model,
                            log_dir=str(tmp_path), display="none")[0]
     assert log.status == "success"
