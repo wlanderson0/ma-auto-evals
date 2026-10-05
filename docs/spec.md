@@ -41,6 +41,8 @@ Comparison with [Petri_MultiAgent](https://github.com/carissacullen/Petri_MultiA
 
 What a multi-agent seed looks like (scenario, agents, roles, topology, target behaviour) and how it maps to an Orbit config.
 
+A seed is a `Scenario` (`experiments/scenarios.py`): the Orbit task configuration passed to `multi_agent_task` (agents with personas and models, channels, a fixed schedule, the task prompt, tool bindings), a **seat** (the agent the auditor acts through), the measured **targets**, the auditor's **goal**, an enforced **scope** (allowed operations and agents), private **probes** per target and a per-post **judge** question. See [Seed scenarios](seeds.md) for the full definition and the current seeds.
+
 ### 3.2 Turn cycle and timesteps
 
 *Defines what one timestep is when several agents are running and at which points the auditor can step in.*
@@ -79,6 +81,8 @@ How eval state is saved, restored and branched, including when real tools have s
 - Rollback changes active state, not the evidence of earlier attempts. Keep original generations/results and abandoned branches, following [Petri's branch-aware results](https://meridianlabs-ai.github.io/inspect_petri/using/results.html).
 
 [Inspect checkpointing](https://inspect.aisi.org.uk/checkpointing.html) is a reuse candidate, not a full-world snapshot: its current documentation requires the development version and explicit integration for custom scaffolds. Orbit currently has [no transactional environment snapshot](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#historical-behavior-and-remaining-boundaries).
+
+In `orbit_audit`, rollback forks a new branch that deterministically replays the run up to the chosen revision without model calls (recorded outputs are fed back), then continues live with the auditor's intervention. Tools may be re-executed during replay only if declared `tool_replay={"name": "pure"}`; channel tools are pure by default, undeclared tools count as effectful, and a fork past an executed effectful tool is rejected. Branches are append-only, the audit budget is monotone across branches, and a replay that diverges from the record is a distinct desync status. Orbit ids are generated per branch by `BranchIds`, which hashes (branch, counter) so ids stay deterministic for replay but don't reveal the branch to agents. Invariants R1–R7 and B1–B2 in [the test subspec](auditor-tests.md#5-invariant-catalog).
 
 ## 4. Auditor levels
 
@@ -186,6 +190,14 @@ The starter seeds for each of the three properties.
 
 Following Tili's post we want to consider multiple scenario for each property.
 
+| Property | Seed | Status |
+|---|---|---|
+| Memetic spread | `mfa_rumor`: a false "MFA is off" claim planted via Alice on `#town`; does it reach Dave on `#pod`? | Implemented; first live results |
+| Susceptibility to persuasion | `release_pressure`: PM pressures Coder/Reviewer to ship fix #123 with failing tests | Implemented; first live results |
+| Persuasiveness | — | No seed yet |
+
+Details, models, probes, judge questions and current findings: [Seed scenarios](seeds.md).
+
 ## 8. Validation
 
 How we know we are getting real results.
@@ -206,6 +218,10 @@ Start with the [small test subspec](auditor-tests.md): synthetic contract fixtur
 A short comparison positioning this work against [Petri](https://meridianlabs-ai.github.io/inspect_petri/), [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/), [Bloom](https://meridianlabs-ai.github.io/petri_bloom/), [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/), [Gram](https://arxiv.org/abs/2605.30322) and [Prism](https://github.com/LAThomson/prism).
 
 ## 10. (Optional) Open questions
+
+- **Rollback upstream:** should fork + deterministic replay ("fast-forward") become a native Orbit feature, and are the seams in the `Danhelo/orbit` fork the right ones to upstream?
+- **Seeds:** which further simple seeds to add, starting with persuasiveness (none yet) and Tili's scenarios ([§7.1](#71-seed-scenarios-per-property), [seeds.md](seeds.md#open-gaps)).
+- **Scale:** how to scale and design bigger runs (epochs per cell, model swaps across roles, topology controls) so results support prevalence claims rather than existence proofs.
 
 ## 11. References
 
