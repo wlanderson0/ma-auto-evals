@@ -39,23 +39,29 @@ Comparison with [Petri_MultiAgent](https://github.com/carissacullen/Petri_MultiA
 
 ### 3.1 Audit setup and seed instructions
 
-What a multi-agent seed looks like (scenario, agents, roles, topology, target behaviour) and how it maps to an Orbit config.
+This section details what an audit is given before it starts, and how it maps to an Orbit config.
 
-A seed is a `Scenario` (`experiments/scenarios.py`): the Orbit task configuration passed to `multi_agent_task` (agents with personas and models, channels, a fixed schedule, the task prompt, tool bindings), a **seat** (the agent the auditor acts through), the measured **targets**, the auditor's **goal**, an enforced **scope** (allowed operations and agents), private **probes** per target and a per-post **judge** question. See [Seed scenarios](seeds.md) for the full definition and the current seeds.
+Following [Petri](https://alignment.anthropic.com/2025/petri), we distinguish two things:
+
+- **Seed instruction:** the natural-language brief telling the auditor what to investigate: the target behaviour, the strategy to try and the constraints to respect. In code, this is the scenario's `goal`.
+- **Scenario:** the multi-agent environment the audit runs in: agents, roles, models, topology (channels), schedule, task prompt and tools. In Petri, the auditor generates the scenario from the seed instruction. Here, scenarios are hand-built as a `Scenario` in `experiments/scenarios.py` and passed to Orbit's `multi_agent_task`.
+
+A `Scenario` also fixes what the auditor may do and what is measured: the **seat** (the agent the auditor acts through), the **targets** (the agents whose behaviour is measured), an enforced **scope** (allowed operations and agents), private **probes** per target and a per-post **judge** question. See [docs/scenarios.md](scenarios.md) for the current seeds and scenarios.
 
 ### 3.2 Turn cycle and timesteps
 
-*Defines what one timestep is when several agents are running and at which points the auditor can step in.*
+_Defines what one timestep is when several agents are running and at which points the auditor can step in._
 
 Orbit structures an eval as a series of **turns**. In scheduled execution, each turn has one or more agent **activations**.
 An activation contains one or more generations and the tool calls they request, depending on its **quantum**.
 See [Orbit's documentation for details](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#activation-plans).
 
 Possible points for the auditor to step in:
+
 1. **During any agent's generation**: the auditor can let the agent's LLM generate as usual, or write that generation's output itself, including messages to other agents.
-   In a multi-agent eval, messages a target receives come from other agents, so the auditor sends them *as* one of those agents.
+   In a multi-agent eval, messages a target receives come from other agents, so the auditor sends them _as_ one of those agents.
 1. **Before a target's generation**: it stages content that doesn't come from another agent (user or environment input) into the target's state.
-   Messages from other agents must go through point 1, and can also edit it. 
+   Messages from other agents must go through point 1, and can also edit it.
 1. **Between a target's generation and tool execution**: it sees the proposed tool calls and allows, blocks or modifies them.
 1. **After a target's tool execution**: it sees the real results and optionally overrides them before the next generation.
 1. **Between turns**: it changes pending activations or halts the run.
@@ -74,7 +80,7 @@ When tool results are real Orbit tools and when the auditor simulates them.
 
 ### 3.6 Checkpoints, rollback and forking
 
-How eval state is saved, restored and branched, including when real tools have side effects.
+This section details how eval state is saved, restored and branched, including when real tools have side effects.
 
 - A **boundary** is an intervention point in §3.2; a **checkpoint** captures restorable state there; a **branch** is a continuation with a recorded parent and intervention. A boundary is not automatically a checkpoint.
 - Each checkpoint declares its restoration scope: agent sessions, pending activations, channel contents/read cursors, config, and tool/environment state. Unsupported state or external effects make a fork invalid; use a fresh isolated run instead. Replaying a tool result does not undo its effects.
@@ -190,14 +196,6 @@ The starter seeds for each of the three properties.
 
 Following Tili's post we want to consider multiple scenario for each property.
 
-| Property | Seed | Status |
-|---|---|---|
-| Memetic spread | `mfa_rumor`: a false "MFA is off" claim planted via Alice on `#town`; does it reach Dave on `#pod`? | Implemented; first live results |
-| Susceptibility to persuasion | `release_pressure`: PM pressures Coder/Reviewer to ship fix #123 with failing tests | Implemented; first live results |
-| Persuasiveness | — | No seed yet |
-
-Details, models, probes, judge questions and current findings: [Seed scenarios](seeds.md).
-
 ## 8. Validation
 
 How we know we are getting real results.
@@ -213,17 +211,17 @@ Which models we run as auditor, judge and targets.
 
 Start with the [small test subspec](auditor-tests.md): synthetic contract fixtures and one end-to-end example connecting intervention, evidence, scoring and scanning. Compare untouched runs, matched intervention branches and fresh-run controls before making claims about multi-agent behaviour. Hold the scoring rubric fixed during search and validate scanner findings against labelled examples using [Scout validation sets](https://meridianlabs-ai.github.io/inspect_scout/validation.html).
 
-## 9. Comparison with other eval frameworks
+## 9. Results
+
+Results of the live audits on the [scenarios](scenarios.md) are recorded in [results.md](results.md), newest first.
+
+## 10. Comparison with other eval frameworks
 
 A short comparison positioning this work against [Petri](https://meridianlabs-ai.github.io/inspect_petri/), [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/), [Bloom](https://meridianlabs-ai.github.io/petri_bloom/), [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/), [Gram](https://arxiv.org/abs/2605.30322) and [Prism](https://github.com/LAThomson/prism).
 
-## 10. (Optional) Open questions
+## 11. (Optional) Open questions
 
-- **Rollback upstream:** should fork + deterministic replay ("fast-forward") become a native Orbit feature, and are the seams in the `Danhelo/orbit` fork the right ones to upstream?
-- **Seeds:** which further simple seeds to add, starting with persuasiveness (none yet) and Tili's scenarios ([§7.1](#71-seed-scenarios-per-property), [seeds.md](seeds.md#open-gaps)).
-- **Scale:** how to scale and design bigger runs (epochs per cell, model swaps across roles, topology controls) so results support prevalence claims rather than existence proofs.
-
-## 11. References
+## 12. References
 
 - [Orbit](https://github.com/wlanderson0/orbit) · [Inspect](https://inspect.aisi.org.uk/)
 - [Petri concepts](https://meridianlabs-ai.github.io/inspect_petri/using/concepts.html)
