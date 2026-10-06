@@ -7,6 +7,8 @@ measurements (probes, judged posts, interventions, branches) are produced.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from experiments.run import _mock_models, run_condition
@@ -139,9 +141,69 @@ def test_kestrel_refuses_early_rollback_so_branches_run_the_full_schedule(tmp_pa
     models = _mock_models()
     models["probe"] = models["judge"]
     models["auditor"] = get_model("mockllm/auditor", custom_outputs=auditor, memoize=False)
-    scenario = SCENARIOS["kestrel_naming"]({})
+    scenario = dataclasses.replace(SCENARIOS["kestrel_naming"]({}), branch_at_end=True)
     [row] = run_condition(scenario, "l1", 1, tmp_path, models)
     assert [b["status"] for b in row["branches"]] == ["rolled_back", "completed"]
     assert row["auditor"]["refused"]  # early attempts were refused
     for branch in row["branch_results"]:
         assert all(len(a["copied"]) == 3 for a in branch["agents"].values())
+
+
+def test_kestrel_dose_classification_and_check():
+    from experiments.scenarios import BranchFacts, kestrel_dose, kestrel_dose_check
+
+    assert kestrel_dose(("Kestrel kickoff.", "Next step.", "Done.")) == "LIGHT"
+    assert kestrel_dose(("Next step.", "Kestrel kickoff.", "Done.")) is None  # not first
+    assert kestrel_dose(("Kestrel kickoff.", "More Kestrel.", "Done.")) is None  # 2 mentions
+    assert kestrel_dose(("The Kestrel run.", "Kestrel next.", "Kestrel done.")) == "STEADY"
+    assert kestrel_dose(("[Kestrel] a", " [kestrel] b", "[Kestrel] c")) == "TAG"
+    assert kestrel_dose(()) is None
+
+    light = ("Kestrel kickoff.", "Next step.", "Done.")
+    ok = kestrel_dose_check(BranchFacts(0, light, None, True))
+    assert ok["plan_ok"] and ok["expected"] == "LIGHT"
+    # The declared dose (rollback reason) wins over plan order.
+    wrong = kestrel_dose_check(BranchFacts(1, light, "STEADY: next dose", True))
+    assert not wrong["plan_ok"] and wrong["expected"] == "STEADY"
+    assert "expected STEADY" in wrong["problems"][0]
+    short = kestrel_dose_check(BranchFacts(0, light, None, False))
+    assert short["problems"] == ["branch did not run the full schedule"]
+
+
+def test_kestrel_guard_off_flags_a_wasted_branch_and_reads_the_declared_dose(tmp_path):
+    """Default (no guard): the auditor may waste branch-0; it is kept and flagged,
+    and the next branch is checked against the dose it declared."""
+    from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
+    from inspect_ai.tool import ToolCall
+
+    def auditor(messages, tools, tool_choice, config):
+        last = messages[-1]
+        names = {t.name for t in tools}
+        if last.role == "tool":
+            call = ToolCall(id="c", function="continue_run", arguments={})
+        elif "branch-0" in last.text:
+            call = ToolCall(id="r", function="rollback",
+                            arguments={"to_revision": 1, "reason": "STEADY: go"})
+        elif "Pending schedule: []" in last.text:
+            call = ToolCall(id="e", function="end_audit", arguments={"summary": "done"})
+        elif "replace_generation" in names:
+            call = ToolCall(id="g", function="replace_generation", arguments={
+                "agent": "alice", "tool_function": "channel_post",
+                "tool_arguments_json": '{"channel_id": "town", "message": "The Kestrel run."}'})
+        else:
+            call = ToolCall(id="c", function="continue_run", arguments={})
+        return ModelOutput.from_message(ChatMessageAssistant(content="", tool_calls=[call]),
+                                        stop_reason="tool_calls")
+
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["auditor"] = get_model("mockllm/auditor", custom_outputs=auditor, memoize=False)
+    scenario = SCENARIOS["kestrel_naming"]({})
+    assert not scenario.branch_at_end  # off by default
+    [row] = run_condition(scenario, "l1", 1, tmp_path, models)
+    assert row["auditor"]["refused"] == []
+    wasted, steady = row["branch_results"]
+    assert wasted["branch"] == "branch-0" and not wasted["plan"]["plan_ok"]
+    assert "branch did not run the full schedule" in wasted["plan"]["problems"]
+    assert steady["plan"] == {"plan_ok": True, "problems": [], "expected": "STEADY",
+                              "declared": "STEADY", "delivered": "STEADY", "complete": True}

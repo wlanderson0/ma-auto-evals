@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import dataclasses
 import json
 import re
 import time
@@ -37,7 +38,7 @@ from inspect_ai.log import EvalLog
 from inspect_ai.model import ChatMessageUser, GenerateConfig, Model, ModelOutput, get_model
 from orbit.ids import id_scope, sequential_ids
 
-from experiments.scenarios import SCENARIOS, Scenario
+from experiments.scenarios import SCENARIOS, BranchFacts, Scenario
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.boundaries import Boundary
 from orbit_audit.branches import AuditLimits, BranchStatus
@@ -79,9 +80,15 @@ class RecordingAuditor(LLMAuditor):
         self.branch_messages: dict[str, list[dict]] = {}
         self.branch_at_end = branch_at_end
         self.refused: list[dict[str, Any]] = []
+        self.declared: dict[str, str] = {}
+        """Branch -> the reason the auditor gave for the rollback that created it."""
+        self._pending: str | None = None
         self._final = False
 
     async def decide(self, view):
+        if view.branch not in self.branch_messages and self._pending is not None:
+            self.declared[view.branch] = self._pending
+            self._pending = None
         self.branch_messages[view.branch] = [dict(m) for m in view.messages]
         self._final = view.boundary == Boundary.BETWEEN_TURNS and not view.pending_steps
         return await super().decide(view)
@@ -91,7 +98,10 @@ class RecordingAuditor(LLMAuditor):
             self.refused.append({"branch": view.branch, "revision": view.revision, "op": name})
             return (f"Refused: {name} is only allowed at the final wake of a branch (pending "
                     "schedule []). Call continue_run and let the schedule finish."), False
-        return super()._dispatch(view, name, arguments, queued)
+        result, done = super()._dispatch(view, name, arguments, queued)
+        if name == "rollback" and any(op.name == "rollback" for op in queued):
+            self._pending = str(arguments.get("reason", ""))
+        return result, done
 
 
 def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> AuditPolicy:
@@ -254,6 +264,14 @@ def _fresh(model: str | Model) -> Model:
     return get_model(model, memoize=False) if isinstance(model, str) else model
 
 
+def ran_full_schedule(scenario: Scenario, controller: AuditController) -> bool:
+    """Every agent got all of its scheduled activations in this branch."""
+    planned = Counter(agent for step in scenario.task["execution"].plan.steps
+                      for agent in step.agents)
+    done = Counter(trace.agent for trace in controller.generations)
+    return all(done[agent] >= n for agent, n in planned.items())
+
+
 def final_controller(controllers: list[AuditController], tree: list[dict]) -> AuditController:
     completed = [b["id"] for b in tree if b["status"] == BranchStatus.COMPLETED.value]
     branch = completed[-1] if completed else tree[-1]["id"]
@@ -344,7 +362,7 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                 row["agents"][agent].update(copy.deepcopy(final_mentions[agent]))
         policy = mine[0].policy if mine else None
         recorded = getattr(policy, "branch_messages", {})
-        if scenario.mention is not None and len(tree) > 1 and recorded:
+        if scenario.mention is not None and recorded:
             row["branch_results"] = []
             for node in tree:
                 controller = next((c for c in mine if c.branch == node["id"]), None)
@@ -358,6 +376,12 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                           "agents": {}}
                 result["seat_mentions"] = sum(count_mentions(scenario.mention,
                                                              result["seat_posts"]))
+                if scenario.plan_check is not None:
+                    result["plan"] = scenario.plan_check(BranchFacts(
+                        index=sum(1 for r in row["branch_results"] if r["seat_posts"]),
+                        seat_posts=tuple(result["seat_posts"]),
+                        declared=getattr(policy, "declared", {}).get(node["id"]),
+                        complete=ran_full_schedule(scenario, controller)))
                 for agent in scenario.targets:
                     if controller is final:
                         result["agents"][agent] = copy.deepcopy(final_mentions[agent])
@@ -435,6 +459,8 @@ def _run_in_subprocess(name: str, condition: str, args: argparse.Namespace,
                "--conditions", condition, "--epochs", str(args.epochs), "--out", str(out)]
     if args.mock:
         command.append("--mock")
+    if args.branch_at_end:
+        command.append("--branch-at-end")
     part = out / f"results-{name}-{condition}.json"
     completed = subprocess.run([*command, "--results-name", part.name],
                                capture_output=True, text=True)
@@ -451,6 +477,8 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--out", default=None)
     parser.add_argument("--mock", action="store_true", help="offline scripted models")
+    parser.add_argument("--branch-at-end", action="store_true",
+                        help="L1: refuse rollback/end_audit before a branch's final wake")
     parser.add_argument("--results-name", default="results.json", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.mock:
@@ -472,6 +500,8 @@ def main() -> None:
     for name in names:
         targets = {} if args.mock else TARGETS[name]
         scenario = SCENARIOS[name](targets)
+        if args.branch_at_end:
+            scenario = dataclasses.replace(scenario, branch_at_end=True)
         for condition in conditions:
             print(f"== {name} / {condition}", flush=True)
             if len(names) * len(conditions) > 1:
@@ -491,7 +521,12 @@ def main() -> None:
                               for a, v in row["agents"].items()}
                     probes["seat"] = row["seat_mentions"]
                 for branch in row.get("branch_results", []):
-                    print(f"     {branch['branch']} seat={branch['seat_mentions']} " + " | ".join(
+                    plan = branch.get("plan")
+                    status = ("" if plan is None else
+                              "plan=ok " if plan["plan_ok"] else
+                              f"plan=FLAGGED({'; '.join(plan['problems'])}) ")
+                    print(f"     {branch['branch']} seat={branch['seat_mentions']} {status}"
+                          + " | ".join(
                         f"{a}: own={v['own_mentions']} "
                         + "".join("Y" if x["uses"] else "n" for x in v["free_probes"].values())
                         for a, v in branch["agents"].items()), flush=True)
