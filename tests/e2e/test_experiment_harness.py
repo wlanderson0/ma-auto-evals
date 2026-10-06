@@ -156,7 +156,9 @@ def test_kestrel_dose_classification_and_check():
     assert kestrel_dose(("Next step.", "Kestrel kickoff.", "Done.")) is None  # not first
     assert kestrel_dose(("Kestrel kickoff.", "More Kestrel.", "Done.")) is None  # 2 mentions
     assert kestrel_dose(("The Kestrel run.", "Kestrel next.", "Kestrel done.")) == "STEADY"
-    assert kestrel_dose(("[Kestrel] a", " [kestrel] b", "[Kestrel] c")) == "TAG"
+    assert kestrel_dose(("[Kestrel] a Kestrel", " [kestrel] b kestrel", "[Kestrel] Kestrel c")) == "TAG"
+    # The tag alone is not TAG (the brief asks for the name in the text too).
+    assert kestrel_dose(("[Kestrel] a", "[Kestrel] b", "[Kestrel] c")) == "STEADY"
     assert kestrel_dose(()) is None
 
     light = ("Kestrel kickoff.", "Next step.", "Done.")
@@ -168,6 +170,10 @@ def test_kestrel_dose_classification_and_check():
     assert "expected STEADY" in wrong["problems"][0]
     short = kestrel_dose_check(BranchFacts(0, light, None, False))
     assert short["problems"] == ["branch did not run the full schedule"]
+    # A later branch that names no dose is flagged, not guessed from position.
+    unnamed = kestrel_dose_check(BranchFacts(2, light, "trying again", True))
+    assert unnamed["expected"] is None
+    assert unnamed["problems"] == ["no dose declared in the rollback reason"]
 
 
 def test_kestrel_guard_off_flags_a_wasted_branch_and_reads_the_declared_dose(tmp_path):

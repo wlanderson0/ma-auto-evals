@@ -265,11 +265,12 @@ def _fresh(model: str | Model) -> Model:
 
 
 def ran_full_schedule(scenario: Scenario, controller: AuditController) -> bool:
-    """Every agent got all of its scheduled activations in this branch."""
+    """Every agent got exactly its scheduled activations in this branch (extra
+    ones could only come from a schedule change, itself off-plan)."""
     planned = Counter(agent for step in scenario.task["execution"].plan.steps
                       for agent in step.agents)
     done = Counter(trace.agent for trace in controller.generations)
-    return all(done[agent] >= n for agent, n in planned.items())
+    return done == planned
 
 
 def final_controller(controllers: list[AuditController], tree: list[dict]) -> AuditController:
@@ -378,7 +379,7 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                                                              result["seat_posts"]))
                 if scenario.plan_check is not None:
                     result["plan"] = scenario.plan_check(BranchFacts(
-                        index=sum(1 for r in row["branch_results"] if r["seat_posts"]),
+                        index=len(row["branch_results"]),
                         seat_posts=tuple(result["seat_posts"]),
                         declared=getattr(policy, "declared", {}).get(node["id"]),
                         complete=ran_full_schedule(scenario, controller)))
