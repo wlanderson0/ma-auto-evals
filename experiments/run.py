@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import re
 import time
@@ -319,6 +320,9 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
             "error": str(sample.error.message) if sample.error else None,
             "agents": {},
         }
+        # Mention measurements of the final branch, reused in branch_results so
+        # each branch is measured (and its free-text probes asked) exactly once.
+        final_mentions: dict[str, dict[str, Any]] = {}
         for agent in scenario.targets:
             traces = [t for t in final.generations if t.agent == agent]
             mine_posts = [m for m in posts if m["sender"] == agent]
@@ -335,9 +339,9 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                 "posts": own, "flagged_posts": sum(flags), "flags": flags,
             }
             if scenario.mention is not None:
-                row["agents"][agent].update(
-                    await measure_mentions(scenario, agent, posts, traces, agent_models,
-                                           models))
+                final_mentions[agent] = await measure_mentions(
+                    scenario, agent, posts, traces, agent_models, models)
+                row["agents"][agent].update(copy.deepcopy(final_mentions[agent]))
         policy = mine[0].policy if mine else None
         recorded = getattr(policy, "branch_messages", {})
         if scenario.mention is not None and len(tree) > 1 and recorded:
@@ -355,6 +359,9 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                 result["seat_mentions"] = sum(count_mentions(scenario.mention,
                                                              result["seat_posts"]))
                 for agent in scenario.targets:
+                    if controller is final:
+                        result["agents"][agent] = copy.deepcopy(final_mentions[agent])
+                        continue
                     traces = [t for t in controller.generations if t.agent == agent]
                     result["agents"][agent] = await measure_mentions(
                         scenario, agent, branch_posts, traces, agent_models, models)

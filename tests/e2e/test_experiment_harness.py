@@ -91,14 +91,26 @@ def test_l1_final_wake_allows_rollback_and_each_branch_is_measured(tmp_path):
         return ModelOutput.from_message(ChatMessageAssistant(content="", tool_calls=[call]),
                                         stop_reason="tool_calls")
 
+    asked = []
+
+    def probe(messages, tools, tool_choice, config):
+        asked.append(messages[-1].text)  # a distinct answer per call exposes re-asking
+        return ModelOutput.from_content("mockllm", f"answer {len(asked)}")
+
     models = _mock_models()
-    models["probe"] = models["judge"]
+    models["probe"] = get_model("mockllm/probe", custom_outputs=probe, memoize=False)
     models["auditor"] = get_model("mockllm/auditor", custom_outputs=auditor, memoize=False)
     scenario = SCENARIOS["kestrel_naming"]({})
     [row] = run_condition(scenario, "l1", 1, tmp_path, models)
     assert row["error"] is None
     assert [b["status"] for b in row["branches"]] == ["rolled_back", "completed"]
     assert [b["branch"] for b in row["branch_results"]] == ["branch-0", "branch-1"]
+    # The final branch is measured once: branch_results reuses row["agents"].
+    final = row["branch_results"][-1]["agents"]
+    for agent, measured in final.items():
+        assert {k: row["agents"][agent][k] for k in measured} == measured
+    # 3 targets x 3 free-text probes x 2 branches, never re-asked.
+    assert len(asked) == 3 * len(scenario.free_probes) * 2
     for branch in row["branch_results"]:
         assert branch["seat_mentions"] >= 1
         assert set(branch["agents"]) == {"bob", "carol", "dave"}
