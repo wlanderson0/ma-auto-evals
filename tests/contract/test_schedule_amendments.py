@@ -73,26 +73,37 @@ def test_amend_pending_as_a_rollback_intervention_changes_only_the_child(tmp_pat
                     if v.branch == "branch-1" and v.revision == policy.target.revision]
     assert child_view.schedule_revision == policy.target.schedule_revision
     assert child_view.pending_steps == policy.target.pending_steps
-    assert verdict(log) == "REJECT"  # Reviewer saw only PM's request
+    [reviewer] = [t for t in child.generations if t.agent == "reviewer"]
+    seen_by_reviewer = " ".join(m.text for m in reviewer.input)
+    assert "fix #123" in seen_by_reviewer and "3 failed" not in seen_by_reviewer
 
 
 # ------------------------------------------------- 2. inside a replayed prefix
+ORIGINAL_REMAINDER = (("coder",), ("coder",), ("pm",), ("coder",), ("reviewer",))
+
+
 class AmendThenFork(AuditPolicy):
-    """Drop PM's follow-up early on, then fork back after the amendment."""
+    """Drop PM's follow-up and Coder's reply to it, then fork back after the
+    amendment. The policy amends in *any* branch that asks it at that
+    boundary, so a child that consulted it during the replayed prefix is
+    caught: by a second amendment record if the recording is also applied,
+    or by a non-replayed record and a pre-fork view if it is not."""
 
     name = "amend-then-fork"
 
     def __init__(self) -> None:
         self.target: int | None = None
+        self.views: list[BoundaryView] = []
 
     async def decide(self, view):
-        if view.branch != "branch-0":
-            return []
-        if between_turns(view, ("coder",)) and self.target is None:
-            self.target = -1  # amend here; fork to a later boundary
+        self.views.append(view)
+        if view.boundary == Boundary.BETWEEN_TURNS and view.pending_steps == ORIGINAL_REMAINDER:
             return [AmendPending(steps=(("coder",), ("coder",), ("reviewer",)),
                                  schedule_revision=view.schedule_revision)]
-        if self.target == -1 and view.boundary == Boundary.GENERATION and view.agent == "coder":
+        if view.branch != "branch-0":
+            return []
+        if (self.target is None and view.boundary == Boundary.GENERATION
+                and view.agent == "coder"):
             self.target = view.revision
         if (view.boundary, view.agent) == (Boundary.GENERATION, "reviewer"):
             return [Rollback(to_revision=self.target)]
@@ -103,8 +114,10 @@ def test_amend_pending_in_the_prefix_is_replayed_not_redecided(tmp_path):
     policy = AmendThenFork()
     log, (parent, child) = run_branches(tmp_path, lambda: policy, tool_replay=PURE)
 
-    [original] = [r for r in parent.ledger.applied() if r.op == "amend_pending"]
-    [replayed] = [r for r in child.ledger.applied() if r.op == "amend_pending"]
+    [original] = [r for r in parent.ledger if r.op == "amend_pending"]
+    [replayed] = [r for r in child.ledger if r.op == "amend_pending"]  # exactly once
+    assert not [v for v in policy.views
+                if v.branch == "branch-1" and v.revision < policy.target]
     assert (original.replayed, replayed.replayed) == (False, True)
     assert original.revision == replayed.revision < policy.target
     assert replayed.payload == original.payload
@@ -189,21 +202,23 @@ at_first_gap = lambda v: between_turns(v, ("coder",))
 at_reviewer = lambda v: (v.boundary, v.agent) == (Boundary.GENERATION, "reviewer")
 
 
-@pytest.mark.parametrize(("make", "when", "scope", "reason"), [
+@pytest.mark.parametrize(("make", "when", "scope", "op", "reason"), [
     (lambda v: [AmendPending(steps=(("nobody",),), schedule_revision=v.schedule_revision)],
-     at_first_gap, None, "unknown agents"),
+     at_first_gap, None, "amend_pending", "unknown agents"),
     (lambda v: [AmendPending(steps=(("reviewer",),), schedule_revision=v.schedule_revision)],
      at_first_gap, AuditScope(ops={"amend_pending"}, agents={"pm", "coder"}),
-     "outside this audit's scope"),
+     "amend_pending", "outside this audit's scope"),
+    # The rollback carrying the amendment is what gets rejected.
     (lambda v: [Rollback(to_revision=1, interventions=(
         AmendPending(steps=(("reviewer",),), schedule_revision=0),))],
-     at_reviewer, None, "amend_pending is not allowed at revision 1"),
-])
-def test_invalid_amendments_are_rejected_without_effect(tmp_path, make, when, scope, reason):
+     at_reviewer, None, "rollback", "amend_pending is not allowed at revision 1"),
+], ids=["unknown-agent", "out-of-scope", "wrong-boundary"])
+def test_invalid_amendments_are_rejected_without_effect(tmp_path, make, when, scope, op, reason):
     plain = run_plain(tmp_path / "plain")
     log, controllers = run_branches(tmp_path / "audited", lambda: Once(make, when),
                                     tool_replay=PURE, scope=scope)
     assert len(controllers) == 1
     [record] = controllers[0].ledger.rejected()
+    assert record.op == op
     assert reason in record.reason, record.reason
     assert model_inputs(log) == model_inputs(plain)
