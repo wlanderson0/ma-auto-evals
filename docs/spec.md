@@ -133,6 +133,10 @@ A representation of the scenario config the auditor can modify without breaking 
 
 Which config changes can be applied mid-sample (as a fork) and which require a fresh run.
 
+In `orbit_audit`, the one setup change available mid-sample is the pending schedule. `amend_pending` replaces the agents due to act next, at a between-turns boundary and against Orbit's current schedule revision, so a stale request is rejected. It can also be a rollback's intervention, and an amendment made before a fork point is replayed from the record in the child branch rather than decided again.
+
+Adding an agent mid-sample therefore works only for an agent declared in the setup but left out of the schedule: amending it in makes it act, and it reads the channel history it missed, as a member joining late would. An agent not in the setup is rejected. Roles, models and channel topology have no mid-sample operation yet, so they are start-only and a change needs a fresh run; a one-off off-topology message is possible as a recorded message injection, not as a topology change.
+
 ### 5.4 How the auditor perceives state
 
 What format and level of detail the auditor receives, and whether it explores state agentically or gets it as a message.
