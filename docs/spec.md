@@ -39,21 +39,29 @@ Comparison with [Petri_MultiAgent](https://github.com/carissacullen/Petri_MultiA
 
 ### 3.1 Audit setup and seed instructions
 
-What a multi-agent seed looks like (scenario, agents, roles, topology, target behaviour) and how it maps to an Orbit config.
+This section details what an audit is given before it starts, and how it maps to an Orbit config.
+
+Following [Petri](https://alignment.anthropic.com/2025/petri), we distinguish two things:
+
+- **Seed instruction:** the natural-language brief telling the auditor what to investigate: the target behaviour, the strategy to try and the constraints to respect. In code, this is the scenario's `goal`.
+- **Scenario:** the multi-agent environment the audit runs in: agents, roles, models, topology (channels), schedule, task prompt and tools. In Petri, the auditor generates the scenario from the seed instruction. Here, scenarios are hand-built as a `Scenario` in `experiments/scenarios.py` and passed to Orbit's `multi_agent_task`.
+
+A `Scenario` also fixes what the auditor may do and what is measured: the **seat** (the agent the auditor acts through), the **targets** (the agents whose behaviour is measured), an enforced **scope** (allowed operations and agents), private **probes** per target and a per-post **judge** question. See [docs/scenarios.md](scenarios.md) for the current seeds and scenarios.
 
 ### 3.2 Turn cycle and timesteps
 
-*Defines what one timestep is when several agents are running and at which points the auditor can step in.*
+_Defines what one timestep is when several agents are running and at which points the auditor can step in._
 
 Orbit structures an eval as a series of **turns**. In scheduled execution, each turn has one or more agent **activations**.
 An activation contains one or more generations and the tool calls they request, depending on its **quantum**.
 See [Orbit's documentation for details](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#activation-plans).
 
 Possible points for the auditor to step in:
+
 1. **During any agent's generation**: the auditor can let the agent's LLM generate as usual, or write that generation's output itself, including messages to other agents.
-   In a multi-agent eval, messages a target receives come from other agents, so the auditor sends them *as* one of those agents.
+   In a multi-agent eval, messages a target receives come from other agents, so the auditor sends them _as_ one of those agents.
 1. **Before a target's generation**: it stages content that doesn't come from another agent (user or environment input) into the target's state.
-   Messages from other agents must go through point 1, and can also edit it. 
+   Messages from other agents must go through point 1, and can also edit it.
 1. **Between a target's generation and tool execution**: it sees the proposed tool calls and allows, blocks or modifies them.
 1. **After a target's tool execution**: it sees the real results and optionally overrides them before the next generation.
 1. **Between turns**: it changes pending activations or halts the run.
@@ -72,13 +80,15 @@ When tool results are real Orbit tools and when the auditor simulates them.
 
 ### 3.6 Checkpoints, rollback and forking
 
-How eval state is saved, restored and branched, including when real tools have side effects.
+This section details how eval state is saved, restored and branched, including when real tools have side effects.
 
 - A **boundary** is an intervention point in §3.2; a **checkpoint** captures restorable state there; a **branch** is a continuation with a recorded parent and intervention. A boundary is not automatically a checkpoint.
 - Each checkpoint declares its restoration scope: agent sessions, pending activations, channel contents/read cursors, config, and tool/environment state. Unsupported state or external effects make a fork invalid; use a fresh isolated run instead. Replaying a tool result does not undo its effects.
 - Rollback changes active state, not the evidence of earlier attempts. Keep original generations/results and abandoned branches, following [Petri's branch-aware results](https://meridianlabs-ai.github.io/inspect_petri/using/results.html).
 
 [Inspect checkpointing](https://inspect.aisi.org.uk/checkpointing.html) is a reuse candidate, not a full-world snapshot: its current documentation requires the development version and explicit integration for custom scaffolds. Orbit currently has [no transactional environment snapshot](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#historical-behavior-and-remaining-boundaries).
+
+In `orbit_audit`, rollback forks a new branch that deterministically replays the run up to the chosen revision without model calls (recorded outputs are fed back), then continues live with the auditor's intervention. Tools may be re-executed during replay only if declared `tool_replay={"name": "pure"}`; channel tools are pure by default, undeclared tools count as effectful, and a fork past an executed effectful tool is rejected. Branches are append-only, the audit budget is monotone across branches, and a replay that diverges from the record is a distinct desync status. Orbit ids are generated per branch by `BranchIds`, which hashes (branch, counter) so ids stay deterministic for replay but don't reveal the branch to agents. Invariants R1–R7 and B1–B2 in [the test subspec](auditor-tests.md#5-invariant-catalog).
 
 ## 4. Auditor levels
 
@@ -122,6 +132,10 @@ A representation of the scenario config the auditor can modify without breaking 
 ### 5.3 On-the-fly versus start-only changes
 
 Which config changes can be applied mid-sample (as a fork) and which require a fresh run.
+
+In `orbit_audit`, the one setup change available mid-sample is the pending schedule. `amend_pending` replaces the agents due to act next, at a between-turns boundary and against Orbit's current schedule revision, so a stale request is rejected. It can also be a rollback's intervention, and an amendment made before a fork point is replayed from the record in the child branch rather than decided again.
+
+Adding an agent mid-sample therefore works only for an agent declared in the setup but left out of the schedule: amending it in makes it act, and it reads the channel history it missed, as a member joining late would. An agent not in the setup is rejected. Roles, models and channel topology have no mid-sample operation yet, so they are start-only and a change needs a fresh run; a one-off off-topology message is possible as a recorded message injection, not as a topology change.
 
 ### 5.4 How the auditor perceives state
 
@@ -201,13 +215,17 @@ Which models we run as auditor, judge and targets.
 
 Start with the [small test subspec](auditor-tests.md): synthetic contract fixtures and one end-to-end example connecting intervention, evidence, scoring and scanning. Compare untouched runs, matched intervention branches and fresh-run controls before making claims about multi-agent behaviour. Hold the scoring rubric fixed during search and validate scanner findings against labelled examples using [Scout validation sets](https://meridianlabs-ai.github.io/inspect_scout/validation.html).
 
-## 9. Comparison with other eval frameworks
+## 9. Results
+
+Results of the live audits on the [scenarios](scenarios.md) are recorded in [results.md](results.md), newest first.
+
+## 10. Comparison with other eval frameworks
 
 A short comparison positioning this work against [Petri](https://meridianlabs-ai.github.io/inspect_petri/), [Petri Dish](https://meridianlabs-ai.github.io/petri_dish/), [Bloom](https://meridianlabs-ai.github.io/petri_bloom/), [Inspect Scout](https://meridianlabs-ai.github.io/inspect_scout/), [Gram](https://arxiv.org/abs/2605.30322) and [Prism](https://github.com/LAThomson/prism).
 
-## 10. (Optional) Open questions
+## 11. (Optional) Open questions
 
-## 11. References
+## 12. References
 
 - [Orbit](https://github.com/wlanderson0/orbit) · [Inspect](https://inspect.aisi.org.uk/)
 - [Petri concepts](https://meridianlabs-ai.github.io/inspect_petri/using/concepts.html)
