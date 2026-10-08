@@ -1,0 +1,22 @@
+# Secrets: provider keys live only in a local .env, never in git.
+.env
+.env.*
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# Inspect logs
+logs/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
