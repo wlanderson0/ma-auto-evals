@@ -233,12 +233,3 @@ Both fork a tree of branches and replay the parent's prefix before going live. T
 | Tools | Results are simulated by the auditor by default, so replay re-serves recorded results. A custom `target=` agent is not guarded | Tools are real Orbit tools. A fork is rejected unless every executed tool is declared `ToolReplay.PURE` (Orbit's channel tools and `submit` are by default) |
 | Isolation | Response cache scoped by trajectory path | A fresh `Store` per branch and deterministic hashed ids (`BranchIds`), so an agent cannot tell from an id that it is on a forked branch |
 | Limits | `max_turns` bounds the auditor's turns | `AuditLimits`: `max_branches` (default 8), provider calls and tokens, never refunded by a rollback |
-
-## What the viewer shows
-
-Petri's auditor is an Inspect agent, so its tools execute as tool events and its conversation is persisted as an `auditor` timeline. orbit_audit's auditor is a policy called from inside the run, so:
-
-- **Its model calls are in the sample transcript**, in a `span(type="orbit_audit.auditor")` named `auditor` (`auditor-seat` for Level 0). The span is nested under whatever was running at that boundary. In a live Level 1 log, a `before_activation` wake sat at the orchestrator level, while a `generation` wake sat inside the PM agent's own span. There is no separate auditor lane.
-- **Its tool calls are not tool events.** The `LLMAuditor` turns them into `ControlOp`s itself, so they show as tool calls in the model output. The result it sees is `Queued ...`, because operations are validated and applied after its turn ends. The outcome reaches it at its next wake.
-- **The record of what happened** is the `orbit_audit_intervention` info events (outcome, original and replacement content), alongside `orbit_audit_auditor_turn` (what it said and the operations it queued), `orbit_audit_seat_turn` and `orbit_audit_branch`. In the Inspect viewer's event filter, use Info for these and Model for the auditor's generations.
-- **There are no `auditor` or `target` timelines.** Nothing in `src/` calls `add_timeline`, so the branch tree is only in the store and in the `orbit_audit_branch` events.
