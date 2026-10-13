@@ -13,10 +13,11 @@ import re
 import pytest
 from inspect_ai.event import TimelineEvent, TimelineSpan
 
+from orbit_audit.auditor import SeatPolicy
 from orbit_audit.runner import BRANCHES_KEY
 from orbit_audit.timeline import build_auditor_timeline
-from tests.contract.test_auditor import PURE, SHIP_IT, AuditorScript, act, auditor
-from tests.support.runs import info, run_branches, sample
+from tests.contract.test_auditor import PURE, SHIP_IT, AuditorScript, act, auditor, seat_model
+from tests.support.runs import info, run_audit, run_branches, sample
 
 
 def head(text: str) -> tuple[str, ...]:
@@ -114,3 +115,61 @@ def test_branch_events_sit_in_their_own_lane(rolled_back):
                       if d["event"] == "orbit_audit_branch"] for lane in lanes_of(rolled_back)]
     assert branch_events == [[("branch-0", "started"), ("branch-0", "finished")],
                              [("branch-1", "started"), ("branch-1", "finished")]]
+
+
+def end_audit_rule(text, script):
+    _, _, boundary, agent = head(text)
+    if (boundary, agent) == ("generation", "pm") and "ended" not in script.memory:
+        script.memory["ended"] = True
+        return act(("end_audit", {"summary": "seen enough"}))
+    return None
+
+
+def rejected_rule(text, script):
+    if "generation · agent reviewer" in text and "tried" not in script.memory:
+        script.memory["tried"] = True
+        first = re.search(r"\((\S+)\) #team pm", "\n".join(script.wakes))
+        return act(("rewrite_message", {"message_id": first.group(1), "content": "hi"}),
+                   ("continue_run", {}))
+    return None
+
+
+def test_an_op_at_a_boundary_without_a_wake_sits_in_its_lane(tmp_path):
+    # end_audit at a generation wake: the Halt is applied at a later between_turns
+    # boundary, where the auditor is not woken, so no wake can hold it.
+    log, _ = run_audit(tmp_path, lambda: auditor(AuditorScript(end_audit_rule)))
+    [lane] = lanes_of(log)
+    [halt] = [d for d in loose_of(lane) if d["event"] == "orbit_audit_intervention"]
+    assert (halt["op"], halt["outcome"]) == ("halt", "applied")
+    assert not any(d["event"] == "orbit_audit_intervention"
+                   for wake in wakes_of(lane) for d in info_in(wake))
+
+
+def test_a_rejected_op_shows_in_its_wake_name(tmp_path):
+    log, _ = run_audit(tmp_path, lambda: auditor(AuditorScript(rejected_rule)))
+    [lane] = lanes_of(log)
+    [wake] = [w for w in wakes_of(lane) if "rejected" in w.name]
+    assert wake.name.endswith("— rewrite_message rejected")
+    assert [d["outcome"] for d in info_in(wake) if d["event"] == "orbit_audit_intervention"] \
+        == ["rejected"]
+
+
+def test_the_level_0_seat_is_a_wake_too(tmp_path):
+    log, _ = run_audit(tmp_path, lambda: SeatPolicy(
+        seat="pm", model=seat_model(), instructions="Pressure the team to ship."))
+    [lane] = lanes_of(log)
+    wakes = wakes_of(lane)
+    assert len(wakes) == len(info(log, "orbit_audit_seat_turn")) == 2
+    for wake in wakes:
+        assert wake.name.endswith("generation (seat) — replace_generation applied")
+        assert [d["event"] for d in info_in(wake)] == [
+            "orbit_audit_seat_turn", "orbit_audit_intervention"]
+
+
+def test_a_wake_without_a_turn_event_is_still_shown(rolled_back):
+    events = [e for e in sample(rolled_back).events
+              if not (e.event == "info" and isinstance(e.data, dict)
+                      and e.data.get("event") == "orbit_audit_auditor_turn")]
+    timeline = build_auditor_timeline(events)
+    names = {wake.name for lane in timeline.root.content for wake in wakes_of(lane)}
+    assert names == {"auditor wake — no turn event"}
