@@ -12,8 +12,10 @@ import re
 
 import pytest
 from inspect_ai.event import TimelineEvent, TimelineSpan
+from inspect_ai.log import read_eval_log
 
 from orbit_audit.auditor import SeatPolicy
+from orbit_audit.policy import ScriptedPolicy
 from orbit_audit.runner import BRANCHES_KEY
 from orbit_audit.timeline import build_auditor_timeline
 from tests.contract.test_auditor import PURE, SHIP_IT, AuditorScript, act, auditor, seat_model
@@ -173,3 +175,44 @@ def test_a_wake_without_a_turn_event_is_still_shown(rolled_back):
     timeline = build_auditor_timeline(events)
     names = {wake.name for lane in timeline.root.content for wake in wakes_of(lane)}
     assert names == {"auditor wake — no turn event"}
+
+
+def test_both_timelines_are_registered_and_persist_in_the_log(rolled_back):
+    saved = read_eval_log(rolled_back.location).samples[0]
+    assert [t.name for t in saved.timelines] == ["auditor", "default"]
+    uuids = {e.uuid for e in saved.events}
+    items = [leaf for lane in saved.timelines[0].root.content for node in lane.content
+             for leaf in ([node] if isinstance(node, TimelineEvent) else node.content)]
+    assert items
+    assert all(item.event.uuid in uuids for item in items)
+
+
+def test_a_bounded_transcript_loses_no_wakes(monkeypatch, tmp_path):
+    monkeypatch.setenv("INSPECT_TRANSCRIPT_BOUNDED", "1")
+    log, _ = run_branches(tmp_path, lambda: auditor(AuditorScript(rollback_rule)),
+                          tool_replay=PURE)
+    saved = read_eval_log(log.location).samples[0]
+    timeline = next(t for t in saved.timelines if t.name == "auditor")
+    wakes = [node for lane in timeline.root.content for node in lane.content
+             if isinstance(node, TimelineSpan)]
+    turns = [e for e in saved.events if e.event == "info" and isinstance(e.data, dict)
+             and e.data.get("event") == "orbit_audit_auditor_turn"]
+    assert len(wakes) == len(turns) > 0
+
+
+def test_a_builder_failure_does_not_fail_the_run(monkeypatch, tmp_path):
+    def boom(events):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("orbit_audit.timeline.build_auditor_timeline", boom)
+    log, _ = run_branches(tmp_path, lambda: auditor(AuditorScript(rollback_rule)),
+                          tool_replay=PURE)  # run_branches asserts the run succeeded
+    assert not sample(log).timelines
+    [error] = info(log, "orbit_audit_timeline_error")
+    assert (error["error"], error["message"]) == ("RuntimeError", "boom")
+
+
+def test_a_run_without_auditor_wakes_registers_nothing(tmp_path):
+    log, _ = run_branches(tmp_path, lambda: ScriptedPolicy())
+    assert not sample(log).timelines
+    assert not info(log, "orbit_audit_timeline_error")

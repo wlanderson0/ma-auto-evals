@@ -8,6 +8,7 @@ auditor, so the viewer gets this one instead, next to a ``default`` timeline.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,7 +21,11 @@ from inspect_ai.event import (
     TimelineEvent,
     TimelineSpan,
     event_tree,
+    timeline_build,
 )
+from inspect_ai.log import transcript
+
+logger = logging.getLogger(__name__)
 
 AUDITOR_SPAN = "orbit_audit.auditor"
 """Span type of both the Level 1 ``auditor`` span and the Level 0 ``auditor-seat`` span."""
@@ -151,3 +156,28 @@ def build_auditor_timeline(events: Sequence[Event]) -> Timeline | None:
         description="What the auditor saw, said and queued at each wake, by branch",
         root=TimelineSpan(id="auditor", name="auditor", span_type="agent", content=lane_spans),
     )
+
+
+def register_timelines(events: Sequence[Event]) -> None:
+    """Register the ``auditor`` and ``default`` timelines on the current sample; never raises.
+
+    Registering any timeline replaces the viewer's default one, and the viewer shows
+    its timeline picker only for two or more, so ``default`` is registered with
+    ``auditor``. A run with no auditor wakes registers nothing. A failure here is a
+    view problem, not a run problem: it is logged and recorded as an
+    ``orbit_audit_timeline_error`` event, and the viewer keeps its default view.
+    """
+    try:
+        auditor = build_auditor_timeline(events)
+        if auditor is None:
+            return
+        default = timeline_build(list(events), name="default")
+        transcript().add_timeline(auditor)
+        transcript().add_timeline(default)
+    except Exception as error:
+        logger.warning("orbit_audit: could not build the auditor timeline: %s", error)
+        transcript().info(
+            {"event": "orbit_audit_timeline_error", "error": type(error).__name__,
+             "message": str(error)},
+            source="orbit_audit",
+        )
