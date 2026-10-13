@@ -9,17 +9,23 @@ PM's generation in the child.
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
+from inspect_ai import eval as inspect_eval
 from inspect_ai.event import TimelineEvent, TimelineSpan
 from inspect_ai.log import read_eval_log
+from inspect_ai.model import get_model
+from orbit.ids import id_scope, sequential_ids
 
 from orbit_audit.auditor import SeatPolicy
 from orbit_audit.policy import ScriptedPolicy
 from orbit_audit.runner import BRANCHES_KEY
+from orbit_audit.task import audit_task
 from orbit_audit.timeline import build_auditor_timeline
 from tests.contract.test_auditor import PURE, SHIP_IT, AuditorScript, act, auditor, seat_model
 from tests.support.runs import info, run_audit, run_branches, sample
+from tests.support.scenarios import release_models, release_team
 
 
 def head(text: str) -> tuple[str, ...]:
@@ -216,3 +222,38 @@ def test_a_run_without_auditor_wakes_registers_nothing(tmp_path):
     log, _ = run_branches(tmp_path, lambda: ScriptedPolicy())
     assert not sample(log).timelines
     assert not info(log, "orbit_audit_timeline_error")
+
+
+def run_unchecked(tmp_path, policy, **overrides):
+    """Like ``run_branches``, but for runs that are expected to end abnormally."""
+    task = audit_task(policy=policy, **release_team(**overrides))
+    model = get_model("mockllm/model", custom_outputs=release_models, memoize=False)
+    with id_scope(sequential_ids()):
+        log = inspect_eval(task, model=model, log_dir=str(tmp_path), display="none")[0]
+    return read_eval_log(log.location).samples[0]
+
+
+def auditor_names(saved) -> list[str]:
+    return [t.name for t in saved.timelines or []]
+
+
+def test_an_errored_sample_still_gets_its_timeline(tmp_path):
+    def rule(text, script):
+        if len(script.wakes) == 3:
+            raise RuntimeError("provider down")
+        return None
+
+    saved = run_unchecked(tmp_path, lambda: auditor(AuditorScript(rule)))
+    assert saved.error is not None  # the auditor's failure still fails the sample loudly
+    assert auditor_names(saved) == ["auditor", "default"]
+
+
+def test_a_time_limited_sample_still_gets_its_timeline(tmp_path):
+    def rule(text, script):
+        if len(script.wakes) == 3:
+            time.sleep(2.5)
+        return None
+
+    saved = run_unchecked(tmp_path, lambda: auditor(AuditorScript(rule)), time_limit=2)
+    assert saved.limit is not None and saved.limit.type == "time"
+    assert auditor_names(saved) == ["auditor", "default"]

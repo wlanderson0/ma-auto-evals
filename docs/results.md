@@ -36,8 +36,9 @@ To regenerate the report from a run:
 
 Each audited sample carries an `auditor` timeline. In `inspect view`, open the
 sample, go to its **Transcript** tab, and pick `auditor` in the timeline picker
-at the top left (the other entry, `default`, is Inspect's own view, which does
-not show branches).
+at the top left. The other entry, `default`, is Inspect's own view, built when the
+solver ends: it does not show branches and has no scoring section (scores are
+still in the sample's Scoring tab).
 
 - One lane per branch. A rolled-back branch's child is named
   `branch-1 (forked from branch-0 @ r17)`; its replayed prefix is not repeated.

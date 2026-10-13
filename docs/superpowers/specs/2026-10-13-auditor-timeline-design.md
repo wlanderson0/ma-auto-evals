@@ -156,3 +156,8 @@ A short note in `docs/results.md`: where to find the view (sample → Transcript
 - The wake-to-turn-event link relies on the turn event being emitted
   immediately after its span, in `LLMAuditor.decide` and `SeatPolicy.decide`.
   A test (1) fails if that ordering changes.
+- The registered `default` is a snapshot taken when the solver ends, so it has
+  no scoring section: the scorer runs after the solver, and no sample hook runs
+  between scoring and logging. Scores and the scorer's events are still in the
+  log and the viewer's other tabs. (Found in the final review; a later change
+  could rebuild `default` once scoring is done.)
