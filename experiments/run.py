@@ -40,10 +40,11 @@ from orbit.ids import id_scope, sequential_ids
 
 from experiments.scenarios import SCENARIOS, BranchFacts, Scenario
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
+from orbit_audit.auditor.llm import final_boundary
 from orbit_audit.boundaries import Boundary
 from orbit_audit.branches import AuditLimits, BranchStatus
 from orbit_audit.controller import AuditController
-from orbit_audit.policy import AuditPolicy
+from orbit_audit.policy import AuditPolicy, BoundaryView
 from orbit_audit.runner import BRANCHES_KEY, BUDGET_KEY
 from orbit_audit.task import audit_task
 
@@ -68,40 +69,13 @@ LIMITS = AuditLimits(max_branches=4, max_provider_calls=160)
 
 
 # ----------------------------------------------------------------- policies
-class RecordingAuditor(LLMAuditor):
-    """The Level 1 auditor, also keeping each branch's channel messages.
-
-    The sample store only holds the final branch; recording what the auditor
-    sees at every boundary lets each branch (e.g. each dose) be measured.
-    """
-
-    def __init__(self, *, branch_at_end: bool = False, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.branch_messages: dict[str, list[dict]] = {}
-        self.branch_at_end = branch_at_end
-        self.refused: list[dict[str, Any]] = []
-        self.declared: dict[str, str] = {}
-        """Branch -> the reason the auditor gave for the rollback that created it."""
-        self._pending: str | None = None
-        self._final = False
-
-    async def decide(self, view):
-        if view.branch not in self.branch_messages and self._pending is not None:
-            self.declared[view.branch] = self._pending
-            self._pending = None
-        self.branch_messages[view.branch] = [dict(m) for m in view.messages]
-        self._final = view.boundary == Boundary.BETWEEN_TURNS and not view.pending_steps
-        return await super().decide(view)
-
-    def _dispatch(self, view, name, arguments, queued):
-        if self.branch_at_end and name in ("rollback", "end_audit") and not self._final:
-            self.refused.append({"branch": view.branch, "revision": view.revision, "op": name})
-            return (f"Refused: {name} is only allowed at the final wake of a branch (pending "
-                    "schedule []). Call continue_run and let the schedule finish."), False
-        result, done = super()._dispatch(view, name, arguments, queued)
-        if name == "rollback" and any(op.name == "rollback" for op in queued):
-            self._pending = str(arguments.get("reason", ""))
-        return result, done
+def branch_at_end(view: BoundaryView, name: str, arguments: dict[str, Any]) -> str | None:
+    """Guard for ``Scenario.branch_at_end``: no rollback or end_audit before a branch's
+    final boundary, so every branch runs the full schedule."""
+    if name in ("rollback", "end_audit") and not final_boundary(view):
+        return (f"Refused: {name} is only allowed at the final wake of a branch (pending "
+                "schedule []). Call continue_run and let the schedule finish.")
+    return None
 
 
 def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> AuditPolicy:
@@ -110,18 +84,15 @@ def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> Aud
     if condition == "l1":
         def wake(view) -> bool:
             # Where this auditor can act: its seat's generations, and every post
-            # (the only moment a message can still be changed in flight).
-            # Plus the final between-turns boundary, so the auditor knows the run
-            # is ending and can still roll back or conclude.
+            # (the only moment a message can still be changed in flight). The
+            # LLMAuditor adds each branch's final boundary itself.
             if view.boundary == Boundary.GENERATION:
                 return view.agent == scenario.seat
-            if view.boundary == Boundary.BETWEEN_TURNS:
-                return not view.pending_steps
             return view.boundary == Boundary.TOOL_RESULT and view.tool_name == "channel_post"
 
-        return RecordingAuditor(model=auditor, instructions=scenario.goal, wake=wake,
-                                max_wakes=scenario.auditor_wakes,
-                                branch_at_end=scenario.branch_at_end)
+        return LLMAuditor(model=auditor, instructions=scenario.goal, wake=wake,
+                          max_wakes=scenario.auditor_wakes,
+                          guard=branch_at_end if scenario.branch_at_end else None)
     if condition == "l0":
         return SeatPolicy(seat=scenario.seat, model=auditor, instructions=scenario.goal)
     raise ValueError(condition)
@@ -362,12 +333,11 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                     scenario, agent, posts, traces, agent_models, models)
                 row["agents"][agent].update(copy.deepcopy(final_mentions[agent]))
         policy = mine[0].policy if mine else None
-        recorded = getattr(policy, "branch_messages", {})
-        if scenario.mention is not None and recorded:
+        if scenario.mention is not None and condition == "l1":
             row["branch_results"] = []
             for node in tree:
                 controller = next((c for c in mine if c.branch == node["id"]), None)
-                branch_posts = recorded.get(node["id"], [])
+                branch_posts = node["messages"]
                 if controller is None:
                     continue
                 result = {"branch": node["id"], "status": node["status"],
@@ -381,7 +351,7 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                     result["plan"] = scenario.plan_check(BranchFacts(
                         index=len(row["branch_results"]),
                         seat_posts=tuple(result["seat_posts"]),
-                        declared=getattr(policy, "declared", {}).get(node["id"]),
+                        declared=node["fork_reason"] or None,
                         complete=ran_full_schedule(scenario, controller)))
                 for agent in scenario.targets:
                     if controller is final:
@@ -410,14 +380,16 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
                          and set(r.agents) - {scenario.seat}],
             "records": [r.model_dump(mode="json") for r in applied],
         }
+        turns = getattr(policy, "turns", [])
         row["auditor"] = {
             "kind": ("LLMAuditor" if isinstance(policy, LLMAuditor)
                      else type(policy).__name__),
             "summary": getattr(policy, "summary", None),
             "wakes": getattr(policy, "wakes", None),
             "tokens": getattr(policy, "tokens", None),
-            "turns": getattr(policy, "turns", []),
-            "refused": getattr(policy, "refused", []),
+            "turns": turns,
+            "refused": [{"branch": t["branch"], "revision": t["revision"], **r}
+                        for t in turns for r in t.get("refused", [])],
         }
         rows.append(row)
     return rows

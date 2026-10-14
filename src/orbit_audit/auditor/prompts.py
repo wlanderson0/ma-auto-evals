@@ -17,6 +17,8 @@ delivered to readers the next time they generate. You are woken:
 - right after a channel message is posted (the only moment you can still change \
 it in flight, before anyone has read it);
 - between turns (you may change who acts next, or stop the run);
+- always after a branch's last turn, as its run is about to end: your last chance \
+in that branch to roll back or end the audit;
 - at the first boundary of each new branch after a rollback.
 
 Each wake starts with [branch · revision · boundary]. Revisions number the \

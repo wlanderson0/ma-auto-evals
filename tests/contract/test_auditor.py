@@ -11,8 +11,10 @@ import re
 
 from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
 from inspect_ai.tool import ToolCall
+from orbit import ExecutionConfig, SchedulerConfig
 
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
+from orbit_audit.boundaries import Boundary
 from orbit_audit.ops import ReplaceGeneration, ToolCallSpec
 from orbit_audit.policy import ScriptedPolicy, at_generation
 from orbit_audit.runner import BRANCHES_KEY
@@ -175,6 +177,47 @@ def test_max_wakes_bounds_auditor_calls(tmp_path):
     policy = auditor(script, max_wakes=3)
     run_audit(tmp_path, lambda: policy)
     assert len(script.wakes) == 3
+
+
+# ------------------------------------------------------------ end of a branch
+LAST_CHANCE = "last chance in this branch to roll back or end the audit"
+
+
+def test_auditor_is_always_woken_at_the_end_of_a_branch(tmp_path):
+    script = AuditorScript(lambda text, s: None)
+    run_audit(tmp_path, lambda: auditor(script, wake=lambda view: False))
+    first, last = script.wakes  # the branch's first boundary, and its last
+    assert LAST_CHANCE not in first
+    assert "turn 5]" in last and "Pending schedule: []" in last and LAST_CHANCE in last
+
+
+def test_finality_is_never_claimed_without_an_explicit_schedule(tmp_path):
+    script = AuditorScript(lambda text, s: None)
+    between_turns = lambda view: view.boundary == Boundary.BETWEEN_TURNS
+    run_audit(tmp_path, lambda: auditor(script, wake=between_turns),
+              execution=ExecutionConfig(executor="scheduled", quantum="model_step",
+                                        output_agent="reviewer"),
+              scheduler=SchedulerConfig(max_turns=3))
+    turns = [w for w in script.wakes if "between_turns" in w]
+    assert len(turns) == 3 and all("schedule_revision None" in w for w in turns)
+    assert not any(LAST_CHANCE in w for w in script.wakes)
+
+
+def test_guard_refusal_queues_nothing_and_is_recorded_in_the_turn(tmp_path):
+    def rule(text, script):
+        if "generation · agent reviewer" in text:
+            return act(("rollback", {"to_revision": 1, "reason": "again"}))
+        return None
+
+    refuse = lambda view, name, arguments: "Refused: not yet." if name == "rollback" else None
+    policy = auditor(AuditorScript(rule), guard=refuse)
+    log, controllers = run_branches(tmp_path, lambda: policy, tool_replay=PURE)
+    assert len(controllers) == 1 and controllers[0].ledger.records == ()
+    [turn] = [t for t in info(log, "orbit_audit_auditor_turn") if t["refused"]]
+    assert turn["ops"] == []
+    assert turn["refused"] == [{"op": "rollback", "reason": "Refused: not yet.",
+                                "arguments": {"to_revision": 1, "reason": "again"}}]
+    assert any(m.role == "tool" and m.text == "Refused: not yet." for m in policy.messages)
 
 
 # ---------------------------------------------------------------- Level 0

@@ -35,6 +35,7 @@ from orbit_audit.ops import ControlOp, Halt, OpError, parse_op
 from orbit_audit.policy import AuditPolicy, BoundaryView
 
 Wake = Callable[[BoundaryView], bool]
+Guard = Callable[[BoundaryView, str, dict[str, Any]], str | None]
 TEXT_LIMIT = 700
 
 
@@ -45,6 +46,17 @@ def default_wake(view: BoundaryView) -> bool:
     return view.boundary == Boundary.TOOL_RESULT and view.tool_name == "channel_post"
 
 
+def final_boundary(view: BoundaryView) -> bool:
+    """The last boundary of a branch: between turns, once an explicit plan has nothing pending.
+
+    Without an explicit plan (``schedule_revision`` is ``None``) nothing in the view
+    says the run is ending, so finality is never claimed. A repeating plan
+    (``ScheduleConfig.repeat``) also looks like this at the end of each cycle.
+    """
+    return (view.boundary == Boundary.BETWEEN_TURNS and view.schedule_revision is not None
+            and not view.pending_steps)
+
+
 class LLMAuditor(AuditPolicy):
     """Audit with a language model choosing operations at each wake."""
 
@@ -53,10 +65,15 @@ class LLMAuditor(AuditPolicy):
     def __init__(
         self, *, model: str | Model, instructions: str, wake: Wake = default_wake,
         max_wakes: int = 30, max_rounds: int = 4, config: GenerateConfig | None = None,
+        guard: Guard | None = None,
     ) -> None:
         self._model = model
         self.instructions = instructions
         self.wake = wake
+        """Where to wake besides each branch's first and final boundary, which always wake."""
+        self.guard = guard
+        """Sees each tool call first; a returned message refuses it: the auditor gets the
+        message as the tool result, nothing is queued, and the turn record keeps it."""
         self.max_wakes = max_wakes
         self.max_rounds = max_rounds
         self.config = config or GenerateConfig()
@@ -87,12 +104,14 @@ class LLMAuditor(AuditPolicy):
         self._branch = view.branch
         if self.summary is not None:
             return [self._halt_op()] if view.boundary == Boundary.BETWEEN_TURNS else []
-        if self.wakes >= self.max_wakes or not (new_branch or self.wake(view)):
+        always = new_branch or final_boundary(view)
+        if self.wakes >= self.max_wakes or not (always or self.wake(view)):
             return []
         self.wakes += 1
         prompt = self._describe(view, new_branch)
         self.messages.append(ChatMessageUser(content=prompt))
         queued: list[ControlOp] = []
+        refused: list[dict[str, Any]] = []
         said: list[str] = []
         async with span("auditor", type="orbit_audit.auditor"):
             for _ in range(self.max_rounds):
@@ -110,7 +129,8 @@ class LLMAuditor(AuditPolicy):
                     break
                 finished = False
                 for call in calls:
-                    result, done = self._dispatch(view, call.function, call.arguments, queued)
+                    result, done = self._dispatch(view, call.function, call.arguments, queued,
+                                                  refused)
                     finished = finished or done
                     self.messages.append(ChatMessageTool(
                         content=result, tool_call_id=call.id, function=call.function))
@@ -118,7 +138,7 @@ class LLMAuditor(AuditPolicy):
                     break
         turn = {"branch": view.branch, "revision": view.revision,
                 "boundary": view.boundary.value, "agent": view.agent, "said": "\n".join(said),
-                "ops": [{"op": op.name, **op.payload()} for op in queued]}
+                "ops": [{"op": op.name, **op.payload()} for op in queued], "refused": refused}
         self.turns.append(turn)
         transcript().info({"event": "orbit_audit_auditor_turn", **turn}, source="orbit_audit")
         if self.summary is not None and view.boundary == Boundary.BETWEEN_TURNS:
@@ -130,7 +150,11 @@ class LLMAuditor(AuditPolicy):
 
     # ------------------------------------------------------------ tools
     def _dispatch(self, view: BoundaryView, name: str, arguments: dict[str, Any],
-                  queued: list[ControlOp]) -> tuple[str, bool]:
+                  queued: list[ControlOp], refused: list[dict[str, Any]]) -> tuple[str, bool]:
+        refusal = self.guard(view, name, arguments) if self.guard is not None else None
+        if refusal is not None:
+            refused.append({"op": name, "arguments": arguments, "reason": refusal})
+            return refusal, False
         if name == "continue_run":
             return "The run continues.", True
         if name == "end_audit":
@@ -208,6 +232,9 @@ class LLMAuditor(AuditPolicy):
             pending = [list(step) for step in view.pending_steps]
             lines.append(f"Turn {view.turn} finished. Pending schedule: {pending} "
                          f"(schedule_revision {view.schedule_revision}).")
+            if final_boundary(view):
+                lines.append("The schedule is done and the run ends after this wake: this is "
+                             "your last chance in this branch to roll back or end the audit.")
         if self._notices:
             lines.append("Outcomes of your operations:")
             lines += [f"  {r.outcome} {r.op} at revision {r.revision}"
