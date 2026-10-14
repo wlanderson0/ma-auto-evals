@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from orbit_audit.ops import ControlOp, Rollback, op_types
+from orbit_audit.ops import ControlOp, MessageOp, Rollback, op_types
 
 
 class AuditScope(BaseModel):
@@ -28,7 +28,10 @@ class AuditScope(BaseModel):
     A rollback needs ``"rollback"`` plus the names of its interventions."""
     agents: frozenset[str] | None = None
     """Agents the policy may affect (``ControlOp.agents()``): whose generations
-    it writes, whose context it stages, whose deliveries it changes."""
+    it writes, whose context it stages, whose deliveries it changes. With a
+    limit, message operations must name their recipients: ``recipients=None``
+    (every intended recipient) is rejected, since the scope cannot see who
+    those are."""
 
     @field_validator("ops", "agents", mode="before")
     @classmethod
@@ -52,6 +55,10 @@ class AuditScope(BaseModel):
             return (f"{op.name} is outside this audit's scope "
                     f"(allowed operations: {sorted(self.ops or ())})")
         if self.agents is not None:
+            if isinstance(op, MessageOp) and getattr(op, "recipients", ()) is None:
+                return (f"{op.name} without recipients affects every recipient, "
+                        f"which this audit's scope cannot check; name them "
+                        f"(allowed agents: {sorted(self.agents)})")
             outside = sorted(set(op.agents()) - self.agents)
             if outside:
                 return (f"{op.name} affects {outside}, outside this audit's scope "

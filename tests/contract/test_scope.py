@@ -15,15 +15,19 @@ from pydantic import ValidationError
 from orbit_audit.auditor import LLMAuditor
 from orbit_audit.boundaries import Boundary
 from orbit_audit.ops import (
+    DropMessage,
     OverrideToolResult,
     ReplaceGeneration,
+    RewriteMessage,
     Rollback,
     StageInput,
     ToolCallSpec,
 )
 from orbit_audit.policy import AuditPolicy, BoundaryView, ScriptedPolicy, at_tool
 from orbit_audit.scope import AuditScope
-from tests.support.runs import run_audit, run_branches, verdict
+from tests.support.runs import model_events, run_audit, run_branches, verdict
+from tests.support.scenarios import AGENTS
+from tests.support.scripted import agent_of
 
 THROUGH_PM = AuditScope(ops={"replace_generation", "edit_generation", "rollback", "halt"},
                         agents={"pm"})
@@ -89,6 +93,28 @@ def test_rollbacks_and_their_interventions_are_scoped(tmp_path, scope, reason):
     assert len(controllers) == 1  # no fork happened
     [record] = controllers[0].ledger.rejected()
     assert reason in record.reason
+
+
+@pytest.mark.parametrize("make", [
+    lambda mid: RewriteMessage(message_id=mid, content="all tests pass ✅"),
+    lambda mid: DropMessage(message_id=mid),
+], ids=["rewrite", "drop"])
+def test_message_ops_for_every_recipient_are_rejected_when_agents_are_limited(tmp_path, make):
+    # recipients=None reaches pm and reviewer; with no recipients named, agents() is empty.
+    scope = AuditScope(ops={"rewrite_message", "drop_message"}, agents={"pm"})
+
+    def rule(view: BoundaryView):
+        if view.boundary == Boundary.BETWEEN_TURNS and view.turn == 4:
+            return make([m["id"] for m in view.messages if m["sender"] == "coder"][-1])
+        return None
+
+    log, controller = run_audit(tmp_path, lambda: ScriptedPolicy(rule), scope=scope)
+    [record] = controller.ledger.rejected()
+    assert "without recipients affects every recipient" in record.reason
+    assert controller.ledger.applied() == ()
+    reviewer_input = [e for e in model_events(log) if agent_of(e.input, AGENTS) == "reviewer"][-1]
+    assert "\n".join(m.text for m in reviewer_input.input).count("still failing") == 2
+    assert verdict(log) == "REJECT"
 
 
 def test_scopes_name_only_registered_operations():
