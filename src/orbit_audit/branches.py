@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from orbit_audit.ops import ControlOp, Rollback
     from orbit_audit.policy import BoundaryView
 
-BRANCH_EVENT_VERSION = 1
+BRANCH_EVENT_VERSION = 2
 
 
 # ------------------------------------------------------------------ errors
@@ -152,6 +152,8 @@ class Step:
     """Generations returned by ``proceed`` at this revision (live or replayed)."""
     tool: str | None = None
     executed: bool = False
+    over_budget: str | None = None
+    """Why ``max_interventions`` rejected this revision's batch; a replay repeats it."""
 
 
 @dataclass(frozen=True)
@@ -162,6 +164,8 @@ class Replay:
     steps: tuple[Step, ...]
     fork_revision: int
     interventions: tuple[ControlOp, ...] = ()
+    reason: str = ""
+    """The rollback's reason, recorded on the child branch."""
 
     def step(self, revision: int) -> Step:
         if revision > len(self.steps):
@@ -238,6 +242,16 @@ class AuditLimits(BaseModel):
     max_provider_calls: int | None = None
     """Live target-model calls; replayed generations are not calls."""
     max_tokens: int | None = None
+    """Tokens of live target-model calls."""
+    max_auditor_calls: int | None = None
+    """Model calls made by the policy itself (an LLM auditor or seat). Kept apart from
+    ``max_provider_calls`` so target spend stays comparable across policies."""
+    max_interventions: int | None = None
+    """Applied operations, not counting replayed ones; once reached, operations are rejected.
+    Halts and rollbacks change no agent's view and do not count (``max_branches`` bounds
+    rollbacks), though a halt batched with operations that do not fit is rejected with
+    them; a rollback's interventions must fit, and count when its child applies them.
+    Each Level 0 seat generation counts; a seat that cannot take its turn ends the branch."""
 
 
 class BudgetLedger:
@@ -247,6 +261,9 @@ class BudgetLedger:
         self.limits = limits
         self.provider_calls = 0
         self.tokens = 0
+        self.auditor_calls = 0
+        self.auditor_tokens = 0
+        self.interventions = 0
         self.branches = 0
 
     def exhausted(self) -> str | None:
@@ -257,14 +274,34 @@ class BudgetLedger:
             return f"token budget spent ({self.tokens}/{limits.max_tokens})"
         return None
 
+    def auditor_exhausted(self) -> str | None:
+        limit, calls = self.limits.max_auditor_calls, self.auditor_calls
+        if limit is not None and calls >= limit:
+            return f"auditor call budget spent ({calls}/{limit})"
+        return None
+
+    def intervention_problem(self, count: int) -> str | None:
+        """Why ``count`` more interventions do not fit ``max_interventions``, or ``None``."""
+        limit, used = self.limits.max_interventions, self.interventions
+        if limit is None or used + count <= limit:
+            return None
+        return f"intervention budget exceeded ({used}/{limit} used; this batch needs {count})"
+
     def spend(self, output: ModelOutput) -> None:
         self.provider_calls += 1
         if output.usage is not None:
             self.tokens += output.usage.total_tokens
 
+    def spend_auditor(self, output: ModelOutput) -> None:
+        self.auditor_calls += 1
+        if output.usage is not None:
+            self.auditor_tokens += output.usage.total_tokens
+
     def summary(self) -> dict[str, Any]:
         return {"provider_calls": self.provider_calls, "tokens": self.tokens,
-                "branches": self.branches, "limits": self.limits.model_dump()}
+                "auditor_calls": self.auditor_calls, "auditor_tokens": self.auditor_tokens,
+                "interventions": self.interventions, "branches": self.branches,
+                "limits": self.limits.model_dump()}
 
 
 # ------------------------------------------------------------------ tree
@@ -277,11 +314,16 @@ class BranchNode(BaseModel):
     index: int
     parent: str | None = None
     fork_revision: int | None = None
+    fork_reason: str = ""
+    """The reason given for the rollback that created this branch."""
     interventions: list[dict[str, Any]] = []
     status: BranchStatus | None = None
     reason: str = ""
     revisions: int = 0
     output: str | None = None
+    messages: list[dict[str, Any]] = []
+    """Canonical channel messages at the branch's end, as ``BoundaryView.messages``
+    shows them: abandoned branches are evidence too (spec §3.6)."""
 
 
 class BranchTree:
@@ -299,7 +341,7 @@ class BranchTree:
         return tuple(node.model_copy() for node in self._nodes)
 
     def add(self, *, parent: str | None = None, fork_revision: int | None = None,
-            interventions: tuple[ControlOp, ...] = ()) -> BranchNode:
+            fork_reason: str = "", interventions: tuple[ControlOp, ...] = ()) -> BranchNode:
         if parent is None and self._nodes:
             raise ValueError("only the baseline branch has no parent")
         if parent is not None and parent not in {node.id for node in self._nodes}:
@@ -307,6 +349,7 @@ class BranchTree:
         index = len(self._nodes)
         node = BranchNode(
             id=f"branch-{index}", index=index, parent=parent, fork_revision=fork_revision,
+            fork_reason=fork_reason,
             interventions=[{"op": op.name, **op.payload()} for op in interventions],
         )
         self._nodes.append(node)
@@ -314,11 +357,13 @@ class BranchTree:
         return node
 
     def finish(self, branch: str, status: BranchStatus, *, reason: str = "",
-               revisions: int = 0, output: str | None = None) -> None:
+               revisions: int = 0, output: str | None = None,
+               messages: Sequence[dict[str, Any]] = ()) -> None:
         node = next(node for node in self._nodes if node.id == branch)
         if node.status is not None:
             raise ValueError(f"{branch} already finished as {node.status.value}")
         node.status, node.reason, node.revisions, node.output = status, reason, revisions, output
+        node.messages = list(messages)
         self._emit("finished", node)
 
     def _emit(self, action: Literal["started", "finished"], node: BranchNode) -> None:
