@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from orbit_audit.ops import ControlOp, Rollback
     from orbit_audit.policy import BoundaryView
 
-BRANCH_EVENT_VERSION = 1
+BRANCH_EVENT_VERSION = 2
 
 
 # ------------------------------------------------------------------ errors
@@ -162,6 +162,8 @@ class Replay:
     steps: tuple[Step, ...]
     fork_revision: int
     interventions: tuple[ControlOp, ...] = ()
+    reason: str = ""
+    """The rollback's reason, recorded on the child branch."""
 
     def step(self, revision: int) -> Step:
         if revision > len(self.steps):
@@ -277,11 +279,16 @@ class BranchNode(BaseModel):
     index: int
     parent: str | None = None
     fork_revision: int | None = None
+    fork_reason: str = ""
+    """The reason given for the rollback that created this branch."""
     interventions: list[dict[str, Any]] = []
     status: BranchStatus | None = None
     reason: str = ""
     revisions: int = 0
     output: str | None = None
+    messages: list[dict[str, Any]] = []
+    """Canonical channel messages at the branch's end, as ``BoundaryView.messages``
+    shows them: abandoned branches are evidence too (spec §3.6)."""
 
 
 class BranchTree:
@@ -299,7 +306,7 @@ class BranchTree:
         return tuple(node.model_copy() for node in self._nodes)
 
     def add(self, *, parent: str | None = None, fork_revision: int | None = None,
-            interventions: tuple[ControlOp, ...] = ()) -> BranchNode:
+            fork_reason: str = "", interventions: tuple[ControlOp, ...] = ()) -> BranchNode:
         if parent is None and self._nodes:
             raise ValueError("only the baseline branch has no parent")
         if parent is not None and parent not in {node.id for node in self._nodes}:
@@ -307,6 +314,7 @@ class BranchTree:
         index = len(self._nodes)
         node = BranchNode(
             id=f"branch-{index}", index=index, parent=parent, fork_revision=fork_revision,
+            fork_reason=fork_reason,
             interventions=[{"op": op.name, **op.payload()} for op in interventions],
         )
         self._nodes.append(node)
@@ -314,11 +322,13 @@ class BranchTree:
         return node
 
     def finish(self, branch: str, status: BranchStatus, *, reason: str = "",
-               revisions: int = 0, output: str | None = None) -> None:
+               revisions: int = 0, output: str | None = None,
+               messages: Sequence[dict[str, Any]] = ()) -> None:
         node = next(node for node in self._nodes if node.id == branch)
         if node.status is not None:
             raise ValueError(f"{branch} already finished as {node.status.value}")
         node.status, node.reason, node.revisions, node.output = status, reason, revisions, output
+        node.messages = list(messages)
         self._emit("finished", node)
 
     def _emit(self, action: Literal["started", "finished"], node: BranchNode) -> None:
