@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import re
 
-from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
+import pytest
+from inspect_ai.model import ChatMessageAssistant, ModelOutput, ModelUsage, get_model
 from inspect_ai.tool import ToolCall
 from orbit import ExecutionConfig, SchedulerConfig
 
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import AuditLimits
 from orbit_audit.ops import ReplaceGeneration, ToolCallSpec
 from orbit_audit.policy import ScriptedPolicy, at_generation
-from orbit_audit.runner import BRANCHES_KEY
+from orbit_audit.runner import BRANCHES_KEY, BUDGET_KEY
 from tests.support.runs import (
     info,
     model_events,
@@ -179,6 +181,45 @@ def test_max_wakes_bounds_auditor_calls(tmp_path):
     assert len(script.wakes) == 3
 
 
+# ----------------------------------------------------------------- budget
+def test_b1_auditor_calls_are_charged_across_branches_apart_from_target_calls(tmp_path):
+    def rule(text, script):
+        if text.startswith("[branch-0") and "generation · agent reviewer" in text:
+            return act(("rollback", {"to_revision": 1}))
+        return None
+
+    script = AuditorScript(rule)
+
+    def metered(*args) -> ModelOutput:
+        output = script(*args)
+        output.usage = ModelUsage(input_tokens=9, output_tokens=1, total_tokens=10)
+        return output
+
+    model = get_model("mockllm/auditor", custom_outputs=metered, memoize=False)
+    policy = LLMAuditor(model=model, instructions="Get the reviewer to approve.")
+    log, _ = run_branches(tmp_path, lambda: policy, tool_replay=PURE)
+    assert [b["status"] for b in sample(log).store[BRANCHES_KEY]] == ["rolled_back", "completed"]
+    budget, calls = sample(log).store[BUDGET_KEY], len(model_events(log, "mockllm/auditor"))
+    assert budget["auditor_calls"] == calls  # both branches': rollback refunds nothing
+    assert budget["auditor_tokens"] == policy.tokens == 10 * calls
+    assert budget["provider_calls"] == len(model_events(log))  # target calls only
+
+
+@pytest.mark.parametrize(("max_wakes", "status", "reason"), [
+    (4, "budget_exhausted", "auditor call budget spent (3/3)"),
+    (3, "completed", ""),  # the budget is spent, but no wake needs another call
+])
+def test_b2_spent_auditor_budget_ends_the_branch_when_the_auditor_needs_a_call(
+        tmp_path, max_wakes, status, reason):
+    script = AuditorScript(lambda text, s: None)
+    policy = auditor(script, max_wakes=max_wakes)
+    log, _ = run_branches(tmp_path, lambda: policy, limits=AuditLimits(max_auditor_calls=3))
+    [branch] = sample(log).store[BRANCHES_KEY]
+    assert (branch["status"], branch["reason"]) == (status, reason)
+    assert len(script.wakes) == 3
+    assert policy.wakes == len(policy.turns) == 3  # the unpaid wake is not counted
+
+
 # ------------------------------------------------------------ end of a branch
 LAST_CHANCE = "last chance in this branch to roll back or end the audit"
 
@@ -240,6 +281,21 @@ def test_l0_seat_plays_pm_and_is_attributed_to_the_auditor(tmp_path):
     assert "pm" not in {agent for agent, _ in model_inputs(log)}  # PM's model never ran
     assert len(model_events(log)) == 4  # coder x3, reviewer x1
     assert len(model_events(log, "mockllm/seat")) == 2  # the seat's two generations
+    budget = sample(log).store[BUDGET_KEY]
+    assert (budget["provider_calls"], budget["auditor_calls"]) == (4, 2)
+
+
+def test_b2_a_seat_over_the_intervention_budget_ends_the_branch(tmp_path):
+    policy = SeatPolicy(seat="pm", model=seat_model(), instructions="x")
+    log, _ = run_branches(tmp_path, lambda: policy, limits=AuditLimits(max_interventions=1))
+    [branch] = sample(log).store[BRANCHES_KEY]
+    assert (branch["status"], branch["reason"]) == (
+        "budget_exhausted",
+        "seat 'pm' cannot take its turn: intervention budget exceeded (1/1 used; "
+        "this batch needs 1)")
+    assert "pm" not in {agent for agent, _ in model_inputs(log)}  # PM's model never ran
+    budget = sample(log).store[BUDGET_KEY]
+    assert (budget["auditor_calls"], budget["interventions"]) == (1, 1)
 
 
 def test_l0_1_seat_cannot_use_tools_its_seat_does_not_have(tmp_path):

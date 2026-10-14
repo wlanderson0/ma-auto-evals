@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from orbit_audit.auditor.prompts import AUDITOR_SYSTEM
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import BudgetExhausted
 from orbit_audit.evidence import InterventionRecord
 from orbit_audit.ops import ControlOp, Halt, OpError, parse_op
 from orbit_audit.policy import AuditPolicy, BoundaryView
@@ -109,6 +110,8 @@ class LLMAuditor(AuditPolicy):
         always = new_branch or final_boundary(view)
         if self.wakes >= self.max_wakes or not (always or self.wake(view)):
             return []
+        if self.budget is not None and (spent := self.budget.auditor_exhausted()):
+            raise BudgetExhausted(spent)  # before the wake counts or its prompt is kept
         self.wakes += 1
         prompt = self._describe(view, new_branch)
         self.messages.append(ChatMessageUser(content=prompt))
@@ -117,8 +120,8 @@ class LLMAuditor(AuditPolicy):
         said: list[str] = []
         async with span("auditor", type="orbit_audit.auditor"):
             for _ in range(self.max_rounds):
-                output = await self.model.generate(
-                    self.messages, tools=self._tools(view), tool_choice="auto",
+                output = await self.generate(
+                    self.model, self.messages, tools=self._tools(view), tool_choice="auto",
                     config=self.config)
                 if output.usage is not None:
                     self.tokens += output.usage.total_tokens
