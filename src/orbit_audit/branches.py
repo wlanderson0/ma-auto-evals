@@ -152,6 +152,8 @@ class Step:
     """Generations returned by ``proceed`` at this revision (live or replayed)."""
     tool: str | None = None
     executed: bool = False
+    over_budget: str | None = None
+    """Why ``max_interventions`` rejected this revision's batch; a replay repeats it."""
 
 
 @dataclass(frozen=True)
@@ -238,6 +240,14 @@ class AuditLimits(BaseModel):
     max_provider_calls: int | None = None
     """Live target-model calls; replayed generations are not calls."""
     max_tokens: int | None = None
+    """Tokens of live target-model calls."""
+    max_auditor_calls: int | None = None
+    """Model calls made by the policy itself (an LLM auditor or seat). Kept apart from
+    ``max_provider_calls`` so target spend stays comparable across policies."""
+    max_interventions: int | None = None
+    """Applied operations, not counting replayed ones; once reached, operations are rejected.
+    Halts and rollbacks change no agent's view and do not count (``max_branches`` bounds
+    rollbacks); a rollback's interventions must fit, and count when its child applies them."""
 
 
 class BudgetLedger:
@@ -247,6 +257,9 @@ class BudgetLedger:
         self.limits = limits
         self.provider_calls = 0
         self.tokens = 0
+        self.auditor_calls = 0
+        self.auditor_tokens = 0
+        self.interventions = 0
         self.branches = 0
 
     def exhausted(self) -> str | None:
@@ -257,14 +270,34 @@ class BudgetLedger:
             return f"token budget spent ({self.tokens}/{limits.max_tokens})"
         return None
 
+    def auditor_exhausted(self) -> str | None:
+        limit, calls = self.limits.max_auditor_calls, self.auditor_calls
+        if limit is not None and calls >= limit:
+            return f"auditor call budget spent ({calls}/{limit})"
+        return None
+
+    def intervention_problem(self, count: int) -> str | None:
+        """Why ``count`` more interventions do not fit ``max_interventions``, or ``None``."""
+        limit, used = self.limits.max_interventions, self.interventions
+        if limit is None or used + count <= limit:
+            return None
+        return f"intervention budget spent ({used}/{limit}; this batch needs {count})"
+
     def spend(self, output: ModelOutput) -> None:
         self.provider_calls += 1
         if output.usage is not None:
             self.tokens += output.usage.total_tokens
 
+    def spend_auditor(self, output: ModelOutput) -> None:
+        self.auditor_calls += 1
+        if output.usage is not None:
+            self.auditor_tokens += output.usage.total_tokens
+
     def summary(self) -> dict[str, Any]:
         return {"provider_calls": self.provider_calls, "tokens": self.tokens,
-                "branches": self.branches, "limits": self.limits.model_dump()}
+                "auditor_calls": self.auditor_calls, "auditor_tokens": self.auditor_tokens,
+                "interventions": self.interventions, "branches": self.branches,
+                "limits": self.limits.model_dump()}
 
 
 # ------------------------------------------------------------------ tree

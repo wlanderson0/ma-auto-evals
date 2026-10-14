@@ -96,8 +96,8 @@ class LLMAuditor(AuditPolicy):
         said: list[str] = []
         async with span("auditor", type="orbit_audit.auditor"):
             for _ in range(self.max_rounds):
-                output = await self.model.generate(
-                    self.messages, tools=self._tools(view), tool_choice="auto",
+                output = await self.generate(
+                    self.model, self.messages, tools=self._tools(view), tool_choice="auto",
                     config=self.config)
                 if output.usage is not None:
                     self.tokens += output.usage.total_tokens

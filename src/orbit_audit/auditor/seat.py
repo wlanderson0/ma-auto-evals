@@ -49,8 +49,9 @@ class SeatPolicy(AuditPolicy):
         prompt = [ChatMessageSystem(content=SEAT_SYSTEM.format(instructions=self.instructions)),
                   *view.input]
         async with span("auditor-seat", type="orbit_audit.auditor"):
-            output = await self.model.generate(
-                prompt, tools=list(view.tool_specs), tool_choice="auto", config=self.config)
+            output = await self.generate(
+                self.model, prompt, tools=list(view.tool_specs), tool_choice="auto",
+                config=self.config)
         if output.usage is not None:
             self.tokens += output.usage.total_tokens
         message = output.message

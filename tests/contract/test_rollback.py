@@ -250,5 +250,53 @@ def test_b1_branch_budget_rejects_further_forks(tmp_path):
     assert verdict(log) == "REJECT"
 
 
+NOTES = {1: ("NOTE-A",), 2: ("NOTE-B", "NOTE-C")}  # coder's turns before the fork point
+
+
+def notes(view: BoundaryView) -> list[StageInput]:
+    if (view.boundary, view.agent) != (Boundary.BEFORE_ACTIVATION, "coder"):
+        return []
+    return [StageInput(agent="coder", content=note) for note in NOTES.get(view.turn, ())]
+
+
+def test_b1_intervention_budget_rejects_operations_instead_of_ending_the_branch(tmp_path):
+    policy = RollbackBeforeVerdict(extra=notes)
+    log, [controller] = run_branches(tmp_path, lambda: policy, tool_replay=PURE,
+                                     limits=AuditLimits(max_interventions=1))
+    assert [r.payload.get("content") for r in controller.ledger.applied()] == ["NOTE-A"]
+    rejected = [(r.op, r.reason) for r in controller.ledger.rejected()]
+    spent = "intervention budget spent (1/1; this batch needs"
+    assert [op for op, _ in rejected] == ["stage_input", "stage_input", "rollback"]
+    assert all(spent in reason for _, reason in rejected)  # the rollback's SHIP_IT won't fit
+    assert [b["status"] for b in branches(log)] == ["completed"]
+    assert verdict(log) == "REJECT"
+    assert sample(log).store[BUDGET_KEY]["interventions"] == 1
+
+
+def test_b1_replayed_operations_are_not_counted_and_keep_their_verdict(tmp_path):
+    # NOTE-A is 1/2; NOTE-B and NOTE-C would need 2 and are rejected together;
+    # SHIP_IT at the fork is 2/2. Counting the replayed NOTE-A would reject SHIP_IT,
+    # and re-deciding the rejected pair would apply it (the child would desync).
+    policy = RollbackBeforeVerdict(extra=notes)
+    log, (_, child) = run_branches(tmp_path, lambda: policy, tool_replay=PURE,
+                                   limits=AuditLimits(max_interventions=2))
+    assert [b["status"] for b in branches(log)] == ["rolled_back", "completed"]
+    assert verdict(log) == "APPROVE"
+    assert sample(log).store[BUDGET_KEY]["interventions"] == 2
+    replayed = [(r.payload["content"], r.outcome) for r in child.ledger if r.replayed]
+    assert replayed == [("NOTE-A", "applied"), ("NOTE-B", "rejected"), ("NOTE-C", "rejected")]
+
+
+def test_a_policy_overriding_the_original_bind_still_runs_uncharged(tmp_path):
+    class Legacy(AuditPolicy):
+        def bind(self, scope):  # written before policies were given the budget
+            super().bind(scope)
+
+    policy = Legacy()
+    log, _ = run_branches(tmp_path, lambda: policy)
+    assert verdict(log) == "REJECT"
+    assert policy.budget is None
+
+
 def test_b2_terminal_statuses_are_distinct():
     assert len({status.value for status in BranchStatus}) == len(BranchStatus) == 5
