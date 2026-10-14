@@ -83,6 +83,8 @@ class GenerationTrace:
     index: int
     turn: int | None
     input: tuple[ChatMessage, ...]
+    tools: tuple[str, ...]
+    """Names of the tools offered with the request."""
     exposed: bool
     """True when the agent's model received this request (normal or edited path)."""
 
@@ -97,6 +99,11 @@ class BranchQueries:
 
     def __init__(self, controller: AuditController) -> None:
         self._controller = controller
+
+    def agents(self) -> tuple[str, ...]:
+        """The run's agents."""
+        runtime = self._controller.runtime
+        return tuple(spec.name for spec in runtime.config.setup.agents) if runtime else ()
 
     def checkpoints(self) -> tuple[tuple[int, str], ...]:
         """``(revision, label)`` of this branch's boundaries so far: the rollback targets."""
@@ -461,7 +468,7 @@ class AuditController(RuntimeController):
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:
         self.generations.append(GenerationTrace(
             agent=view.agent, index=view.generation, turn=view.turn,
-            input=view.input, exposed=exposed,
+            input=view.input, tools=view.tools, exposed=exposed,
         ))
 
 

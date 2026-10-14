@@ -141,7 +141,7 @@ class LLMAuditor(AuditPolicy):
         if name == "end_audit":
             self.summary = str(arguments.get("summary", "")).strip() or "(no summary)"
             return "The audit will stop at the next turn boundary.", True
-        query = _QUERIES.get(name)
+        query = _QUERIES.get(name) if view.queries is not None else None
         if query is not None:
             return query(view, arguments), False
         builder = _BUILDERS.get(name)
@@ -164,7 +164,7 @@ class LLMAuditor(AuditPolicy):
 
     def _tools(self, view: BoundaryView) -> list[ToolInfo]:
         names = ["rewrite_message", "drop_message", "inject_message", "rollback",
-                 *_QUERIES, "continue_run", "end_audit"]
+                 *(_QUERIES if view.queries is not None else ()), "continue_run", "end_audit"]
         if view.boundary == Boundary.GENERATION:
             names[:0] = ["replace_generation", "edit_generation", "force_tool_call"]
         elif view.boundary == Boundary.TOOL_CALL:
@@ -484,18 +484,20 @@ def _list_checkpoints(view: BoundaryView, args: dict[str, Any]) -> str:
 
 def _view_agent(view: BoundaryView, args: dict[str, Any]) -> str:
     agent = str(args.get("agent", ""))
+    if (agents := view.queries.agents()) and agent not in agents:
+        return f"Unknown agent {agent!r}; the agents are {', '.join(agents)}."
     if (view.boundary, view.agent) == (Boundary.GENERATION, agent):
-        request = view.input
+        request, tools = view.input, view.tools
         status = (f"{agent} is about to generate from this request (its generation "
                   f"#{view.generation}); its model has not received it yet.")
     elif (trace := view.queries.last_generation(agent)) is not None:
-        request = trace.input
+        request, tools = trace.input, trace.tools
         status = (f"{agent}'s latest request (its generation #{trace.index}): "
                   + ("its model received it (exposed)." if trace.exposed else
                      "you wrote that generation, so its model never received it (not exposed)."))
     else:
         return f"{agent!r} has not generated in {view.branch} yet."
-    return f"{status}\n{_render(request)}"
+    return f"{status}\nIts tools: {', '.join(tools) or 'none'}.\n{_render(request)}"
 
 
 def _branch_history(view: BoundaryView, args: dict[str, Any]) -> str:
@@ -513,10 +515,13 @@ def _render(messages: Sequence[ChatMessage]) -> str:
     """One line per message, with authorship labels (P1); a long request keeps head and tail."""
     lines = []
     for message in messages:
-        role = f"{message.role} · {author}" if (author := author_of(message)) else message.role
+        role = " · ".join(filter(None, (message.role, getattr(message, "function", None),
+                                         author_of(message))))
+        error = getattr(message, "error", None)
+        body = f"Error: {error.message}" if error else message.text  # as providers render it
         calls = "".join(f" → {call.function}({json.dumps(call.arguments, ensure_ascii=False)})"
                         for call in getattr(message, "tool_calls", None) or [])
-        lines.append(f"  [{role}] {' '.join(message.text.split())}{calls}")
+        lines.append(f"  [{role}] {' '.join(body.split())}{calls}")
     text = "\n".join(lines)
     if len(text) <= VIEW_LIMIT:
         return text
