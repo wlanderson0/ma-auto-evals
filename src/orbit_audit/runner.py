@@ -12,6 +12,8 @@ is queued; the audit ends when no branch is pending. The sample then adopts
 the state of its last completed branch (or, if none completed, its last
 branch), so Orbit's scorers score the final timeline, and the branch tree and
 budget are stored under ``orbit_audit:branches`` and ``orbit_audit:budget``.
+Each node keeps its branch's final channel messages, so abandoned branches
+remain evidence.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ from orbit_audit.branches import (
     ToolReplay,
 )
 from orbit_audit.controller import Approver, AuditController
+from orbit_audit.delivery import CommunicationWorld
 from orbit_audit.policy import AuditPolicy
 from orbit_audit.scope import AuditScope
 
@@ -68,6 +71,7 @@ class BranchOutcome:
     state: TaskState
     store: dict[str, Any]
     error: BaseException | None = None
+    messages: tuple[dict[str, Any], ...] = ()
 
 
 @solver
@@ -101,13 +105,14 @@ def audit_solver(
             node = tree.add(
                 parent=replay.parent if replay else None,
                 fork_revision=replay.fork_revision if replay else None,
+                fork_reason=replay.reason if replay else "",
                 interventions=replay.interventions if replay else (),
             )
             budget.branches += 1
             ids = BranchIds()
             controller = AuditController(
                 auditor, branch=node.id, branch_index=node.index, replay=replay,
-                budget=budget, ids=ids, tool_replay=replay_policies, scope=scope,
+                budget=budget, ids=ids, tool_replay=replay_policies, scope=scope, tree=tree,
                 approver=approver,
             )
             controller.sample_id, controller.epoch = state.sample_id, state.epoch
@@ -115,14 +120,16 @@ def audit_solver(
                 on_controller(controller)
             outcome = await _run_branch(initial, inner, generate, controller, ids, node.id)
             tree.finish(node.id, outcome.status, reason=outcome.reason,
-                        revisions=controller.revision, output=_completion(outcome.state))
+                        revisions=controller.revision, output=_completion(outcome.state),
+                        messages=outcome.messages)
             if outcome.status is BranchStatus.COMPLETED:
                 completed = outcome
             if isinstance(outcome.error, RollbackRequested):
                 rollback = outcome.error.rollback
                 k = rollback.to_revision
                 pending.append(Replay(parent=node.id, steps=tuple(controller.steps[:k]),
-                                      fork_revision=k, interventions=rollback.interventions))
+                                      fork_revision=k, interventions=rollback.interventions,
+                                      reason=rollback.reason))
             elif outcome.status is BranchStatus.ERROR:
                 _adopt(state, outcome, tree, budget)
                 raise outcome.error  # infrastructure failures fail loudly
@@ -156,7 +163,8 @@ async def _run_branch(
             status, reason = BranchStatus.ERROR, f"{type(error).__name__}: {error}"
         else:
             status, reason = BranchStatus.COMPLETED, ""
-        return BranchOutcome(status, reason, state, dict(store().items()), ended or error)
+        return BranchOutcome(status, reason, state, dict(store().items()), ended or error,
+                             messages=CommunicationWorld.current().summary())
 
     loop = asyncio.get_running_loop()
     return await loop.create_task(body(), context=contextvars.copy_context())

@@ -109,7 +109,8 @@ def test_the_llm_auditor_is_offered_only_in_scope_tools_and_told_its_scope(tmp_p
 
     model = get_model("mockllm/auditor", custom_outputs=auditor_model, memoize=False)
     run_audit(tmp_path, lambda: LLMAuditor(model=model, instructions="x"), scope=THROUGH_PM)
-    allowed = {"replace_generation", "edit_generation", "rollback", "continue_run", "end_audit"}
+    allowed = {"replace_generation", "edit_generation", "rollback", "continue_run", "end_audit",
+               "list_checkpoints", "view_agent", "branch_history"}  # queries are not scoped
     assert offered and all(names <= allowed for names in offered)
     assert any("override_tool_result" not in names for names in offered)
     assert "Your scope (operations: edit_generation, halt, replace_generation, rollback; " \

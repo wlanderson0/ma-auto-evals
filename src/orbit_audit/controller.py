@@ -23,11 +23,12 @@ from __future__ import annotations
 import copy
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from inspect_ai.model import ChatMessage, ModelOutput
 from inspect_ai.tool import ToolError
+from orbit.communication import CommunicationState
 from orbit.execution.control import (
     ActivationContext,
     DeliveryRequest,
@@ -43,6 +44,8 @@ from orbit_audit.branches import (
     AuditLimits,
     BranchEnded,
     BranchIds,
+    BranchNode,
+    BranchTree,
     BudgetExhausted,
     BudgetLedger,
     Replay,
@@ -55,16 +58,20 @@ from orbit_audit.branches import (
     label,
 )
 from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
-from orbit_audit.evidence import AUDITOR, EvidenceLedger, auditor_as
+from orbit_audit.evidence import AUDITOR, EvidenceLedger, agent_author, auditor_as
 from orbit_audit.ops import (
     ActivationOp,
     BlockToolCall,
     ControlOp,
+    EditGeneration,
+    ForceToolCall,
     GenerationOp,
+    Halt,
     InjectMessage,
     MessageOp,
     OpError,
     OverrideToolResult,
+    ReplaceGeneration,
     RewriteMessage,
     Rollback,
     SimulateToolResult,
@@ -98,8 +105,42 @@ class GenerationTrace:
     index: int
     turn: int | None
     input: tuple[ChatMessage, ...]
+    tools: tuple[str, ...]
+    """Names of the tools offered with the request."""
     exposed: bool
     """True when the agent's model received this request (normal or edited path)."""
+
+
+class BranchQueries:
+    """Read-only projections of a branch's state, for its policy (spec §5.1, §5.4).
+
+    A policy reaches them as ``BoundaryView.queries`` instead of being handed
+    every agent's full context at every boundary. Each query returns copies;
+    none changes the run, queues an operation or is recorded as evidence.
+    """
+
+    def __init__(self, controller: AuditController) -> None:
+        self._controller = controller
+
+    def agents(self) -> tuple[str, ...]:
+        """The run's agents."""
+        runtime = self._controller.runtime
+        return tuple(spec.name for spec in runtime.config.setup.agents) if runtime else ()
+
+    def checkpoints(self) -> tuple[tuple[int, str], ...]:
+        """``(revision, label)`` of this branch's boundaries so far: the rollback targets."""
+        return tuple((step.revision, step.label) for step in self._controller.steps)
+
+    def last_generation(self, agent: str) -> GenerationTrace | None:
+        """The request given to ``agent``'s latest generation in this branch, if any."""
+        for trace in reversed(self._controller.generations):
+            if trace.agent == agent:
+                return replace(trace, input=tuple(m.model_copy(deep=True) for m in trace.input))
+        return None
+
+    def branches(self) -> tuple[BranchNode, ...]:
+        """The audit's branches so far; this one is still running (no status)."""
+        return tuple(node.model_copy(deep=True) for node in self._controller.tree.nodes)
 
 
 class AuditController(RuntimeController):
@@ -111,19 +152,22 @@ class AuditController(RuntimeController):
         branch_index: int = 0, replay: Replay | None = None,
         budget: BudgetLedger | None = None, ids: BranchIds | None = None,
         tool_replay: dict[str, ToolReplay] | None = None,
-        scope: AuditScope | None = None, approver: Approver | None = None,
+        scope: AuditScope | None = None, tree: BranchTree | None = None,
+        approver: Approver | None = None,
     ) -> None:
         self.policy = policy
         self.scope = scope
         self.approver = approver
-        policy.bind(scope)
+        self.budget = budget if budget is not None else BudgetLedger(AuditLimits())
+        policy.bind(scope, budget=self.budget)
         self.actor = actor or f"orbit_audit:{policy.name}"
         self.ledger = ledger if ledger is not None else EvidenceLedger()
         self.branch = branch
         self.branch_index = branch_index
         self.replay = replay
-        self.budget = budget if budget is not None else BudgetLedger(AuditLimits())
         self.ids = ids
+        self.tree = tree if tree is not None else BranchTree()
+        self.queries = BranchQueries(self)
         self.tool_replay = {**DEFAULT_TOOL_REPLAY, **(tool_replay or {})}
         self.sample_id: int | str | None = None
         self.epoch: int | None = None
@@ -175,7 +219,8 @@ class AuditController(RuntimeController):
         self._trace(view, exposed=original is not None)
         self._apply_record(
             view, op, author=auditor_as(agent), original=summarize(original),
-            replacement=summarize(output), orbit=_orbit_refs(request),
+            replacement=summarize(output),
+            orbit={**_orbit_refs(request), "inspect_message_id": output.message.id},
         )
         return output
 
@@ -255,6 +300,47 @@ class AuditController(RuntimeController):
                 return trace
         raise KeyError((agent, index))
 
+    def exposure(self, message_id: str) -> dict[str, str]:
+        """Recipients whose model actually received a channel message, and the text each saw.
+
+        Spec §5.4: a send names intended recipients and a delivery is a read that returned
+        the message (``overlay.delivered_to``), but only the final model request establishes
+        exposure. This is Orbit's ``model_exposure`` evidence, matched by message id in a
+        request a model answered, after defenses and filters. An unread or dropped message,
+        or one in a request the auditor answered itself, exposed no one; a rewrite's
+        recipients saw the rewrite.
+        """
+        state = self.runtime.state.store_as(CommunicationState)
+        message = {m.id: m for m in (*state.messages, *self.overlay.injections)}[message_id]
+        return {
+            event.agent_id: self.overlay.rewrite_for(message_id, event.agent_id) or message.content
+            for event in state.events
+            if event.kind == "model_exposure" and message_id in event.message_ids
+            and event.agent_id != message.sender
+        }
+
+    def authors(self) -> dict[str, str]:
+        """Authorship label of every channel message in this branch, by message id (P3).
+
+        ``auditor-as:<sender>`` for injected messages and for posts from a generation the
+        auditor wrote or edited in the sender's seat; ``agent:<sender>`` otherwise. A post
+        is linked to its generation by sender and by the id Orbit recorded for its send:
+        the ``channel_post`` tool call, or the output message of a dialogue projection. A
+        rewritten post stays its sender's: ``exposure`` says who saw the rewrite.
+        Autonomous-behaviour counts take the ``agent:`` messages only.
+        """
+        state = self.runtime.state.store_as(CommunicationState)
+        planted = {(record.agents[0], ref) for record in self.ledger.applied()
+                   if record.op in _GENERATION_OPS
+                   for ref in (record.orbit["inspect_message_id"],
+                               *(call["id"] for call in record.replacement["tool_calls"]))}
+        sent_by = {event.message_ids[0]: {(event.agent_id, event.tool_call_id),
+                                          (event.agent_id, event.inspect_message_id)}
+                   for event in state.events if event.kind == "sent"}
+        labels = {m.id: (auditor_as if sent_by[m.id] & planted else agent_author)(m.sender)
+                  for m in state.messages}
+        return labels | {m.id: auditor_as(m.sender) for m in self.overlay.injections}
+
     def replaying(self, view: BoundaryView) -> bool:
         """True while re-executing the parent's prefix (before the fork point)."""
         return self.replay is not None and view.revision < self.replay.fork_revision
@@ -273,7 +359,8 @@ class AuditController(RuntimeController):
         view = BoundaryView(
             boundary=boundary, revision=self.revision,
             turn=self.turn if turn is None else turn,
-            messages=CommunicationWorld.current().summary(), branch=self.branch, **fields,
+            messages=CommunicationWorld.current().summary(), branch=self.branch,
+            queries=self.queries, **fields,
         )
         step = Step(revision=view.revision, boundary=boundary, agent=view.agent, turn=view.turn,
                     fingerprint=fingerprint(view), label=label(view))
@@ -328,7 +415,11 @@ class AuditController(RuntimeController):
         if replay is not None and view.revision < replay.fork_revision:
             ops = list(replay.step(view.revision).decisions)
         else:
-            ops = list(await self.policy.decide(view))
+            try:
+                ops = list(await self.policy.decide(view))
+            except BranchEnded as ended:  # e.g. the policy's own model budget is spent
+                self._end(ended)
+                raise
             if replay is not None and view.revision == replay.fork_revision:
                 ops = [*replay.interventions, *ops]
         for op in ops:
@@ -343,6 +434,8 @@ class AuditController(RuntimeController):
         producers = [op for op in ops if isinstance(op, family)]
         if len(producers) > 1 and view.boundary in _SOLE and not any(problems.values()):
             problems.update((id(op), _SOLE[view.boundary]) for op in producers)
+        if spent := self._over_budget(view, ops):
+            problems.update({id(op): problems[id(op)] or spent for op in ops if _counted(op)})
         if not any(problems.values()) and (veto := await self._veto(view, ops)):
             problems.update(veto)
             # Nothing was applied, so record no decisions: a replay applies none without
@@ -396,7 +489,23 @@ class AuditController(RuntimeController):
         limits = self.budget.limits
         if self.budget.branches >= limits.max_branches:
             return f"branch budget spent ({self.budget.branches}/{limits.max_branches})"
+        if spent := self.budget.intervention_problem(sum(map(_counted, op.interventions))):
+            return f"rollback interventions: {spent}"
         return fork_problem(tuple(self.steps), self.tool_replay)
+
+    def _over_budget(self, view: BoundaryView, ops: list[ControlOp]) -> str | None:
+        """Why this batch does not fit ``max_interventions``, or ``None``.
+
+        A replayed batch gets its parent's verdict: its operations were counted
+        there, and the count only grows, so checking today's count could reject
+        what the parent applied and desync the child.
+        """
+        step = self.steps[view.revision - 1]
+        if self.replaying(view):
+            step.over_budget = self.replay.step(view.revision).over_budget
+        else:
+            step.over_budget = self.budget.intervention_problem(sum(map(_counted, ops)))
+        return step.over_budget
 
     def _apply_message(self, view: BoundaryView, op: MessageOp) -> None:
         try:
@@ -446,6 +555,8 @@ class AuditController(RuntimeController):
             self._reject(view, op, reason)
 
     def _apply_record(self, view: BoundaryView, op: ControlOp, **fields: Any) -> None:
+        if _counted(op) and not self.replaying(view):
+            self.budget.interventions += 1
         self._record(view, op, outcome="applied", reason=op.reason, **fields)
 
     def _record(self, view: BoundaryView, op: ControlOp, **fields: Any) -> None:
@@ -460,8 +571,16 @@ class AuditController(RuntimeController):
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:
         self.generations.append(GenerationTrace(
             agent=view.agent, index=view.generation, turn=view.turn,
-            input=view.input, exposed=exposed,
+            input=view.input, tools=view.tools, exposed=exposed,
         ))
+
+
+_GENERATION_OPS = frozenset(op.name for op in (ReplaceGeneration, EditGeneration, ForceToolCall))
+
+
+def _counted(op: ControlOp) -> bool:
+    """Whether ``op`` uses the intervention budget (see ``AuditLimits.max_interventions``)."""
+    return not isinstance(op, Halt | Rollback)
 
 
 def _jsonable(value: Any) -> Any:
