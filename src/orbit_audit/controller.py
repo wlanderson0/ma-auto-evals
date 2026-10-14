@@ -59,10 +59,13 @@ from orbit_audit.ops import (
     ActivationOp,
     BlockToolCall,
     ControlOp,
+    EditGeneration,
+    ForceToolCall,
     GenerationOp,
     MessageOp,
     OpError,
     OverrideToolResult,
+    ReplaceGeneration,
     Rollback,
     SimulateToolResult,
     ToolOp,
@@ -161,7 +164,8 @@ class AuditController(RuntimeController):
         self._trace(view, exposed=original is not None)
         self._apply_record(
             view, op, author=auditor_as(agent), original=summarize(original),
-            replacement=summarize(output), orbit=_orbit_refs(request),
+            replacement=summarize(output),
+            orbit={**_orbit_refs(request), "inspect_message_id": output.message.id},
         )
         return output
 
@@ -271,22 +275,22 @@ class AuditController(RuntimeController):
     def authors(self) -> dict[str, str]:
         """Authorship label of every channel message in this branch, by message id (P3).
 
-        ``auditor-as:<sender>`` for injected messages and for posts made by a tool call of
-        a generation the auditor wrote or edited (Orbit records each post's tool-call id,
-        the ledger each generation's); ``agent:<sender>`` otherwise. Posts without a tool
-        call (dialogue projections) cannot be linked and count as their sender's. A
+        ``auditor-as:<sender>`` for injected messages and for posts from a generation the
+        auditor wrote or edited in the sender's seat; ``agent:<sender>`` otherwise. A post
+        is linked to its generation by sender and by the id Orbit recorded for its send:
+        the ``channel_post`` tool call, or the output message of a dialogue projection. A
         rewritten post stays its sender's: ``exposure`` says who saw the rewrite.
         Autonomous-behaviour counts take the ``agent:`` messages only.
         """
         state = self.runtime.state.store_as(CommunicationState)
-        # Generation ops record their summarized output; message ops here record no calls.
-        planted = {call["id"] for record in self.ledger.applied()
-                   if record.boundary is Boundary.GENERATION
-                   and isinstance(record.replacement, dict)
-                   for call in record.replacement.get("tool_calls", ())}
-        call_of = {event.message_ids[0]: event.tool_call_id
+        planted = {(record.agents[0], ref) for record in self.ledger.applied()
+                   if record.op in _GENERATION_OPS
+                   for ref in (record.orbit["inspect_message_id"],
+                               *(call["id"] for call in record.replacement["tool_calls"]))}
+        sent_by = {event.message_ids[0]: {(event.agent_id, event.tool_call_id),
+                                          (event.agent_id, event.inspect_message_id)}
                    for event in state.events if event.kind == "sent"}
-        labels = {m.id: (auditor_as if call_of.get(m.id) in planted else agent_author)(m.sender)
+        labels = {m.id: (auditor_as if sent_by[m.id] & planted else agent_author)(m.sender)
                   for m in state.messages}
         return labels | {m.id: auditor_as(m.sender) for m in self.overlay.injections}
 
@@ -475,6 +479,9 @@ class AuditController(RuntimeController):
             agent=view.agent, index=view.generation, turn=view.turn,
             input=view.input, exposed=exposed,
         ))
+
+
+_GENERATION_OPS = frozenset(op.name for op in (ReplaceGeneration, EditGeneration, ForceToolCall))
 
 
 def _jsonable(value: Any) -> Any:

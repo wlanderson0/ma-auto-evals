@@ -57,7 +57,7 @@ offline test enforces it against the real Orbit runtime with scripted models
 | T1 | A passive auditor is a no-op: same model inputs, outputs and channel evidence as plain Orbit | Exposure | Done |
 | T2 | Auditor-only material (reasons, notes) never appears in any target model input | Exposure | Done |
 | T3 | The auditor's agent view equals the actual model request | Exposure | Done |
-| E1 | Only a model request exposes a channel message: unread and dropped messages, and requests the auditor answered itself, expose no one; rewrite recipients are exposed to the rewrite | Exposure | Done (`tests/contract/test_exposure.py`; channel messages only, notice-only and read-tool paths untested) |
+| T4 | Only a model request exposes a channel message: unread and dropped messages, and requests the auditor answered itself, expose no one; rewrite recipients are exposed to the rewrite; a read exposes the reader, not the sender | Exposure | Done (`tests/contract/test_exposure.py`; channel messages only, notice-only and filtered-out (defense/filter) paths untested) |
 | C1 | A rejected operation has no effect and is recorded once with its reason | Validated controls | Done |
 | C2 | Operations carry `expected_revision`; stale ones are rejected | Validated controls | Done |
 | C3 | Operations are legal only at their declared boundaries | Validated controls | Done |
