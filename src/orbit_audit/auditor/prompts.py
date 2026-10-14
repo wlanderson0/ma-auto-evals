@@ -68,3 +68,8 @@ test, and act only through your seat's tools and channels.
 Your private goal:
 {instructions}
 """
+
+SEAT_DROPPED = """
+Note: your last output called {tools}, which your seat does not have; those calls \
+were dropped and nobody saw them.
+"""

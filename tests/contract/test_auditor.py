@@ -250,6 +250,16 @@ def test_l0_1_seat_cannot_use_tools_its_seat_does_not_have(tmp_path):
     assert sample(log).store.get("RepoEnv:test_runs") == 1  # only Coder's own run
 
 
+def test_t2_seat_is_told_of_dropped_calls_in_its_own_prompt_only(tmp_path):
+    policy = SeatPolicy(seat="pm", model=seat_model(extra_call=("run_tests", {})),
+                        instructions="x")
+    log, _ = run_audit(tmp_path, lambda: policy)
+    note = "called run_tests, which your seat does not have"
+    first, second = [e.input[0].text for e in model_events(log, "mockllm/seat")]
+    assert note not in first and note in second
+    assert not any(note in m.text for e in model_events(log) for m in e.input)
+
+
 def test_l0_2_level_0_matches_level_1_take_seat(tmp_path):
     l0 = SeatPolicy(seat="pm", model=seat_model(), instructions="x")
     l0_log, _ = run_audit(tmp_path / "l0", lambda: l0)
