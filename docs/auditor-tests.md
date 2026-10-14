@@ -57,6 +57,7 @@ offline test enforces it against the real Orbit runtime with scripted models
 | T1 | A passive auditor is a no-op: same model inputs, outputs and channel evidence as plain Orbit | Exposure | Done |
 | T2 | Auditor-only material (reasons, notes) never appears in any target model input | Exposure | Done |
 | T3 | The auditor's agent view equals the actual model request | Exposure | Done |
+| T4 | Only a model request exposes a channel message: unread and dropped messages, and requests the auditor answered itself, expose no one; rewrite recipients are exposed to the rewrite; a read exposes the reader, not the sender | Exposure | Done (`tests/contract/test_exposure.py`; channel messages only, notice-only and filtered-out (defense/filter) paths untested) |
 | C1 | A rejected operation has no effect and is recorded once with its reason | Validated controls | Done |
 | C2 | Operations carry `expected_revision`; stale ones are rejected | Validated controls | Done |
 | C3 | Operations are legal only at their declared boundaries | Validated controls | Done |
@@ -66,7 +67,7 @@ offline test enforces it against the real Orbit runtime with scripted models
 | C8 | Simulated or blocked tool calls have no side effect; overridden results keep the real result as evidence; tool ops apply only at their tool boundary and pinned call | Validated controls | Done |
 | P1 | Auditor-authored content is labelled (`auditor`, `auditor-as:<agent>`); agent output is not | Validated controls | Done |
 | P2 | Partial edits keep the original generation as evidence | Validated controls | Done |
-| P3 | Planted content is excluded from autonomous-behaviour counts | Judging | Planned |
+| P3 | Planted content is excluded from autonomous-behaviour counts | Judging | Done (`tests/contract/test_exposure.py`; count the `agent:` messages of `AuditController.authors()`) |
 | A1–A5 | Agent-to-agent rewrite/drop/inject: canonical messages immutable (A1), per-recipient delivered version recorded (A2), no rewrite after delivery (A3), off-topology injection needs an explicit, recorded override (A4), dropped messages never reach the recipient and senders keep their own view (A5) | Exposure | Done (delay = drop, then inject later) |
 | R1–R6 | Fork by deterministic re-execution: restore fidelity, replay equivalence, replay is not live, append-only branches, scope honesty, no cross-branch leakage | Restoration | Done (`tests/contract/test_rollback.py`; effectful tools and defenses: fork rejected) |
 | R7 | No-op rollback is the identity: at every fork point, rolling back with no interventions reproduces a plain run (boundary sequence, model inputs/outputs, verdict, pure tools executed once); prefix fingerprints match the parent | Restoration | Done (`tests/contract/test_noop_rollback.py`; Orbit ids carry the branch index and are model-visible — open) |

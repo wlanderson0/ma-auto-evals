@@ -26,6 +26,7 @@ from typing import Any
 
 from inspect_ai.model import ChatMessage, ModelOutput
 from inspect_ai.tool import ToolError
+from orbit.communication import CommunicationState
 from orbit.execution.control import (
     ActivationContext,
     DeliveryRequest,
@@ -55,16 +56,19 @@ from orbit_audit.branches import (
     label,
 )
 from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
-from orbit_audit.evidence import AUDITOR, EvidenceLedger, auditor_as
+from orbit_audit.evidence import AUDITOR, EvidenceLedger, agent_author, auditor_as
 from orbit_audit.ops import (
     ActivationOp,
     BlockToolCall,
     ControlOp,
+    EditGeneration,
+    ForceToolCall,
     GenerationOp,
     Halt,
     MessageOp,
     OpError,
     OverrideToolResult,
+    ReplaceGeneration,
     Rollback,
     SimulateToolResult,
     ToolOp,
@@ -199,7 +203,8 @@ class AuditController(RuntimeController):
         self._trace(view, exposed=original is not None)
         self._apply_record(
             view, op, author=auditor_as(agent), original=summarize(original),
-            replacement=summarize(output), orbit=_orbit_refs(request),
+            replacement=summarize(output),
+            orbit={**_orbit_refs(request), "inspect_message_id": output.message.id},
         )
         return output
 
@@ -284,6 +289,47 @@ class AuditController(RuntimeController):
             if (trace.agent, trace.index) == (agent, index):
                 return trace
         raise KeyError((agent, index))
+
+    def exposure(self, message_id: str) -> dict[str, str]:
+        """Recipients whose model actually received a channel message, and the text each saw.
+
+        Spec §5.4: a send names intended recipients and a delivery is a read that returned
+        the message (``overlay.delivered_to``), but only the final model request establishes
+        exposure. This is Orbit's ``model_exposure`` evidence, matched by message id in a
+        request a model answered, after defenses and filters. An unread or dropped message,
+        or one in a request the auditor answered itself, exposed no one; a rewrite's
+        recipients saw the rewrite.
+        """
+        state = self.runtime.state.store_as(CommunicationState)
+        message = {m.id: m for m in (*state.messages, *self.overlay.injections)}[message_id]
+        return {
+            event.agent_id: self.overlay.rewrite_for(message_id, event.agent_id) or message.content
+            for event in state.events
+            if event.kind == "model_exposure" and message_id in event.message_ids
+            and event.agent_id != message.sender
+        }
+
+    def authors(self) -> dict[str, str]:
+        """Authorship label of every channel message in this branch, by message id (P3).
+
+        ``auditor-as:<sender>`` for injected messages and for posts from a generation the
+        auditor wrote or edited in the sender's seat; ``agent:<sender>`` otherwise. A post
+        is linked to its generation by sender and by the id Orbit recorded for its send:
+        the ``channel_post`` tool call, or the output message of a dialogue projection. A
+        rewritten post stays its sender's: ``exposure`` says who saw the rewrite.
+        Autonomous-behaviour counts take the ``agent:`` messages only.
+        """
+        state = self.runtime.state.store_as(CommunicationState)
+        planted = {(record.agents[0], ref) for record in self.ledger.applied()
+                   if record.op in _GENERATION_OPS
+                   for ref in (record.orbit["inspect_message_id"],
+                               *(call["id"] for call in record.replacement["tool_calls"]))}
+        sent_by = {event.message_ids[0]: {(event.agent_id, event.tool_call_id),
+                                          (event.agent_id, event.inspect_message_id)}
+                   for event in state.events if event.kind == "sent"}
+        labels = {m.id: (auditor_as if sent_by[m.id] & planted else agent_author)(m.sender)
+                  for m in state.messages}
+        return labels | {m.id: auditor_as(m.sender) for m in self.overlay.injections}
 
     def replaying(self, view: BoundaryView) -> bool:
         """True while re-executing the parent's prefix (before the fork point)."""
@@ -495,6 +541,9 @@ class AuditController(RuntimeController):
             agent=view.agent, index=view.generation, turn=view.turn,
             input=view.input, tools=view.tools, exposed=exposed,
         ))
+
+
+_GENERATION_OPS = frozenset(op.name for op in (ReplaceGeneration, EditGeneration, ForceToolCall))
 
 
 def _counted(op: ControlOp) -> bool:
