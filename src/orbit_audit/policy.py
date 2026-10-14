@@ -22,6 +22,7 @@ from orbit_audit.ops import ControlOp
 
 if TYPE_CHECKING:
     from orbit_audit.branches import BudgetLedger
+    from orbit_audit.controller import BranchQueries
     from orbit_audit.scope import AuditScope
 
 
@@ -55,6 +56,8 @@ class BoundaryView:
     pending_steps: tuple[tuple[str, ...], ...] = ()
     branch: str = "branch-0"
     """The branch this view belongs to; revisions are per branch."""
+    queries: BranchQueries | None = field(default=None, compare=False, repr=False)
+    """Read-only queries over the branch's live state (checkpoints, agent inputs, branches)."""
 
 
 class AuditPolicy:

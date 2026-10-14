@@ -22,7 +22,9 @@ says so): your last chance in that branch to roll back or end the audit;
 - at the first boundary of each new branch after a rollback.
 
 Each wake starts with [branch · revision · boundary]. Revisions number the \
-boundaries of a branch; rollback uses them.
+boundaries of a branch; rollback uses them. To look closer, list_checkpoints, \
+view_agent(agent) and branch_history read the run without changing it or ending \
+your turn.
 
 ## Operations
 - replace_generation: write the agent's whole next output yourself; its model is \

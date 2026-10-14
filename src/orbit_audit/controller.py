@@ -21,7 +21,7 @@ from __future__ import annotations
 import copy
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from inspect_ai.model import ChatMessage, ModelOutput
@@ -41,6 +41,8 @@ from orbit_audit.branches import (
     AuditLimits,
     BranchEnded,
     BranchIds,
+    BranchNode,
+    BranchTree,
     BudgetExhausted,
     BudgetLedger,
     Replay,
@@ -82,8 +84,42 @@ class GenerationTrace:
     index: int
     turn: int | None
     input: tuple[ChatMessage, ...]
+    tools: tuple[str, ...]
+    """Names of the tools offered with the request."""
     exposed: bool
     """True when the agent's model received this request (normal or edited path)."""
+
+
+class BranchQueries:
+    """Read-only projections of a branch's state, for its policy (spec §5.1, §5.4).
+
+    A policy reaches them as ``BoundaryView.queries`` instead of being handed
+    every agent's full context at every boundary. Each query returns copies;
+    none changes the run, queues an operation or is recorded as evidence.
+    """
+
+    def __init__(self, controller: AuditController) -> None:
+        self._controller = controller
+
+    def agents(self) -> tuple[str, ...]:
+        """The run's agents."""
+        runtime = self._controller.runtime
+        return tuple(spec.name for spec in runtime.config.setup.agents) if runtime else ()
+
+    def checkpoints(self) -> tuple[tuple[int, str], ...]:
+        """``(revision, label)`` of this branch's boundaries so far: the rollback targets."""
+        return tuple((step.revision, step.label) for step in self._controller.steps)
+
+    def last_generation(self, agent: str) -> GenerationTrace | None:
+        """The request given to ``agent``'s latest generation in this branch, if any."""
+        for trace in reversed(self._controller.generations):
+            if trace.agent == agent:
+                return replace(trace, input=tuple(m.model_copy(deep=True) for m in trace.input))
+        return None
+
+    def branches(self) -> tuple[BranchNode, ...]:
+        """The audit's branches so far; this one is still running (no status)."""
+        return tuple(node.model_copy(deep=True) for node in self._controller.tree.nodes)
 
 
 class AuditController(RuntimeController):
@@ -95,7 +131,7 @@ class AuditController(RuntimeController):
         branch_index: int = 0, replay: Replay | None = None,
         budget: BudgetLedger | None = None, ids: BranchIds | None = None,
         tool_replay: dict[str, ToolReplay] | None = None,
-        scope: AuditScope | None = None,
+        scope: AuditScope | None = None, tree: BranchTree | None = None,
     ) -> None:
         self.policy = policy
         self.scope = scope
@@ -107,6 +143,8 @@ class AuditController(RuntimeController):
         self.branch_index = branch_index
         self.replay = replay
         self.ids = ids
+        self.tree = tree if tree is not None else BranchTree()
+        self.queries = BranchQueries(self)
         self.tool_replay = {**DEFAULT_TOOL_REPLAY, **(tool_replay or {})}
         self.sample_id: int | str | None = None
         self.epoch: int | None = None
@@ -265,7 +303,8 @@ class AuditController(RuntimeController):
         view = BoundaryView(
             boundary=boundary, revision=self.revision,
             turn=self.turn if turn is None else turn,
-            messages=CommunicationWorld.current().summary(), branch=self.branch, **fields,
+            messages=CommunicationWorld.current().summary(), branch=self.branch,
+            queries=self.queries, **fields,
         )
         step = Step(revision=view.revision, boundary=boundary, agent=view.agent, turn=view.turn,
                     fingerprint=fingerprint(view), label=label(view))
@@ -454,7 +493,7 @@ class AuditController(RuntimeController):
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:
         self.generations.append(GenerationTrace(
             agent=view.agent, index=view.generation, turn=view.turn,
-            input=view.input, exposed=exposed,
+            input=view.input, tools=view.tools, exposed=exposed,
         ))
 
 
