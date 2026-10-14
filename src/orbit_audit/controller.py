@@ -263,10 +263,8 @@ class AuditController(RuntimeController):
         """
         state = self.runtime.state.store_as(CommunicationState)
         message = {m.id: m for m in (*state.messages, *self.overlay.injections)}[message_id]
-        rewrites = self.overlay.rewrites
         return {
-            event.agent_id: rewrites.get((message_id, event.agent_id),
-                                         rewrites.get((message_id, None), message.content))
+            event.agent_id: self.overlay.rewrite_for(message_id, event.agent_id) or message.content
             for event in state.events
             if event.kind == "model_exposure" and message_id in event.message_ids
             and event.agent_id != message.sender

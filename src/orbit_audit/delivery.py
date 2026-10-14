@@ -43,9 +43,7 @@ class DeliveryOverlay:
                 continue
             if (message.id, recipient) in self.drops or (message.id, None) in self.drops:
                 continue
-            content = self.rewrites.get((message.id, recipient))
-            if content is None:
-                content = self.rewrites.get((message.id, None))
+            content = self.rewrite_for(message.id, recipient)
             if content is not None:
                 message = message.model_copy(update={"content": content})
             view.append(message)
@@ -53,6 +51,11 @@ class DeliveryOverlay:
                     if m.channel_id == request.channel_id and recipient in m.recipients)
         self.delivered.update((recipient, m.id) for m in view if m.sender != recipient)
         return view
+
+    def rewrite_for(self, message_id: str, recipient: str) -> str | None:
+        """What ``recipient`` is shown instead of the message, if it was rewritten for them."""
+        content = self.rewrites.get((message_id, recipient))
+        return content if content is not None else self.rewrites.get((message_id, None))
 
     def delivered_to(self, message_id: str) -> set[str]:
         return {recipient for recipient, mid in self.delivered if mid == message_id}
