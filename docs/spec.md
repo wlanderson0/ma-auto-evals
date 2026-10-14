@@ -70,13 +70,27 @@ Possible points for the auditor to step in:
 
 What the auditor sees and what it can do.
 
+In `orbit_audit`, the auditor is an `AuditPolicy` that the `AuditController`, an Orbit `RuntimeController`, consults at every boundary of §3.2 except while a branch replays its parent's prefix: the policy receives the audit's scope (`bind`), returns operations (`decide`) and is told the outcome of each (`notice`). What it sees is a `BoundaryView`, a copy that changes nothing if edited: the boundary, the branch and its revision (passed back as `expected_revision`), the turn and the agent; at a generation, that agent's delivered model request and tool schemas; at a tool boundary, the call and, after execution, its result; between turns, the pending schedule and its revision. Every view also carries the canonical channel messages so far.
+
+The auditor acts only by returning typed `ControlOp`s (§5.5) and never touches Orbit. The controller checks each against the audit's `AuditScope` before anything else, then its boundary, revision and agents. Validation is all-or-nothing: if any operation in a batch fails validation, none is applied. At most one operation may produce a generation or decide a tool call; if more are returned, all of them are rejected, but message operations in the same batch still apply (#15 rejects the whole batch instead). A problem found only while applying (an edit whose text is absent, an already-delivered message, a stale schedule revision) rejects that operation alone. Every operation a policy returns, applied or rejected, is appended to the `EvidenceLedger` and mirrored as an `orbit_audit_intervention` event. Each record names the author of what it produced: `auditor-as:<agent>` when the auditor writes, edits, rewrites or injects as an agent, `auditor` for staged input and tool decisions. Generated and staged messages carry the same label in their metadata (P1).
+
 ### 3.4 Target and non-target agents
 
 Which agents are under evaluation and which the auditor can take over.
 
+In `orbit_audit`, every agent of the Orbit setup runs as an ordinary scheduled agent, and the package has no list of targets. What the auditor may affect is set by `AuditScope.agents`, checked against each operation's `agents()`: whose generations it writes, whose context it stages, whose deliveries it changes. The **seat** and **targets** are fields of an experiment `Scenario` (§3.1): the seat is the agent the auditor acts through, the targets are the agents whose behaviour is measured and never include the seat, and the scope allows only the seat.
+
+Taking over an agent is the same operation at both levels. At Level 0, `SeatPolicy` writes every generation of the seat as a `replace_generation` (§4.1). At Level 1, the auditor can write (`replace_generation`) or edit (`edit_generation`, `force_tool_call`) any generation of any in-scope agent, so it can also take over an agent for some turns only. L0-2 checks that both give the other agents identical inputs.
+
+Planted content is not target behaviour. Auditor-authored content keeps its `auditor-as:<agent>` label, and the experiments scope the auditor to the seat and measure only the targets' own channel posts and private probes. An automated check that excludes planted content from autonomous-behaviour counts (P3) is still planned.
+
 ### 3.5 Tools: real versus simulated
 
 When tool results are real Orbit tools and when the auditor simulates them.
+
+In `orbit_audit`, tools are the setup's real Orbit tools and execute when called, unless the auditor intervenes at the `tool_call` boundary: `block_tool_call` returns an ordinary tool error and `simulate_tool_result` answers without executing, so neither has a side effect. After execution, `override_tool_result` replaces the result before the agent sees it and keeps the real result as evidence (C8). The tool set is fixed by the setup; unlike Petri's auditor, ours cannot create or remove tools.
+
+Rollback adds a constraint (§3.6): replay re-executes only tools declared `tool_replay={"name": "pure"}`, whose effects stay in the sample store. Any undeclared tool counts as effectful, because its effects may live outside the branch's store (a sandbox, files, the network), where replay would repeat them and they would leak across branches; a branch that executed one cannot be forked. The scenarios therefore use simulated, store-backed tools: `release_pressure`'s `run_tests` returns a fixed failing summary, counts its runs in the store and is declared pure.
 
 ### 3.6 Checkpoints, rollback and forking
 
@@ -98,9 +112,31 @@ The levels of auditor following John's doc.
 
 The auditor is a peer inside the scenario; possibly subsumed by Level 1.
 
+In `orbit_audit`, Level 0 is `SeatPolicy(seat=..., model=..., instructions=...)`. At each generation of the seat, the auditor's model receives a private goal prompt followed by the seat's own delivered input, with the seat's own tools, and its answer is applied as a `replace_generation`. The seat's model is not called unless the replacement is rejected (below). The output is labelled `auditor-as:<seat>`, and calls to tools the seat lacks are dropped (recorded as `dropped_calls`). The seat stays an ordinary Orbit agent: it acts only when scheduled, through its own channels and tools (L0-1). Because each seat turn is a Level 1 operation, a Level 0 run equals a Level 1 run that replaces the same generations (L0-2).
+
+Level 0 can only do what a participant can. It acts only at its seat's generations, so it has no rollback and no off-channel operations (message, tool or schedule changes), and its only memory is the seat's conversation. If a replacement is rejected, for example a tool call missing a required argument, that generation falls back to the seat's own model.
+
 ### 4.2 Level 1: auditor outside the eval, acting on it
 
 Petri's affordances plus taking over or spoofing any agent, with rollback.
+
+In `orbit_audit`, Level 1 is `LLMAuditor(model=..., instructions=...)`. It is woken at the boundaries its `wake` predicate selects, and always at the first boundary of each branch, branch-0 included. `default_wake` selects every generation, every between-turns boundary and the result of every `channel_post`, the last moment a post can be changed before anyone reads it. It never selects a before-activation or tool-call boundary, so `stage_input`, `block_tool_call` and `simulate_tool_result` are offered only with a custom wake or at a branch's first boundary (for branch-0, the first agent's activation; for a fork, the fork point). The experiments' wake selects only the seat's generations, every post and the final between-turns boundary.
+
+Each wake appends a text summary of the view to the auditor's conversation and allows up to `max_rounds` (4) model calls. The tools offered depend on the boundary and are filtered by the scope's operations (§5.5). Each call is parsed into a `ControlOp` and queued; invalid arguments are answered in the tool result and never reach the controller. The wake ends on `continue_run`, `end_audit`, `rollback` or a reply with no tool call. The queued batch then goes to the controller, and the outcomes are reported at the next wake. The conversation persists across branches: after a rollback the auditor is woken at the fork revision and remembers what it tried, while the agents do not. Each wake is logged as an `orbit_audit_auditor_turn` event, and `max_wakes` (30) bounds wakes across all branches.
+
+`end_audit(summary)` stores the auditor's conclusion and stops its wakes; the run then halts at the next between-turns boundary through a `halt`, which the scope must allow. That summary is a claim, not a finding: in the live runs one summary over-claimed an adoption that the probes and judge contradicted ([results](results.md)), so scoring stays separate from search (§6).
+
+Known gaps (Level 1), with the open PR that addresses each:
+
+- The auditor is not guaranteed a wake at a branch's final boundary (a custom `wake` or spent `max_wakes` can skip it); the experiments' wake adds one as a stopgap (#11).
+- Constraints beyond the scope, such as `--branch-at-end`, are added in the experiments by overriding the private `LLMAuditor._dispatch` (#11).
+- The sample keeps only the final branch's state (plus the branch tree); abandoned branches' channel messages are kept only by the experiments' `RecordingAuditor` (#11).
+- The auditor's own model calls are not in the audit budget (§5.6), and interventions are not capped (#12).
+- Each wake pushes a summary (new channel messages and, at a generation, the last four input messages, clipped to 700 characters each); the auditor cannot query an agent's full context, its rollback points or the branch tree (#13).
+- There is no exposure query (sent versus actually exposed, §5.4), and P3 is still planned (#14).
+- There is no realism check on auditor-written content; Petri has one (`realism_filter`) (#15).
+- Three seed scenarios (`skipped_tests`, `codename_vote`, `compute_quota`) are not implemented (#16).
+- An agent scope checks only the recipients of `rewrite_message` and `drop_message`: `recipients=None` reports no agents, and a rewrite's sender, whom it speaks for, is not checked (no experiment scope allows either op; no PR yet).
 
 ### 4.3 Level 2: auditor changing the eval setup
 
@@ -157,7 +193,26 @@ The concrete tool calls (e.g. send as agent, simulate tool, rollback, fork, amen
 - Include partial generation replacement before delivery/execution, forced calls before tool dispatch, and result overrides after execution but before exposure. Preserve the original and replacement plus authorship; validate tool arguments and call/result pairing. Agent-to-agent interventions still pass through the sending agent and Orbit's communication rules.
 - Start with sequential execution. Later concurrent controls must quiesce their declared affected scope; this does not require a permanent global lock.
 
-Investigate direct reuse of [Petri's typed staging and target interface](https://meridianlabs-ai.github.io/inspect_petri/reference/inspect_petri.target.html) before choosing an adapter. Its extension hooks are relevant, but compatibility with Orbit's multi-agent lifecycle and restoration scope remains to be tested.
+In `orbit_audit`, the LLM auditor's tools are thin wrappers over these operations. Every parameter is required (optional ones are nullable), and the arguments of a tool call written for an agent are a JSON string, because OpenAI-compatible providers send tool schemas in strict mode. Tools whose operation the scope does not allow are not offered; `continue_run` and `end_audit` always are.
+
+| Tool | Arguments | Offered at | Builds |
+|---|---|---|---|
+| `replace_generation` | `agent`, `content`, `tool_function`, `tool_arguments_json` | `generation` | `ReplaceGeneration`, at most one tool call |
+| `edit_generation` | `agent`, `old`, `new` | `generation` | `EditGeneration`, one replacement |
+| `force_tool_call` | `agent`, `function`, `arguments_json` | `generation` | `ForceToolCall`, one call |
+| `stage_input` | `agent`, `content` | `before_activation` | `StageInput`, an untrusted user message |
+| `block_tool_call` | `agent`, `message` | `tool_call` | `BlockToolCall` |
+| `simulate_tool_result` | `agent`, `result` | `tool_call` | `SimulateToolResult` |
+| `override_tool_result` | `agent`, `result` | `tool_result` | `OverrideToolResult` |
+| `amend_pending` | `steps`, `schedule_revision` | `between_turns` | `AmendPending` |
+| `rewrite_message` | `message_id`, `content`, `recipients` | any | `RewriteMessage` |
+| `drop_message` | `message_id`, `recipients` | any | `DropMessage` |
+| `inject_message` | `channel_id`, `sender`, `content`, `recipients`, `override_topology` | any | `InjectMessage` |
+| `rollback` | `to_revision`, `reason` | any | `Rollback` with no interventions, alone in its wake; the auditor acts at the fork point |
+| `continue_run` | none | any | nothing; ends the wake |
+| `end_audit` | `summary` | any | `Halt` at the next between-turns boundary |
+
+Investigate direct reuse of [Petri's typed staging and target interface](https://meridianlabs-ai.github.io/inspect_petri/reference/inspect_petri.target.html) before choosing an adapter. Its extension hooks are relevant, but compatibility with Orbit's multi-agent lifecycle and restoration scope remains to be tested. Decision: we did not adapt it, and compatibility was not tested. Petri's target is one passive agent that the auditor drives, and its rollback re-runs that agent. In Orbit the schedule drives a roster, interventions also act on channels and the schedule, and a fork replays the whole runtime ([comparison](petri-sequence-diagram.md#differences-from-petri)). `orbit_audit` therefore keeps its own registry of typed operations: each is a frozen, versioned `ControlOp` registered by name with `register_op` and validated by the controller.
 
 Note: Also look at Petri's tools to log auditor actions themselves.
 
