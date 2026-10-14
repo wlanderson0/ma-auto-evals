@@ -19,6 +19,7 @@ from inspect_ai.util import span
 
 from orbit_audit.auditor.prompts import SEAT_SYSTEM
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import BudgetExhausted
 from orbit_audit.ops import ControlOp, ReplaceGeneration, ToolCallSpec
 from orbit_audit.policy import AuditPolicy, BoundaryView
 
@@ -46,6 +47,9 @@ class SeatPolicy(AuditPolicy):
     async def decide(self, view: BoundaryView) -> Sequence[ControlOp]:
         if (view.boundary, view.agent) != (Boundary.GENERATION, self.seat):
             return []
+        if self.budget is not None and (spent := self.budget.intervention_problem(1)):
+            # A rejected seat generation would fall back to the agent's own model.
+            raise BudgetExhausted(f"seat {self.seat!r} cannot take its turn: {spent}")
         prompt = [ChatMessageSystem(content=SEAT_SYSTEM.format(instructions=self.instructions)),
                   *view.input]
         async with span("auditor-seat", type="orbit_audit.auditor"):

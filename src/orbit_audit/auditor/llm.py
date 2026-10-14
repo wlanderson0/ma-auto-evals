@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from orbit_audit.auditor.prompts import AUDITOR_SYSTEM
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import BudgetExhausted
 from orbit_audit.evidence import InterventionRecord
 from orbit_audit.ops import ControlOp, Halt, OpError, parse_op
 from orbit_audit.policy import AuditPolicy, BoundaryView
@@ -89,6 +90,8 @@ class LLMAuditor(AuditPolicy):
             return [self._halt_op()] if view.boundary == Boundary.BETWEEN_TURNS else []
         if self.wakes >= self.max_wakes or not (new_branch or self.wake(view)):
             return []
+        if self.budget is not None and (spent := self.budget.auditor_exhausted()):
+            raise BudgetExhausted(spent)  # before the wake counts or its prompt is kept
         self.wakes += 1
         prompt = self._describe(view, new_branch)
         self.messages.append(ChatMessageUser(content=prompt))

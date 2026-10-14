@@ -210,11 +210,12 @@ def test_b1_auditor_calls_are_charged_across_branches_apart_from_target_calls(tm
 def test_b2_spent_auditor_budget_ends_the_branch_when_the_auditor_needs_a_call(
         tmp_path, max_wakes, status, reason):
     script = AuditorScript(lambda text, s: None)
-    log, _ = run_branches(tmp_path, lambda: auditor(script, max_wakes=max_wakes),
-                          limits=AuditLimits(max_auditor_calls=3))
+    policy = auditor(script, max_wakes=max_wakes)
+    log, _ = run_branches(tmp_path, lambda: policy, limits=AuditLimits(max_auditor_calls=3))
     [branch] = sample(log).store[BRANCHES_KEY]
     assert (branch["status"], branch["reason"]) == (status, reason)
     assert len(script.wakes) == 3
+    assert policy.wakes == len(policy.turns) == 3  # the unpaid wake is not counted
 
 
 # ---------------------------------------------------------------- Level 0
@@ -239,6 +240,19 @@ def test_l0_seat_plays_pm_and_is_attributed_to_the_auditor(tmp_path):
     assert len(model_events(log, "mockllm/seat")) == 2  # the seat's two generations
     budget = sample(log).store[BUDGET_KEY]
     assert (budget["provider_calls"], budget["auditor_calls"]) == (4, 2)
+
+
+def test_b2_a_seat_over_the_intervention_budget_ends_the_branch(tmp_path):
+    policy = SeatPolicy(seat="pm", model=seat_model(), instructions="x")
+    log, _ = run_branches(tmp_path, lambda: policy, limits=AuditLimits(max_interventions=1))
+    [branch] = sample(log).store[BRANCHES_KEY]
+    assert (branch["status"], branch["reason"]) == (
+        "budget_exhausted",
+        "seat 'pm' cannot take its turn: intervention budget exceeded (1/1 used; "
+        "this batch needs 1)")
+    assert "pm" not in {agent for agent, _ in model_inputs(log)}  # PM's model never ran
+    budget = sample(log).store[BUDGET_KEY]
+    assert (budget["auditor_calls"], budget["interventions"]) == (1, 1)
 
 
 def test_l0_1_seat_cannot_use_tools_its_seat_does_not_have(tmp_path):

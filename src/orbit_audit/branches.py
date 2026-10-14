@@ -247,7 +247,9 @@ class AuditLimits(BaseModel):
     max_interventions: int | None = None
     """Applied operations, not counting replayed ones; once reached, operations are rejected.
     Halts and rollbacks change no agent's view and do not count (``max_branches`` bounds
-    rollbacks); a rollback's interventions must fit, and count when its child applies them."""
+    rollbacks), though a halt batched with operations that do not fit is rejected with
+    them; a rollback's interventions must fit, and count when its child applies them.
+    Each Level 0 seat generation counts; a seat that cannot take its turn ends the branch."""
 
 
 class BudgetLedger:
@@ -281,7 +283,7 @@ class BudgetLedger:
         limit, used = self.limits.max_interventions, self.interventions
         if limit is None or used + count <= limit:
             return None
-        return f"intervention budget spent ({used}/{limit}; this batch needs {count})"
+        return f"intervention budget exceeded ({used}/{limit} used; this batch needs {count})"
 
     def spend(self, output: ModelOutput) -> None:
         self.provider_calls += 1
