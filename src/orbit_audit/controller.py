@@ -9,7 +9,9 @@ Validation is all-or-nothing per boundary: if any operation in a batch is
 invalid, none is applied and each is recorded as rejected. A generation can
 be produced by at most one operation. Problems only detectable while applying
 (an edit whose text is absent, a schedule revision Orbit rejects) reject that
-operation alone, before it has any effect.
+operation alone, before it has any effect. An optional approver (for example
+``auditor.RealismCheck``) vets a valid live batch's content last; its reason
+rejects the batch like any other problem.
 
 The controller also records each boundary as a ``branches.Step`` and, when
 given a ``Replay``, re-executes a parent branch's prefix instead of asking
@@ -20,7 +22,7 @@ from __future__ import annotations
 
 import copy
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -65,10 +67,12 @@ from orbit_audit.ops import (
     ForceToolCall,
     GenerationOp,
     Halt,
+    InjectMessage,
     MessageOp,
     OpError,
     OverrideToolResult,
     ReplaceGeneration,
+    RewriteMessage,
     Rollback,
     SimulateToolResult,
     ToolOp,
@@ -78,6 +82,19 @@ from orbit_audit.ops import (
 )
 from orbit_audit.policy import AuditPolicy, BoundaryView
 from orbit_audit.scope import AuditScope
+
+Approver = Callable[[BoundaryView, ControlOp], Awaitable[str | None]]
+"""Vets the content of a valid live operation: a rejection reason, or ``None`` to approve."""
+
+_VETTED = (GenerationOp, ActivationOp, ToolOp, RewriteMessage, InjectMessage)
+"""Operations that put auditor-written content in front of agents."""
+
+_SOLE = {
+    Boundary.GENERATION: "at most one operation may produce a generation",
+    Boundary.TOOL_CALL: "at most one operation may decide a tool call",
+    Boundary.TOOL_RESULT: "at most one operation may replace a tool result",
+}
+"""Boundaries whose own operations exclude each other, and the rule as recorded."""
 
 
 @dataclass(frozen=True)
@@ -136,9 +153,11 @@ class AuditController(RuntimeController):
         budget: BudgetLedger | None = None, ids: BranchIds | None = None,
         tool_replay: dict[str, ToolReplay] | None = None,
         scope: AuditScope | None = None, tree: BranchTree | None = None,
+        approver: Approver | None = None,
     ) -> None:
         self.policy = policy
         self.scope = scope
+        self.approver = approver
         self.budget = budget if budget is not None else BudgetLedger(AuditLimits())
         policy.bind(scope, budget=self.budget)
         self.actor = actor or f"orbit_audit:{policy.name}"
@@ -184,14 +203,11 @@ class AuditController(RuntimeController):
         )
         proceed = self._proceed(view, proceed)
         ops = await self._decide(view, GenerationOp)
-        if len(ops) > 1:
-            self._reject_all(view, ops, "at most one operation may produce a generation")
-            ops = []
         if not ops:
             self._trace(view, exposed=True)
             return await proceed()
 
-        op = ops[0]
+        [op] = ops
         try:
             output, original = await op.produce(request, proceed)
         except OpError as error:
@@ -228,11 +244,8 @@ class AuditController(RuntimeController):
         refs = {"tool_call_id": call.tool_call_id, **_orbit_refs(call)}
         view = self._view(Boundary.TOOL_CALL, **fields)
         ops = await self._decide(view, ToolOp)
-        if len(ops) > 1:
-            self._reject_all(view, ops, "at most one operation may decide a tool call")
-            ops = []
         if ops:
-            op = ops[0]
+            [op] = ops
             if isinstance(op, BlockToolCall):
                 self._apply_record(view, op, author=AUDITOR, replacement=op.message, orbit=refs)
                 raise ToolError(op.message)
@@ -250,9 +263,6 @@ class AuditController(RuntimeController):
         result = await execute()
         view = self._view(Boundary.TOOL_RESULT, tool_result=copy.deepcopy(result), **fields)
         ops = await self._decide(view, ToolOp)
-        if len(ops) > 1:
-            self._reject_all(view, ops, "at most one operation may replace a tool result")
-            ops = []
         for op in ops:
             if not isinstance(op, OverrideToolResult):
                 raise TypeError(f"no tool-result handling for {op.name}")
@@ -421,8 +431,17 @@ class AuditController(RuntimeController):
             self._rollback(view, ops, rollbacks)
             return []
         problems = {id(op): self._problem(view, op, family) for op in ops}
+        producers = [op for op in ops if isinstance(op, family)]
+        if len(producers) > 1 and view.boundary in _SOLE and not any(problems.values()):
+            problems.update((id(op), _SOLE[view.boundary]) for op in producers)
         if spent := self._over_budget(view, ops):
             problems.update({id(op): problems[id(op)] or spent for op in ops if _counted(op)})
+        if not any(problems.values()) and (veto := await self._veto(view, ops)):
+            problems.update(veto)
+            # Nothing was applied, so record no decisions: a replay applies none without
+            # asking. Unlike other rejections, the vetoed attempt is then not re-recorded
+            # in child branches; only this branch's ledger holds it.
+            self.steps[view.revision - 1].decisions = ()
         if any(problems.values()):
             for op in ops:
                 self._reject(view, op, problems[id(op)]
@@ -514,6 +533,19 @@ class AuditController(RuntimeController):
         if pinned is not None and pinned != view.tool_call_id:
             return f"{op.name} is for tool call {pinned!r}, not {view.tool_call_id!r}"
         return None
+
+    async def _veto(self, view: BoundaryView, ops: list[ControlOp]) -> dict[int, str]:
+        """The approver's reason against a valid batch, keyed like ``_decide``'s problems.
+
+        Only live content is vetted: a replayed prefix is not live (R3), while
+        a rollback's interventions at the fork revision are.
+        """
+        if self.approver is None or self.replaying(view):
+            return {}
+        for op in ops:
+            if isinstance(op, _VETTED) and (reason := await self.approver(view, op)):
+                return {id(op): reason}
+        return {}
 
     def _reject(self, view: BoundaryView, op: ControlOp, reason: str) -> None:
         self._record(view, op, outcome="rejected", reason=reason)
