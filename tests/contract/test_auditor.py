@@ -11,8 +11,10 @@ import re
 
 from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
 from inspect_ai.tool import ToolCall
+from orbit import ExecutionConfig, SchedulerConfig
 
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
+from orbit_audit.boundaries import Boundary
 from orbit_audit.ops import ReplaceGeneration, ToolCallSpec
 from orbit_audit.policy import ScriptedPolicy, at_generation
 from orbit_audit.runner import BRANCHES_KEY
@@ -177,6 +179,47 @@ def test_max_wakes_bounds_auditor_calls(tmp_path):
     assert len(script.wakes) == 3
 
 
+# ------------------------------------------------------------ end of a branch
+LAST_CHANCE = "last chance in this branch to roll back or end the audit"
+
+
+def test_auditor_is_always_woken_at_the_end_of_a_branch(tmp_path):
+    script = AuditorScript(lambda text, s: None)
+    run_audit(tmp_path, lambda: auditor(script, wake=lambda view: False))
+    first, last = script.wakes  # the branch's first boundary, and its last
+    assert LAST_CHANCE not in first
+    assert "turn 5]" in last and "Pending schedule: []" in last and LAST_CHANCE in last
+
+
+def test_finality_is_never_claimed_without_an_explicit_schedule(tmp_path):
+    script = AuditorScript(lambda text, s: None)
+    between_turns = lambda view: view.boundary == Boundary.BETWEEN_TURNS
+    run_audit(tmp_path, lambda: auditor(script, wake=between_turns),
+              execution=ExecutionConfig(executor="scheduled", quantum="model_step",
+                                        output_agent="reviewer"),
+              scheduler=SchedulerConfig(max_turns=3))
+    turns = [w for w in script.wakes if "between_turns" in w]
+    assert len(turns) == 3 and all("schedule_revision None" in w for w in turns)
+    assert not any(LAST_CHANCE in w for w in script.wakes)
+
+
+def test_guard_refusal_queues_nothing_and_is_recorded_in_the_turn(tmp_path):
+    def rule(text, script):
+        if "generation · agent reviewer" in text:
+            return act(("rollback", {"to_revision": 1, "reason": "again"}))
+        return None
+
+    refuse = lambda view, name, arguments: "Refused: not yet." if name == "rollback" else None
+    policy = auditor(AuditorScript(rule), guard=refuse)
+    log, controllers = run_branches(tmp_path, lambda: policy, tool_replay=PURE)
+    assert len(controllers) == 1 and controllers[0].ledger.records == ()
+    [turn] = [t for t in info(log, "orbit_audit_auditor_turn") if t["refused"]]
+    assert turn["ops"] == []
+    assert turn["refused"] == [{"op": "rollback", "reason": "Refused: not yet.",
+                                "arguments": {"to_revision": 1, "reason": "again"}}]
+    assert any(m.role == "tool" and m.text == "Refused: not yet." for m in policy.messages)
+
+
 # ---------------------------------------------------------------- Level 0
 def seat_model(*, extra_call: tuple | None = None):
     def generate(messages, tools, tool_choice, config):
@@ -205,6 +248,16 @@ def test_l0_1_seat_cannot_use_tools_its_seat_does_not_have(tmp_path):
     log, controller = run_audit(tmp_path, lambda: policy)
     assert all(turn["dropped_calls"] == ["run_tests"] for turn in policy.turns)
     assert sample(log).store.get("RepoEnv:test_runs") == 1  # only Coder's own run
+
+
+def test_t2_seat_is_told_of_dropped_calls_in_its_own_prompt_only(tmp_path):
+    policy = SeatPolicy(seat="pm", model=seat_model(extra_call=("run_tests", {})),
+                        instructions="x")
+    log, _ = run_audit(tmp_path, lambda: policy)
+    note = "called run_tests, which your seat does not have"
+    first, second = [e.input[0].text for e in model_events(log, "mockllm/seat")]
+    assert note not in first and note in second
+    assert not any(note in m.text for e in model_events(log) for m in e.input)
 
 
 def test_l0_2_level_0_matches_level_1_take_seat(tmp_path):
