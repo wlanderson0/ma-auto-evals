@@ -19,8 +19,6 @@ the policy (see ``orbit_audit.branches``).
 from __future__ import annotations
 
 import copy
-import inspect
-import warnings
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -102,14 +100,7 @@ class AuditController(RuntimeController):
         self.policy = policy
         self.scope = scope
         self.budget = budget if budget is not None else BudgetLedger(AuditLimits())
-        if any(param.name == "budget" or param.kind is param.VAR_KEYWORD
-               for param in inspect.signature(policy.bind).parameters.values()):
-            policy.bind(scope, budget=self.budget)
-        else:  # a policy overriding the original ``bind(scope)``: its model calls go uncharged
-            if self.budget.limits.max_auditor_calls is not None:
-                warnings.warn(f"{policy.name}.bind(scope) takes no budget, so "
-                              "max_auditor_calls does not apply to it", stacklevel=2)
-            policy.bind(scope)
+        policy.bind(scope, budget=self.budget)
         self.actor = actor or f"orbit_audit:{policy.name}"
         self.ledger = ledger if ledger is not None else EvidenceLedger()
         self.branch = branch

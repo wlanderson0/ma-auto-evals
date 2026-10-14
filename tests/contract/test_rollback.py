@@ -293,24 +293,5 @@ def test_b1_replayed_operations_are_not_counted_and_keep_their_verdict(
     assert replayed == [("NOTE-A", "applied"), ("NOTE-B", "rejected"), ("NOTE-C", "rejected")]
 
 
-def test_a_policy_overriding_the_original_bind_still_runs_uncharged(tmp_path):
-    class Legacy(AuditPolicy):
-        def bind(self, scope):  # written before policies were given the budget
-            super().bind(scope)
-
-    class Forwarding(AuditPolicy):
-        def bind(self, scope, **options):
-            super().bind(scope, **options)
-
-    legacy, forwarding = Legacy(), Forwarding()
-    limits = AuditLimits(max_auditor_calls=1)
-    with pytest.warns(UserWarning, match="max_auditor_calls does not apply"):
-        log, _ = run_branches(tmp_path / "legacy", lambda: legacy, limits=limits)
-    assert verdict(log) == "REJECT"
-    assert legacy.budget is None
-    run_branches(tmp_path / "forwarding", lambda: forwarding, limits=limits)
-    assert forwarding.budget is not None
-
-
 def test_b2_terminal_statuses_are_distinct():
     assert len({status.value for status in BranchStatus}) == len(BranchStatus) == 5
