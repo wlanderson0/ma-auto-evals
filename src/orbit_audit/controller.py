@@ -26,6 +26,7 @@ from typing import Any
 
 from inspect_ai.model import ChatMessage, ModelOutput
 from inspect_ai.tool import ToolError
+from orbit.communication import CommunicationState
 from orbit.execution.control import (
     ActivationContext,
     DeliveryRequest,
@@ -53,7 +54,7 @@ from orbit_audit.branches import (
     label,
 )
 from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
-from orbit_audit.evidence import AUDITOR, EvidenceLedger, auditor_as
+from orbit_audit.evidence import AUDITOR, EvidenceLedger, agent_author, auditor_as
 from orbit_audit.ops import (
     ActivationOp,
     BlockToolCall,
@@ -245,6 +246,49 @@ class AuditController(RuntimeController):
             if (trace.agent, trace.index) == (agent, index):
                 return trace
         raise KeyError((agent, index))
+
+    def exposure(self, message_id: str) -> dict[str, str]:
+        """Recipients whose model actually received a channel message, and the text each saw.
+
+        Spec §5.4: a send names intended recipients and a delivery is a read that returned
+        the message (``overlay.delivered_to``), but only the final model request establishes
+        exposure. This is Orbit's ``model_exposure`` evidence, matched by message id in a
+        request a model answered, after defenses and filters. An unread or dropped message,
+        or one in a request the auditor answered itself, exposed no one; a rewrite's
+        recipients saw the rewrite.
+        """
+        state = self.runtime.state.store_as(CommunicationState)
+        message = {m.id: m for m in (*state.messages, *self.overlay.injections)}[message_id]
+        rewrites = self.overlay.rewrites
+        return {
+            event.agent_id: rewrites.get((message_id, event.agent_id),
+                                         rewrites.get((message_id, None), message.content))
+            for event in state.events
+            if event.kind == "model_exposure" and message_id in event.message_ids
+            and event.agent_id != message.sender
+        }
+
+    def authors(self) -> dict[str, str]:
+        """Authorship label of every channel message in this branch, by message id (P3).
+
+        ``auditor-as:<sender>`` for injected messages and for posts made by a tool call of
+        a generation the auditor wrote or edited (Orbit records each post's tool-call id,
+        the ledger each generation's); ``agent:<sender>`` otherwise. Posts without a tool
+        call (dialogue projections) cannot be linked and count as their sender's. A
+        rewritten post stays its sender's: ``exposure`` says who saw the rewrite.
+        Autonomous-behaviour counts take the ``agent:`` messages only.
+        """
+        state = self.runtime.state.store_as(CommunicationState)
+        # Generation ops record their summarized output; message ops here record no calls.
+        planted = {call["id"] for record in self.ledger.applied()
+                   if record.boundary is Boundary.GENERATION
+                   and isinstance(record.replacement, dict)
+                   for call in record.replacement.get("tool_calls", ())}
+        call_of = {event.message_ids[0]: event.tool_call_id
+                   for event in state.events if event.kind == "sent"}
+        labels = {m.id: (auditor_as if call_of.get(m.id) in planted else agent_author)(m.sender)
+                  for m in state.messages}
+        return labels | {m.id: auditor_as(m.sender) for m in self.overlay.injections}
 
     def replaying(self, view: BoundaryView) -> bool:
         """True while re-executing the parent's prefix (before the fork point)."""
