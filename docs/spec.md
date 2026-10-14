@@ -72,7 +72,7 @@ What the auditor sees and what it can do.
 
 In `orbit_audit`, the auditor is an `AuditPolicy` that the `AuditController`, an Orbit `RuntimeController`, consults at every boundary of §3.2 except while a branch replays its parent's prefix: the policy receives the audit's scope (`bind`), returns operations (`decide`) and is told the outcome of each (`notice`). What it sees is a `BoundaryView`, a copy that changes nothing if edited: the boundary, the branch and its revision (passed back as `expected_revision`), the turn and the agent; at a generation, that agent's delivered model request and tool schemas; at a tool boundary, the call and, after execution, its result; between turns, the pending schedule and its revision. Every view also carries the canonical channel messages so far.
 
-The auditor acts only by returning typed `ControlOp`s (§5.5) and never touches Orbit. The controller checks each against the audit's `AuditScope` before anything else, then its boundary, revision and agents. Validation is all-or-nothing: if any operation in a batch fails validation, none is applied. At most one operation may produce a generation or decide a tool call; if more are returned, all of them are rejected, but message operations in the same batch still apply. A problem found only while applying (an edit whose text is absent, an already-delivered message, a stale schedule revision) rejects that operation alone. Every operation a policy returns, applied or rejected, is appended to the `EvidenceLedger` and mirrored as an `orbit_audit_intervention` event. Each record names the author of what it produced: `auditor-as:<agent>` when the auditor writes, edits, rewrites or injects as an agent, `auditor` for staged input and tool decisions. Generated and staged messages carry the same label in their metadata (P1).
+The auditor acts only by returning typed `ControlOp`s (§5.5) and never touches Orbit. The controller checks each against the audit's `AuditScope` before anything else, then its boundary, revision and agents. Validation is all-or-nothing: if any operation in a batch fails validation, none is applied. At most one operation may produce a generation or decide a tool call; if more are returned, all of them are rejected, but message operations in the same batch still apply (#15 rejects the whole batch instead). A problem found only while applying (an edit whose text is absent, an already-delivered message, a stale schedule revision) rejects that operation alone. Every operation a policy returns, applied or rejected, is appended to the `EvidenceLedger` and mirrored as an `orbit_audit_intervention` event. Each record names the author of what it produced: `auditor-as:<agent>` when the auditor writes, edits, rewrites or injects as an agent, `auditor` for staged input and tool decisions. Generated and staged messages carry the same label in their metadata (P1).
 
 ### 3.4 Target and non-target agents
 
@@ -126,17 +126,17 @@ Each wake appends a text summary of the view to the auditor's conversation and a
 
 `end_audit(summary)` stores the auditor's conclusion and stops its wakes; the run then halts at the next between-turns boundary through a `halt`, which the scope must allow. That summary is a claim, not a finding: in the live runs one summary over-claimed an adoption that the probes and judge contradicted ([results](results.md)), so scoring stays separate from search (§6).
 
-Known gaps (Level 1):
+Known gaps (Level 1), with the open PR that addresses each:
 
-- The auditor is not guaranteed a wake at a branch's final boundary (a custom `wake` or spent `max_wakes` can skip it); the experiments' wake adds one as a stopgap.
-- Constraints beyond the scope, such as `--branch-at-end`, are added in the experiments by overriding the private `LLMAuditor._dispatch`.
-- The sample keeps only the final branch's state (plus the branch tree); abandoned branches' channel messages are kept only by the experiments' `RecordingAuditor`.
-- The auditor's own model calls are not in the audit budget (§5.6), and interventions are not capped.
-- Each wake pushes a summary (new channel messages and, at a generation, the last four input messages, clipped to 700 characters each); the auditor cannot query an agent's full context, its rollback points or the branch tree.
-- There is no exposure query (sent versus actually exposed, §5.4), and P3 is still planned.
-- There is no realism check on auditor-written content; Petri has one (`realism_filter`).
-- Three seed scenarios (`skipped_tests`, `codename_vote`, `compute_quota`) are not implemented.
-- An agent scope checks only the recipients of `rewrite_message` and `drop_message`: `recipients=None` reports no agents, and a rewrite's sender, whom it speaks for, is not checked (no experiment scope allows either op).
+- The auditor is not guaranteed a wake at a branch's final boundary (a custom `wake` or spent `max_wakes` can skip it); the experiments' wake adds one as a stopgap (#11).
+- Constraints beyond the scope, such as `--branch-at-end`, are added in the experiments by overriding the private `LLMAuditor._dispatch` (#11).
+- The sample keeps only the final branch's state (plus the branch tree); abandoned branches' channel messages are kept only by the experiments' `RecordingAuditor` (#11).
+- The auditor's own model calls are not in the audit budget (§5.6), and interventions are not capped (#12).
+- Each wake pushes a summary (new channel messages and, at a generation, the last four input messages, clipped to 700 characters each); the auditor cannot query an agent's full context, its rollback points or the branch tree (#13).
+- There is no exposure query (sent versus actually exposed, §5.4), and P3 is still planned (#14).
+- There is no realism check on auditor-written content; Petri has one (`realism_filter`) (#15).
+- Three seed scenarios (`skipped_tests`, `codename_vote`, `compute_quota`) are not implemented (#16).
+- An agent scope checks only the recipients of `rewrite_message` and `drop_message`: `recipients=None` reports no agents, and a rewrite's sender, whom it speaks for, is not checked (no experiment scope allows either op; no PR yet).
 
 ### 4.3 Level 2: auditor changing the eval setup
 
