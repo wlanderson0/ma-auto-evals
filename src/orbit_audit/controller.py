@@ -9,7 +9,9 @@ Validation is all-or-nothing per boundary: if any operation in a batch is
 invalid, none is applied and each is recorded as rejected. A generation can
 be produced by at most one operation. Problems only detectable while applying
 (an edit whose text is absent, a schedule revision Orbit rejects) reject that
-operation alone, before it has any effect.
+operation alone, before it has any effect. An optional approver (for example
+``auditor.RealismCheck``) vets a valid live batch's content last; its reason
+rejects the batch like any other problem.
 
 The controller also records each boundary as a ``branches.Step`` and, when
 given a ``Replay``, re-executes a parent branch's prefix instead of asking
@@ -20,7 +22,7 @@ from __future__ import annotations
 
 import copy
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -59,9 +61,11 @@ from orbit_audit.ops import (
     BlockToolCall,
     ControlOp,
     GenerationOp,
+    InjectMessage,
     MessageOp,
     OpError,
     OverrideToolResult,
+    RewriteMessage,
     Rollback,
     SimulateToolResult,
     ToolOp,
@@ -71,6 +75,12 @@ from orbit_audit.ops import (
 )
 from orbit_audit.policy import AuditPolicy, BoundaryView
 from orbit_audit.scope import AuditScope
+
+Approver = Callable[[BoundaryView, ControlOp], Awaitable[str | None]]
+"""Vets the content of a valid live operation: a rejection reason, or ``None`` to approve."""
+
+_VETTED = (GenerationOp, ActivationOp, ToolOp, RewriteMessage, InjectMessage)
+"""Operations that put auditor-written content in front of agents."""
 
 
 @dataclass(frozen=True)
@@ -94,10 +104,11 @@ class AuditController(RuntimeController):
         branch_index: int = 0, replay: Replay | None = None,
         budget: BudgetLedger | None = None, ids: BranchIds | None = None,
         tool_replay: dict[str, ToolReplay] | None = None,
-        scope: AuditScope | None = None,
+        scope: AuditScope | None = None, approver: Approver | None = None,
     ) -> None:
         self.policy = policy
         self.scope = scope
+        self.approver = approver
         policy.bind(scope)
         self.actor = actor or f"orbit_audit:{policy.name}"
         self.ledger = ledger if ledger is not None else EvidenceLedger()
@@ -331,6 +342,10 @@ class AuditController(RuntimeController):
             self._rollback(view, ops, rollbacks)
             return []
         problems = {id(op): self._problem(view, op, family) for op in ops}
+        if not any(problems.values()) and (veto := await self._veto(view, ops)):
+            problems.update(veto)
+            # Nothing was applied: record no decisions, so a replay applies none without asking.
+            self.steps[view.revision - 1].decisions = ()
         if any(problems.values()):
             for op in ops:
                 self._reject(view, op, problems[id(op)]
@@ -406,6 +421,19 @@ class AuditController(RuntimeController):
         if pinned is not None and pinned != view.tool_call_id:
             return f"{op.name} is for tool call {pinned!r}, not {view.tool_call_id!r}"
         return None
+
+    async def _veto(self, view: BoundaryView, ops: list[ControlOp]) -> dict[int, str]:
+        """The approver's reason against a valid batch, keyed like ``_decide``'s problems.
+
+        Only live content is vetted: a replayed prefix is not live (R3), while
+        a rollback's interventions at the fork revision are.
+        """
+        if self.approver is None or self.replaying(view):
+            return {}
+        for op in ops:
+            if isinstance(op, _VETTED) and (reason := await self.approver(view, op)):
+                return {id(op): reason}
+        return {}
 
     def _reject(self, view: BoundaryView, op: ControlOp, reason: str) -> None:
         self._record(view, op, outcome="rejected", reason=reason)
