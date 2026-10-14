@@ -12,14 +12,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from inspect_ai.model import ChatMessage
+from inspect_ai.model import ChatMessage, Model, ModelOutput
 from inspect_ai.tool import ToolInfo
 
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import BudgetExhausted
 from orbit_audit.evidence import InterventionRecord
 from orbit_audit.ops import ControlOp
 
 if TYPE_CHECKING:
+    from orbit_audit.branches import BudgetLedger
     from orbit_audit.controller import BranchQueries
     from orbit_audit.scope import AuditScope
 
@@ -64,13 +66,29 @@ class AuditPolicy:
     name: str = "policy"
     scope: AuditScope | None = None
     """The audit's scope, set by the controller; operations outside it are rejected."""
+    budget: BudgetLedger | None = None
+    """The audit's budget, set by the controller; ``generate`` charges it."""
 
     async def decide(self, view: BoundaryView) -> Sequence[ControlOp]:
         return ()
 
-    def bind(self, scope: AuditScope | None) -> None:
-        """Called by the controller with the audit's scope before any boundary."""
+    def bind(self, scope: AuditScope | None, budget: BudgetLedger | None = None) -> None:
+        """Called by the controller with the audit's scope and budget before any boundary."""
         self.scope = scope
+        self.budget = budget
+
+    async def generate(self, model: Model, input: list[ChatMessage], **options: Any) -> ModelOutput:
+        """Call the policy's own model, charged to the audit budget (spec §5.6).
+
+        Once ``max_auditor_calls`` is spent this raises ``BudgetExhausted``, which
+        ends the branch, instead of calling. An unbound policy is not charged.
+        """
+        if self.budget is not None and (spent := self.budget.auditor_exhausted()):
+            raise BudgetExhausted(spent)
+        output = await model.generate(input, **options)
+        if self.budget is not None:
+            self.budget.spend_auditor(output)
+        return output
 
     async def start(self) -> None:
         """Called once per branch before the first boundary."""
