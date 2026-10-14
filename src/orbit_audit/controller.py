@@ -82,6 +82,13 @@ Approver = Callable[[BoundaryView, ControlOp], Awaitable[str | None]]
 _VETTED = (GenerationOp, ActivationOp, ToolOp, RewriteMessage, InjectMessage)
 """Operations that put auditor-written content in front of agents."""
 
+_SOLE = {
+    Boundary.GENERATION: "at most one operation may produce a generation",
+    Boundary.TOOL_CALL: "at most one operation may decide a tool call",
+    Boundary.TOOL_RESULT: "at most one operation may replace a tool result",
+}
+"""Boundaries whose own operations exclude each other, and the rule as recorded."""
+
 
 @dataclass(frozen=True)
 class GenerationTrace:
@@ -152,14 +159,11 @@ class AuditController(RuntimeController):
         )
         proceed = self._proceed(view, proceed)
         ops = await self._decide(view, GenerationOp)
-        if len(ops) > 1:
-            self._reject_all(view, ops, "at most one operation may produce a generation")
-            ops = []
         if not ops:
             self._trace(view, exposed=True)
             return await proceed()
 
-        op = ops[0]
+        [op] = ops
         try:
             output, original = await op.produce(request, proceed)
         except OpError as error:
@@ -195,11 +199,8 @@ class AuditController(RuntimeController):
         refs = {"tool_call_id": call.tool_call_id, **_orbit_refs(call)}
         view = self._view(Boundary.TOOL_CALL, **fields)
         ops = await self._decide(view, ToolOp)
-        if len(ops) > 1:
-            self._reject_all(view, ops, "at most one operation may decide a tool call")
-            ops = []
         if ops:
-            op = ops[0]
+            [op] = ops
             if isinstance(op, BlockToolCall):
                 self._apply_record(view, op, author=AUDITOR, replacement=op.message, orbit=refs)
                 raise ToolError(op.message)
@@ -217,9 +218,6 @@ class AuditController(RuntimeController):
         result = await execute()
         view = self._view(Boundary.TOOL_RESULT, tool_result=copy.deepcopy(result), **fields)
         ops = await self._decide(view, ToolOp)
-        if len(ops) > 1:
-            self._reject_all(view, ops, "at most one operation may replace a tool result")
-            ops = []
         for op in ops:
             if not isinstance(op, OverrideToolResult):
                 raise TypeError(f"no tool-result handling for {op.name}")
@@ -342,9 +340,14 @@ class AuditController(RuntimeController):
             self._rollback(view, ops, rollbacks)
             return []
         problems = {id(op): self._problem(view, op, family) for op in ops}
+        producers = [op for op in ops if isinstance(op, family)]
+        if len(producers) > 1 and view.boundary in _SOLE and not any(problems.values()):
+            problems.update((id(op), _SOLE[view.boundary]) for op in producers)
         if not any(problems.values()) and (veto := await self._veto(view, ops)):
             problems.update(veto)
-            # Nothing was applied: record no decisions, so a replay applies none without asking.
+            # Nothing was applied, so record no decisions: a replay applies none without
+            # asking. Unlike other rejections, the vetoed attempt is then not re-recorded
+            # in child branches; only this branch's ledger holds it.
             self.steps[view.revision - 1].decisions = ()
         if any(problems.values()):
             for op in ops:
