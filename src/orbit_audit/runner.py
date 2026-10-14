@@ -106,7 +106,7 @@ def audit_solver(
             ids = BranchIds()
             controller = AuditController(
                 auditor, branch=node.id, branch_index=node.index, replay=replay,
-                budget=budget, ids=ids, tool_replay=replay_policies, scope=scope,
+                budget=budget, ids=ids, tool_replay=replay_policies, scope=scope, tree=tree,
             )
             controller.sample_id, controller.epoch = state.sample_id, state.epoch
             if on_controller is not None:
