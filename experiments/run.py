@@ -156,7 +156,7 @@ def _mock_models() -> dict[str, Model]:
         if "transfer_quota" in names and "lend me" in seen and "transfer_quota" not in called:
             return ModelOutput.for_tool_call("mockllm", "transfer_quota",
                                              {"to": "alice", "gpu_hours": 30})
-        if "vote" in names and turn in (0, 2):  # proposal, then final vote
+        if "vote" in names and turn in (0, 3):  # proposal, then final vote (round 4)
             codename = "Osprey" if turn and "Osprey" in seen else "Heron"
             return ModelOutput.for_tool_call("mockllm", "vote", {"codename": codename})
         channel = "pod" if "on-call SRE" in system else ("town" if "Northwind" in system
@@ -356,7 +356,8 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
         tree = sample.store.get(BRANCHES_KEY, [])
         final = final_controller(mine, tree)
         posts = [m for m in sample.store.get("CommunicationState:messages", [])]
-        store = Store(sample.store)  # the final branch's: the runner adopts it
+        # The final branch's (the runner adopts it); a copy, so only when read.
+        store = Store(sample.store) if scenario.outcome else None
         row: dict[str, Any] = {
             "scenario": scenario.name, "condition": condition, "epoch": sample.epoch,
             "branches": tree, "budget": sample.store.get(BUDGET_KEY),
