@@ -1,6 +1,6 @@
 # Auditor — Test Subspec
 
-This is the proposed first test slice for the [auditor spec](spec.md), not an implemented harness. It checks the control/evidence contract before testing whether real models exhibit the target behaviours.
+This is the first test slice for the [auditor spec](spec.md). It checks the control/evidence contract before testing whether real models exhibit the target behaviours. The contract fixtures are implemented as offline tests through the real Orbit runtime with scripted models; §5 tracks which invariants are enforced.
 
 ## 1. Setup
 
@@ -70,10 +70,11 @@ offline test enforces it against the real Orbit runtime with scripted models
 | P3 | Planted content is excluded from autonomous-behaviour counts | Judging | Done (`tests/contract/test_exposure.py`; count the `agent:` messages of `AuditController.authors()`) |
 | A1–A5 | Agent-to-agent rewrite/drop/inject: canonical messages immutable (A1), per-recipient delivered version recorded (A2), no rewrite after delivery (A3), off-topology injection needs an explicit, recorded override (A4), dropped messages never reach the recipient and senders keep their own view (A5) | Exposure | Done (delay = drop, then inject later) |
 | R1–R6 | Fork by deterministic re-execution: restore fidelity, replay equivalence, replay is not live, append-only branches, scope honesty, no cross-branch leakage | Restoration | Done (`tests/contract/test_rollback.py`; effectful tools and defenses: fork rejected) |
-| R7 | No-op rollback is the identity: at every fork point, rolling back with no interventions reproduces a plain run (boundary sequence, model inputs/outputs, verdict, pure tools executed once); prefix fingerprints match the parent | Restoration | Done (`tests/contract/test_noop_rollback.py`; Orbit ids carry the branch index and are model-visible — open) |
+| R7 | No-op rollback is the identity: at every fork point, rolling back with no interventions reproduces a plain run (boundary sequence, model inputs/outputs, verdict, pure tools executed once); prefix fingerprints match the parent | Restoration | Done (`tests/contract/test_noop_rollback.py`, which also checks that model-visible ids do not reveal the branch: `BranchIds` hashes them) |
 | B1–B2 | Monotone audit budget across branches (target calls, auditor calls kept apart, interventions; replay neither spends nor counts); distinct terminal statuses | Limits and failures | Done (`tests/contract/test_rollback.py`, `tests/contract/test_auditor.py`) |
 | S1 | An audit's scope (allowed operations and agents, including rollback interventions) is enforced before any other check; out-of-scope attempts are rejected and recorded | Validated controls | Done (`tests/contract/test_scope.py`) |
 | L0-1, L0-2 | Auditor seat obeys channel rules; Level 0 equals Level 1 "take seat" | — | Done (`tests/contract/test_auditor.py`) |
 
 Batches are all-or-nothing: if one operation proposed at a boundary is
-invalid, none is applied. At most one operation may produce a given generation.
+invalid, none is applied. At most one operation may produce a given generation,
+decide a tool call or replace a tool result; a batch with more is rejected whole.
