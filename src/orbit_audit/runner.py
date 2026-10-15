@@ -26,6 +26,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
+from inspect_ai.log import transcript
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util import LimitExceededError, span, store
 from inspect_ai.util._store import init_subtask_store
@@ -47,6 +48,7 @@ from orbit_audit.controller import Approver, AuditController
 from orbit_audit.delivery import CommunicationWorld
 from orbit_audit.policy import AuditPolicy
 from orbit_audit.scope import AuditScope
+from orbit_audit.timeline import register_timelines
 
 PolicyFactory = Callable[[], AuditPolicy]
 BRANCHES_KEY = "orbit_audit:branches"
@@ -100,40 +102,43 @@ def audit_solver(
         pending: list[Replay | None] = [None]
         completed: BranchOutcome | None = None
         outcome: BranchOutcome | None = None
-        while pending:
-            replay = pending.pop(0)
-            node = tree.add(
-                parent=replay.parent if replay else None,
-                fork_revision=replay.fork_revision if replay else None,
-                fork_reason=replay.reason if replay else "",
-                interventions=replay.interventions if replay else (),
-            )
-            budget.branches += 1
-            ids = BranchIds()
-            controller = AuditController(
-                auditor, branch=node.id, branch_index=node.index, replay=replay,
-                budget=budget, ids=ids, tool_replay=replay_policies, scope=scope, tree=tree,
-                approver=approver,
-            )
-            controller.sample_id, controller.epoch = state.sample_id, state.epoch
-            if on_controller is not None:
-                on_controller(controller)
-            outcome = await _run_branch(initial, inner, generate, controller, ids, node.id)
-            tree.finish(node.id, outcome.status, reason=outcome.reason,
-                        revisions=controller.revision, output=_completion(outcome.state),
-                        messages=outcome.messages)
-            if outcome.status is BranchStatus.COMPLETED:
-                completed = outcome
-            if isinstance(outcome.error, RollbackRequested):
-                rollback = outcome.error.rollback
-                k = rollback.to_revision
-                pending.append(Replay(parent=node.id, steps=tuple(controller.steps[:k]),
-                                      fork_revision=k, interventions=rollback.interventions,
-                                      reason=rollback.reason))
-            elif outcome.status is BranchStatus.ERROR:
-                _adopt(state, outcome, tree, budget)
-                raise outcome.error  # infrastructure failures fail loudly
-        _adopt(state, completed or outcome, tree, budget)
+        try:
+            while pending:
+                replay = pending.pop(0)
+                node = tree.add(
+                    parent=replay.parent if replay else None,
+                    fork_revision=replay.fork_revision if replay else None,
+                    fork_reason=replay.reason if replay else "",
+                    interventions=replay.interventions if replay else (),
+                )
+                budget.branches += 1
+                ids = BranchIds()
+                controller = AuditController(
+                    auditor, branch=node.id, branch_index=node.index, replay=replay,
+                    budget=budget, ids=ids, tool_replay=replay_policies, scope=scope, tree=tree,
+                    approver=approver,
+                )
+                controller.sample_id, controller.epoch = state.sample_id, state.epoch
+                if on_controller is not None:
+                    on_controller(controller)
+                outcome = await _run_branch(initial, inner, generate, controller, ids, node.id)
+                tree.finish(node.id, outcome.status, reason=outcome.reason,
+                            revisions=controller.revision, output=_completion(outcome.state),
+                            messages=outcome.messages)
+                if outcome.status is BranchStatus.COMPLETED:
+                    completed = outcome
+                if isinstance(outcome.error, RollbackRequested):
+                    rollback = outcome.error.rollback
+                    k = rollback.to_revision
+                    pending.append(Replay(parent=node.id, steps=tuple(controller.steps[:k]),
+                                          fork_revision=k, interventions=rollback.interventions,
+                                          reason=rollback.reason))
+                elif outcome.status is BranchStatus.ERROR:
+                    _adopt(state, outcome, tree, budget)
+                    raise outcome.error  # infrastructure failures fail loudly
+            _adopt(state, completed or outcome, tree, budget)
+        finally:  # also on error and on a sample limit: that is when the view is needed most
+            register_timelines(list(transcript().events))
         return state
 
     return solve

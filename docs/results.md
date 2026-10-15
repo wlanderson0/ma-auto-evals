@@ -31,3 +31,20 @@ often the behaviours happen.
 
 To regenerate the report from a run:
 `uv run python -m experiments.report logs/live/<run>/results.json`.
+
+## Reading the auditor's run in the viewer
+
+Each audited sample carries an `auditor` timeline. In `inspect view`, open the
+sample, go to its **Transcript** tab, and pick `auditor` in the timeline picker
+at the top left. The other entry, `default`, is Inspect's own view, built when the
+solver ends: it does not show branches and has no scoring section (scores are
+still in the sample's Scoring tab).
+
+- One lane per branch. A rolled-back branch's child is named
+  `branch-1 (forked from branch-0 @ r17)`; its replayed prefix is not repeated.
+- One sub-agent per auditor wake, named `r<revision> · <agent> · <boundary> —
+  <ops>`, for example `r17 · pm · generation — replace_generation applied`.
+  Open it for the auditor's model call (what it saw and its tool calls), its
+  `orbit_audit_auditor_turn` event, and the interventions with their outcomes.
+- Ops applied where the auditor was not woken (such as the `Halt` after
+  `end_audit`) are listed directly in the branch's lane.
