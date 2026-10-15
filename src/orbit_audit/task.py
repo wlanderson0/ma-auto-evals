@@ -9,7 +9,7 @@ from inspect_ai import Task, task_with
 from orbit import multi_agent_task
 
 from orbit_audit.branches import AuditLimits, ToolReplay
-from orbit_audit.controller import Approver, AuditController
+from orbit_audit.controller import Approver, AuditController, reject_concurrent_steps
 from orbit_audit.runner import PolicyFactory, audit_solver
 from orbit_audit.scope import AuditScope
 
@@ -42,6 +42,7 @@ def audit_task(
     controller, for tests and scripted analysis that need the ledger
     in-process; saved logs carry the same evidence as ``orbit_audit_*`` events.
     """
+    reject_concurrent_steps(getattr(orbit_task.get("execution"), "plan", None))
     base = multi_agent_task(**orbit_task)
     solver = audit_solver(
         policy, tool_bindings=orbit_task.get("tool_bindings"), tool_replay=tool_replay,

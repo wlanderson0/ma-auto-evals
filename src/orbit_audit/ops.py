@@ -77,6 +77,10 @@ class ControlOp(BaseModel):
         agent = getattr(self, "agent", None)
         return (agent,) if agent else ()
 
+    def affected(self, world: CommunicationWorld | None) -> tuple[str, ...]:
+        """``agents()``, resolved against ``world`` where the op leaves recipients implicit."""
+        return self.agents()
+
     def payload(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude={"expected_revision", "reason"})
 
@@ -263,6 +267,19 @@ class _ExistingMessageOp(MessageOp):
     def agents(self) -> tuple[str, ...]:
         return tuple(sorted(self.recipients or ()))
 
+    def affected(self, world: CommunicationWorld | None) -> tuple[str, ...]:
+        """With ``recipients=None``, every intended recipient of the message.
+
+        Unresolvable here (no world, or no such message yet) falls back to
+        ``agents()``; the op is validated again where it applies.
+        """
+        from orbit_audit.delivery import recipients_or_all
+
+        message = world.messages.get(self.message_id) if world else None
+        if message is None:
+            return self.agents()
+        return tuple(sorted(recipients_or_all(message, self.recipients) - {message.sender}))
+
     def _target(self, overlay: DeliveryOverlay, world: CommunicationWorld):
         from orbit_audit.delivery import recipients_or_all
 
@@ -290,6 +307,12 @@ class RewriteMessage(_ExistingMessageOp):
     name: ClassVar[str] = "rewrite_message"
 
     content: str = Field(min_length=1)
+
+    def affected(self, world):
+        """The recipients, and the sender the new content is attributed to."""
+        message = world.messages.get(self.message_id) if world else None
+        sender = {message.sender} if message else set()
+        return tuple(sorted({*super().affected(world), *sender}))
 
     def apply(self, overlay, world):
         message, keys = self._target(overlay, world)
