@@ -84,7 +84,7 @@ The auditor acts only by returning typed `ControlOp`s (§5.5) and never touches 
 
 Which agents are under evaluation and which the auditor can take over.
 
-In `orbit_audit`, every agent of the Orbit setup runs as an ordinary scheduled agent, and the package has no list of targets. What the auditor may affect is set by `AuditScope.agents`, checked against each operation's `agents()`: whose generations it writes, whose context it stages, whose deliveries it changes. The **seat** and **targets** are fields of an experiment `Scenario` (§3.1): the seat is the agent the auditor acts through, the targets are the agents whose behaviour is measured and never include the seat, and the scope allows only the seat.
+In `orbit_audit`, every agent of the Orbit setup runs as an ordinary scheduled agent, and the package has no list of targets. What the auditor may affect is set by `AuditScope.agents`, checked against the agents each operation affects: whose generations it writes, whose context it stages, whose deliveries it changes, and, for `rewrite_message` and `inject_message`, the sender the content is attributed to. A message operation with no recipient list counts every recipient it would reach. The **seat** and **targets** are fields of an experiment `Scenario` (§3.1): the seat is the agent the auditor acts through, the targets are the agents whose behaviour is measured and never include the seat, and the scope allows only the seat.
 
 Taking over an agent is the same operation at both levels. At Level 0, `SeatPolicy` writes every generation of the seat as a `replace_generation` (§4.1). At Level 1, the auditor can write (`replace_generation`) or edit (`edit_generation`, `force_tool_call`) any generation of any in-scope agent, so it can also take over an agent for some turns only. L0-2 checks that both give the other agents identical inputs.
 
@@ -136,12 +136,11 @@ Each wake appends a text summary of the view to the auditor's conversation and a
 
 Known gaps (Level 1). The gaps listed when this section was first written were closed by #11 (final-boundary wake, guard, per-branch records), #12 (auditor budget, intervention cap), #13 (queries), #14 (exposure, P3), #15 (realism check) and #16 (seed scenarios). Still open:
 
-- An agent scope checks only the recipients of `rewrite_message` and `drop_message`: `recipients=None` reports no agents, so a scope of `agents={"alice"}` lets a rewrite of Alice's message to every recipient through, and a rewrite's sender, whom it speaks for, is not checked. No experiment scope allows either op.
 - `RealismCheck`'s model calls are not charged to the audit budget.
 - `final_boundary` cannot tell a repeating plan (`ScheduleConfig.repeat`) apart from a finished one, so it holds only for plans that do not repeat; none of the scenarios repeat.
 - The experiments wake the auditor only on posts, not on other tool results, so it cannot see skips, votes or transfers and judges from posts.
 - The experiments do not yet use `authors()` or `exposure()`, and measure tool outcomes on the final branch only.
-- Concurrent schedule steps (`concurrent: True`) are not covered by tests. The controller numbers boundaries in arrival order and the auditor has one conversation, so with real model latencies a fork may end as `replay_desync` and wakes of concurrent agents interleave (inferred, not observed). Sequential steps, including multi-agent ones, are the supported case (§1.3).
+- Concurrent schedule steps (`concurrent: True`) are refused: `audit_task` and the controller raise on a plan that has one. Pauses assume one agent is mid-turn at a time, and replay matches recorded outputs in arrival order, so supporting them needs serialized pauses and order-independent replay. Sequential steps, including multi-agent ones, are the supported case (§1.3).
 
 ### 4.3 Level 2: auditor changing the eval setup
 

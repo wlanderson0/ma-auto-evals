@@ -29,6 +29,7 @@ from typing import Any
 from inspect_ai.model import ChatMessage, ModelOutput
 from inspect_ai.tool import ToolError
 from orbit.communication import CommunicationState
+from orbit.configs.scheduling import ScheduleConfig
 from orbit.execution.control import (
     ActivationContext,
     DeliveryRequest,
@@ -183,6 +184,8 @@ class AuditController(RuntimeController):
 
     # ------------------------------------------------------------ lifecycle
     async def start(self, runtime: RuntimeHandles) -> None:
+        if runtime.schedule:
+            reject_concurrent_steps(runtime.schedule.config)
         self.runtime = runtime
         await self.policy.start()
 
@@ -472,7 +475,8 @@ class AuditController(RuntimeController):
         raise self._end(RollbackRequested(op))
 
     def _rollback_problem(self, view: BoundaryView, op: Rollback) -> str | None:
-        if self.scope is not None and (problem := self.scope.problem(op)):
+        world = CommunicationWorld.current()
+        if self.scope is not None and (problem := self.scope.problem(op, world)):
             return problem
         if op.expected_revision is not None and op.expected_revision != view.revision:
             return f"stale: prepared for revision {op.expected_revision}, now {view.revision}"
@@ -516,7 +520,8 @@ class AuditController(RuntimeController):
         self._apply_record(view, op, **fields)
 
     def _problem(self, view: BoundaryView, op: ControlOp, family: type[ControlOp]) -> str | None:
-        if self.scope is not None and (problem := self.scope.problem(op)):
+        world = CommunicationWorld.current()
+        if self.scope is not None and (problem := self.scope.problem(op, world)):
             return problem
         if view.boundary not in op.boundaries or not isinstance(op, family | MessageOp):
             return f"{op.name} is not allowed at boundary {view.boundary.value}"
@@ -562,7 +567,8 @@ class AuditController(RuntimeController):
     def _record(self, view: BoundaryView, op: ControlOp, **fields: Any) -> None:
         record = self.ledger.record(
             op=op.name, op_version=op.version, boundary=view.boundary, actor=self.actor,
-            agents=op.agents(), turn=view.turn, revision=view.revision, branch=self.branch,
+            agents=op.affected(CommunicationWorld.current()), turn=view.turn,
+            revision=view.revision, branch=self.branch,
             replayed=self.replaying(view),
             payload={"op": op.name, **op.payload()}, **fields,
         )
@@ -576,6 +582,18 @@ class AuditController(RuntimeController):
 
 
 _GENERATION_OPS = frozenset(op.name for op in (ReplaceGeneration, EditGeneration, ForceToolCall))
+
+
+def reject_concurrent_steps(plan: ScheduleConfig | None) -> None:
+    """Refuse plans with ``concurrent`` steps, which audits do not support yet.
+
+    Pauses assume one agent is mid-turn at a time, and rollback replay matches
+    recorded outputs in arrival order; neither holds when turns run in parallel.
+    """
+    concurrent = [step.id for step in plan.steps if step.concurrent] if plan else []
+    if concurrent:
+        raise ValueError(f"orbit_audit does not support concurrent schedule steps yet "
+                         f"(steps {concurrent}); make them sequential")
 
 
 def _counted(op: ControlOp) -> bool:

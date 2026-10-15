@@ -11,11 +11,14 @@ out-of-scope attempt is always reported as such.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from orbit_audit.ops import ControlOp, Rollback, op_types
+
+if TYPE_CHECKING:
+    from orbit_audit.delivery import CommunicationWorld
 
 
 class AuditScope(BaseModel):
@@ -27,7 +30,7 @@ class AuditScope(BaseModel):
     """Operation names the policy may apply, e.g. ``{"replace_generation", "rollback"}``.
     A rollback needs ``"rollback"`` plus the names of its interventions."""
     agents: frozenset[str] | None = None
-    """Agents the policy may affect (``ControlOp.agents()``): whose generations
+    """Agents the policy may affect (``ControlOp.affected()``): whose generations
     it writes, whose context it stages, whose deliveries it changes."""
 
     @field_validator("ops", "agents", mode="before")
@@ -46,19 +49,23 @@ class AuditScope(BaseModel):
     def allows_op(self, name: str) -> bool:
         return self.ops is None or name in self.ops
 
-    def problem(self, op: ControlOp) -> str | None:
-        """Why ``op`` is outside this scope, or ``None``."""
+    def problem(self, op: ControlOp, world: CommunicationWorld | None = None) -> str | None:
+        """Why ``op`` is outside this scope, or ``None``.
+
+        ``world`` resolves a message op that leaves its recipients implicit
+        (``recipients=None``) to every recipient it would reach.
+        """
         if not self.allows_op(op.name):
             return (f"{op.name} is outside this audit's scope "
                     f"(allowed operations: {sorted(self.ops or ())})")
         if self.agents is not None:
-            outside = sorted(set(op.agents()) - self.agents)
+            outside = sorted(set(op.affected(world)) - self.agents)
             if outside:
                 return (f"{op.name} affects {outside}, outside this audit's scope "
                         f"(allowed agents: {sorted(self.agents)})")
         if isinstance(op, Rollback):
             for intervention in op.interventions:
-                problem = self.problem(intervention)
+                problem = self.problem(intervention, world)
                 if problem:
                     return f"rollback intervention: {problem}"
         return None

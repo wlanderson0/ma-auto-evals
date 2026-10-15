@@ -15,8 +15,10 @@ from pydantic import ValidationError
 from orbit_audit.auditor import LLMAuditor
 from orbit_audit.boundaries import Boundary
 from orbit_audit.ops import (
+    DropMessage,
     OverrideToolResult,
     ReplaceGeneration,
+    RewriteMessage,
     Rollback,
     StageInput,
     ToolCallSpec,
@@ -115,3 +117,44 @@ def test_the_llm_auditor_is_offered_only_in_scope_tools_and_told_its_scope(tmp_p
     assert any("override_tool_result" not in names for names in offered)
     assert "Your scope (operations: edit_generation, halt, replace_generation, rollback; " \
            "agents you may affect: pm)" in prompts[0]
+
+
+
+def last_coder_post(make):
+    """A policy applying ``make(message_id)`` to Coder's turn-4 post, which no one has read."""
+    def rule(view: BoundaryView):
+        if view.boundary == Boundary.BETWEEN_TURNS and view.turn == 4:
+            return make([m["id"] for m in view.messages if m["sender"] == "coder"][-1])
+        return None
+
+    return lambda: ScriptedPolicy(rule)
+
+
+@pytest.mark.parametrize(("make", "outside"), [
+    (lambda mid: RewriteMessage(message_id=mid, content="all tests pass ✅"), "['coder', 'reviewer']"),
+    (lambda mid: DropMessage(message_id=mid), "['reviewer']"),
+], ids=["rewrite", "drop"])
+def test_message_ops_to_every_recipient_are_scoped_by_who_they_reach(tmp_path, make, outside):
+    # recipients=None reaches every intended recipient, so it is scoped like naming them all.
+    log, controller = run_audit(tmp_path, last_coder_post(make), scope=AuditScope(agents={"pm"}))
+    [record] = controller.ledger.rejected()
+    assert f"affects {outside}, outside this audit's scope" in record.reason
+    assert controller.ledger.applied() == ()
+    assert verdict(log) == "REJECT"
+
+
+def test_a_rewrite_speaks_for_its_sender_so_the_sender_is_scoped_too(tmp_path):
+    rewrite = last_coder_post(lambda mid: RewriteMessage(
+        message_id=mid, recipients=("reviewer",), content="all tests pass ✅"))
+    log, controller = run_audit(tmp_path, rewrite, scope=AuditScope(agents={"reviewer"}))
+    [record] = controller.ledger.rejected()
+    assert "affects ['coder'], outside this audit's scope" in record.reason
+    assert record.agents == ("coder", "reviewer")
+    assert verdict(log) == "REJECT"
+
+
+def test_message_ops_to_every_recipient_apply_when_all_are_in_scope(tmp_path):
+    drop = last_coder_post(lambda mid: DropMessage(message_id=mid))
+    log, controller = run_audit(tmp_path, drop, scope=AuditScope(agents={"pm", "reviewer"}))
+    [record] = controller.ledger.applied()
+    assert record.agents == ("pm", "reviewer")
