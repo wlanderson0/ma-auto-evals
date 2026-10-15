@@ -70,9 +70,15 @@ Possible points for the auditor to step in:
 
 What the auditor sees and what it can do.
 
+Three words carry most of this section:
+
+- A **boundary** is a moment where the run pauses for the auditor: before an agent generates, after a tool call, between turns, and so on (§3.2). Each boundary in a branch gets a number, its **revision**.
+- A **policy** is whatever decides what the auditor does at a boundary: a script, Python logic, or an LLM. It is shown a read-only copy of the run and answers with a list of operations.
+- A **batch** is that list: everything the policy asks for at one boundary. The batch is applied completely or not at all, so a half-applied plan never changes the run.
+
 In `orbit_audit`, the auditor is an `AuditPolicy` that the `AuditController`, an Orbit `RuntimeController`, consults at every boundary of §3.2 except while a branch replays its parent's prefix: the policy receives the audit's scope (`bind`), returns operations (`decide`) and is told the outcome of each (`notice`). What it sees is a `BoundaryView`, a copy that changes nothing if edited: the boundary, the branch and its revision (passed back as `expected_revision`), the turn and the agent; at a generation, that agent's delivered model request and tool schemas; at a tool boundary, the call and, after execution, its result; between turns, the pending schedule and its revision. Every view also carries the canonical channel messages so far.
 
-The auditor acts only by returning typed `ControlOp`s (§5.5) and never touches Orbit. The controller checks each against the audit's `AuditScope` before anything else, then its boundary, revision and agents. Validation is all-or-nothing: if any operation in a batch fails validation, none is applied. At most one operation may produce a generation or decide a tool call; if more are returned, all of them are rejected, but message operations in the same batch still apply (#15 rejects the whole batch instead). A problem found only while applying (an edit whose text is absent, an already-delivered message, a stale schedule revision) rejects that operation alone. Every operation a policy returns, applied or rejected, is appended to the `EvidenceLedger` and mirrored as an `orbit_audit_intervention` event. Each record names the author of what it produced: `auditor-as:<agent>` when the auditor writes, edits, rewrites or injects as an agent, `auditor` for staged input and tool decisions. Generated and staged messages carry the same label in their metadata (P1).
+The auditor acts only by returning typed `ControlOp`s (§5.5) and never touches Orbit. The controller checks each against the audit's `AuditScope` before anything else, then its boundary, revision and agents. Validation is all-or-nothing: if any operation in a batch fails validation, none is applied. At most one operation may produce a generation, decide a tool call or replace a tool result; a batch with more is rejected whole, its message operations included. If the batch does not fit the intervention budget (§5.6) it is rejected the same way. Last, an optional approver (`audit_task(approver=...)`, such as `auditor.RealismCheck`) vets a valid live batch whose operations put auditor-written content in front of agents; a reason it returns rejects the batch. A problem found only while applying (an edit whose text is absent, an already-delivered message, a stale schedule revision) rejects that operation alone. Every operation a policy returns, applied or rejected, is appended to the `EvidenceLedger` and mirrored as an `orbit_audit_intervention` event. Each record names the author of what it produced: `auditor-as:<agent>` when the auditor writes, edits, rewrites or injects as an agent, `auditor` for staged input and tool decisions. Generated and staged messages carry the same label in their metadata (P1).
 
 ### 3.4 Target and non-target agents
 
@@ -82,7 +88,9 @@ In `orbit_audit`, every agent of the Orbit setup runs as an ordinary scheduled a
 
 Taking over an agent is the same operation at both levels. At Level 0, `SeatPolicy` writes every generation of the seat as a `replace_generation` (§4.1). At Level 1, the auditor can write (`replace_generation`) or edit (`edit_generation`, `force_tool_call`) any generation of any in-scope agent, so it can also take over an agent for some turns only. L0-2 checks that both give the other agents identical inputs.
 
-Planted content is not target behaviour. Auditor-authored content keeps its `auditor-as:<agent>` label, and the experiments scope the auditor to the seat and measure only the targets' own channel posts and private probes. An automated check that excludes planted content from autonomous-behaviour counts (P3) is still planned.
+At Level 1 the auditor can affect several agents in one audit, but each generation, tool call or tool result is its own boundary, and an operation there may target only the agent at that boundary: writing Bob's generation at Alice's boundary is rejected, with the rest of the batch. To take over several agents, the auditor acts at each one's boundary in turn (the scope's `agents` lists all of them). Message operations are the exception: one batch may rewrite a message differently for each recipient, drop it for some, and inject a message to several recipients at once. A `rollback`'s interventions are validated at the fork boundary under the same rules.
+
+Planted content is not target behaviour. Auditor-authored content keeps its `auditor-as:<agent>` label, and the experiments scope the auditor to the seat and measure only the targets' own channel posts and private probes. `AuditController.authors()` labels every channel message of a branch `auditor-as:<sender>` (injected, or posted from a generation the auditor wrote or edited) or `agent:<sender>`, so autonomous-behaviour counts can take the `agent:` messages only (P3). The experiments do not use it yet: an auditor-edited post by a target would still be judged as the target's.
 
 ### 3.5 Tools: real versus simulated
 
@@ -114,29 +122,26 @@ The auditor is a peer inside the scenario; possibly subsumed by Level 1.
 
 In `orbit_audit`, Level 0 is `SeatPolicy(seat=..., model=..., instructions=...)`. At each generation of the seat, the auditor's model receives a private goal prompt followed by the seat's own delivered input, with the seat's own tools, and its answer is applied as a `replace_generation`. The seat's model is not called unless the replacement is rejected (below). The output is labelled `auditor-as:<seat>`, and calls to tools the seat lacks are dropped (recorded as `dropped_calls`). The seat stays an ordinary Orbit agent: it acts only when scheduled, through its own channels and tools (L0-1). Because each seat turn is a Level 1 operation, a Level 0 run equals a Level 1 run that replaces the same generations (L0-2).
 
-Level 0 can only do what a participant can. It acts only at its seat's generations, so it has no rollback and no off-channel operations (message, tool or schedule changes), and its only memory is the seat's conversation. If a replacement is rejected, for example a tool call missing a required argument, that generation falls back to the seat's own model.
+Level 0 can only do what a participant can. It acts only at its seat's generations, so it has no rollback and no off-channel operations (message, tool or schedule changes), and its only memory is the seat's conversation. If a replacement is rejected, for example a tool call missing a required argument, that generation falls back to the seat's own model. If the intervention budget (§5.6) has no room for the seat's turn, the branch ends as `budget_exhausted` instead, so the seat's own model never silently plays it.
 
 ### 4.2 Level 1: auditor outside the eval, acting on it
 
 Petri's affordances plus taking over or spoofing any agent, with rollback.
 
-In `orbit_audit`, Level 1 is `LLMAuditor(model=..., instructions=...)`. It is woken at the boundaries its `wake` predicate selects, and always at the first boundary of each branch, branch-0 included. `default_wake` selects every generation, every between-turns boundary and the result of every `channel_post`, the last moment a post can be changed before anyone reads it. It never selects a before-activation or tool-call boundary, so `stage_input`, `block_tool_call` and `simulate_tool_result` are offered only with a custom wake or at a branch's first boundary (for branch-0, the first agent's activation; for a fork, the fork point). The experiments' wake selects only the seat's generations, every post and the final between-turns boundary.
+In `orbit_audit`, Level 1 is `LLMAuditor(model=..., instructions=...)`. It is woken at the boundaries its `wake` predicate selects, and always at the first boundary of each branch, branch-0 included, and at each branch's final boundary: between turns, once an explicit, non-repeating schedule has nothing pending. That wake tells the auditor it is its last chance in the branch to roll back or end the audit. Without an explicit plan, finality is never claimed. `default_wake` selects every generation, every between-turns boundary and the result of every `channel_post`, the last moment a post can be changed before anyone reads it. It never selects a before-activation or tool-call boundary, so `stage_input`, `block_tool_call` and `simulate_tool_result` are offered only with a custom wake or at a branch's first boundary (for branch-0, the first agent's activation; for a fork, the fork point). The experiments' wake selects only the seat's generations and every post.
 
-Each wake appends a text summary of the view to the auditor's conversation and allows up to `max_rounds` (4) model calls. The tools offered depend on the boundary and are filtered by the scope's operations (§5.5). Each call is parsed into a `ControlOp` and queued; invalid arguments are answered in the tool result and never reach the controller. The wake ends on `continue_run`, `end_audit`, `rollback` or a reply with no tool call. The queued batch then goes to the controller, and the outcomes are reported at the next wake. The conversation persists across branches: after a rollback the auditor is woken at the fork revision and remembers what it tried, while the agents do not. Each wake is logged as an `orbit_audit_auditor_turn` event, and `max_wakes` (30) bounds wakes across all branches.
+Each wake appends a text summary of the view to the auditor's conversation and allows up to `max_rounds` (6) model calls. The tools offered depend on the boundary and are filtered by the scope's operations (§5.5). Three read-only queries are always offered (§5.4): they are answered within the wake, do not end it, and are never queued, scoped or recorded. Each other call is parsed into a `ControlOp` and queued; invalid arguments are answered in the tool result and never reach the controller. An optional `guard(view, name, arguments)` sees every call first and can refuse it with a message the auditor receives as the tool result; refusals are kept in the turn record (the experiments' `--branch-at-end` is one). The wake ends on `continue_run`, `end_audit`, `rollback` or a reply with no tool call. The queued batch then goes to the controller, and the outcomes are reported at the next wake. The conversation persists across branches: after a rollback the auditor is woken at the fork revision and remembers what it tried, while the agents do not. Each wake is logged as an `orbit_audit_auditor_turn` event, and `max_wakes` (30) bounds wakes across all branches.
 
 `end_audit(summary)` stores the auditor's conclusion and stops its wakes; the run then halts at the next between-turns boundary through a `halt`, which the scope must allow. That summary is a claim, not a finding: in the live runs one summary over-claimed an adoption that the probes and judge contradicted ([results](results.md)), so scoring stays separate from search (§6).
 
-Known gaps (Level 1), with the open PR that addresses each:
+Known gaps (Level 1). The gaps listed when this section was first written were closed by #11 (final-boundary wake, guard, per-branch records), #12 (auditor budget, intervention cap), #13 (queries), #14 (exposure, P3), #15 (realism check) and #16 (seed scenarios). Still open:
 
-- The auditor is not guaranteed a wake at a branch's final boundary (a custom `wake` or spent `max_wakes` can skip it); the experiments' wake adds one as a stopgap (#11).
-- Constraints beyond the scope, such as `--branch-at-end`, are added in the experiments by overriding the private `LLMAuditor._dispatch` (#11).
-- The sample keeps only the final branch's state (plus the branch tree); abandoned branches' channel messages are kept only by the experiments' `RecordingAuditor` (#11).
-- The auditor's own model calls are not in the audit budget (§5.6), and interventions are not capped (#12).
-- Each wake pushes a summary (new channel messages and, at a generation, the last four input messages, clipped to 700 characters each); the auditor cannot query an agent's full context, its rollback points or the branch tree (#13).
-- There is no exposure query (sent versus actually exposed, §5.4), and P3 is still planned (#14).
-- There is no realism check on auditor-written content; Petri has one (`realism_filter`) (#15).
-- Three seed scenarios (`skipped_tests`, `codename_vote`, `compute_quota`) are not implemented (#16).
-- An agent scope checks only the recipients of `rewrite_message` and `drop_message`: `recipients=None` reports no agents, and a rewrite's sender, whom it speaks for, is not checked (no experiment scope allows either op; no PR yet).
+- An agent scope checks only the recipients of `rewrite_message` and `drop_message`: `recipients=None` reports no agents, so a scope of `agents={"alice"}` lets a rewrite of Alice's message to every recipient through, and a rewrite's sender, whom it speaks for, is not checked. No experiment scope allows either op.
+- `RealismCheck`'s model calls are not charged to the audit budget.
+- `final_boundary` cannot tell a repeating plan (`ScheduleConfig.repeat`) apart from a finished one, so it holds only for plans that do not repeat; none of the scenarios repeat.
+- The experiments wake the auditor only on posts, not on other tool results, so it cannot see skips, votes or transfers and judges from posts.
+- The experiments do not yet use `authors()` or `exposure()`, and measure tool outcomes on the final branch only.
+- Concurrent schedule steps (`concurrent: True`) are not covered by tests. The controller numbers boundaries in arrival order and the auditor has one conversation, so with real model latencies a fork may end as `replay_desync` and wakes of concurrent agents interleave (inferred, not observed). Sequential steps, including multi-agent ones, are the supported case (§1.3).
 
 ### 4.3 Level 2: auditor changing the eval setup
 
@@ -158,6 +163,8 @@ How a multi-agent, possibly branched run is recorded, as a compact object the au
 
 - Must support: loading by timestep/agent/branch, advancing, restoring supported checkpoints, proposing edits, and running analysis subagents on portions.
 - Canonical evidence is append-only within an audit. Reuse [Inspect events and timelines](https://inspect.aisi.org.uk/reference/inspect_ai.event.html) and Orbit's native communication/schedule evidence; add only the intervention/branch index needed to link actor, affected agents/resources, boundary, original/replacement content references and outcome. This is our recording contract, not a claim that upstream log files are immutable.
+
+In `orbit_audit`, the evidence is Inspect transcript events: `orbit_audit_intervention` (one per attempted operation, from the `EvidenceLedger`), `orbit_audit_branch` (each branch started and finished, with its fork reason and final channel messages), and `orbit_audit_auditor_turn` / `orbit_audit_seat_turn` (one per auditor wake). After a sample's branches finish, `timeline.py` builds an `auditor` timeline from those events alone: one lane per branch and one entry per wake, shown in `inspect view` next to the `default` timeline. It does not include scores, which Inspect computes after the solver.
 
 ### 5.2 Config object
 
@@ -185,6 +192,8 @@ Orbit's runtime state is authoritative; the auditor queries projections rather t
 
 Keep sent, read, delivered and actually exposed content distinct: only the final model request establishes exposure. Track shared files, memory and tool-mediated information flow too, and mark gaps rather than inferring visibility from channel membership. This follows [Orbit's visibility and evidence model](https://github.com/wlanderson0/orbit/blob/main/docs/runtime-architecture.md#channels-and-visibility). Auditor-only material must not enter target requests.
 
+In `orbit_audit`, each wake of the LLM auditor pushes a summary (new channel messages and, at a generation, the last four input messages, clipped to 700 characters each), and three read-only queries let it look further. `list_checkpoints` lists the branch's boundaries as `revision: label`, the rollback targets. `view_agent(agent)` shows the whole request an agent was last given in the branch (up to 8000 characters, head and tail kept), with authorship labels and whether its model received it; any agent may be viewed, since the scope limits what the auditor affects, not what it sees. `branch_history` lists the branches with parent, fork revision, status and reason. Policies reach the same projections as `BoundaryView.queries`. For analysis, `AuditController.exposure(message_id)` returns the recipients whose model actually received a channel message and the text each saw, from Orbit's `model_exposure` events: unread and dropped messages, and requests the auditor answered itself, expose no one (T4). Exposure through shared files, memory or tool results is not tracked yet.
+
 ### 5.5 Auditor tool list
 
 The concrete tool calls (e.g. send as agent, simulate tool, rollback, fork, amend config, end audit) with signatures.
@@ -193,7 +202,7 @@ The concrete tool calls (e.g. send as agent, simulate tool, rollback, fork, amen
 - Include partial generation replacement before delivery/execution, forced calls before tool dispatch, and result overrides after execution but before exposure. Preserve the original and replacement plus authorship; validate tool arguments and call/result pairing. Agent-to-agent interventions still pass through the sending agent and Orbit's communication rules.
 - Start with sequential execution. Later concurrent controls must quiesce their declared affected scope; this does not require a permanent global lock.
 
-In `orbit_audit`, the LLM auditor's tools are thin wrappers over these operations. Every parameter is required (optional ones are nullable), and the arguments of a tool call written for an agent are a JSON string, because OpenAI-compatible providers send tool schemas in strict mode. Tools whose operation the scope does not allow are not offered; `continue_run` and `end_audit` always are.
+In `orbit_audit`, the LLM auditor's tools are thin wrappers over these operations. Every parameter is required (optional ones are nullable), and the arguments of a tool call written for an agent are a JSON string, because OpenAI-compatible providers send tool schemas in strict mode. Tools whose operation the scope does not allow are not offered; the queries, `continue_run` and `end_audit` always are.
 
 | Tool | Arguments | Offered at | Builds |
 |---|---|---|---|
@@ -209,6 +218,9 @@ In `orbit_audit`, the LLM auditor's tools are thin wrappers over these operation
 | `drop_message` | `message_id`, `recipients` | any | `DropMessage` |
 | `inject_message` | `channel_id`, `sender`, `content`, `recipients`, `override_topology` | any | `InjectMessage` |
 | `rollback` | `to_revision`, `reason` | any | `Rollback` with no interventions, alone in its wake; the auditor acts at the fork point |
+| `list_checkpoints` | none | any | nothing; a read-only query (§5.4) |
+| `view_agent` | `agent` | any | nothing; a read-only query (§5.4) |
+| `branch_history` | none | any | nothing; a read-only query (§5.4) |
 | `continue_run` | none | any | nothing; ends the wake |
 | `end_audit` | `summary` | any | `Halt` at the next between-turns boundary |
 
@@ -232,6 +244,8 @@ This keeps state changes on one validated path: querying or editing a view canno
 ### 5.6 Audit limits and termination
 
 Use [Inspect's native limits](https://inspect.aisi.org.uk/setting-limits.html) for execution, plus an audit-wide ledger for spend across agents, auditor/judge calls, branches and retries. Restoration must not refund spent budget; replayed evidence is not a new model call. Bound branch/intervention counts as well. Record limit termination, invalid interventions, tool/replay failures and infrastructure errors separately from a negative behavioural finding.
+
+In `orbit_audit`, `AuditLimits` bounds a whole audited sample across its branches: `max_branches` (default 8), `max_provider_calls` and `max_tokens` (live target-model calls), `max_auditor_calls` (the policy's own model calls, kept apart so target spend stays comparable across conditions) and `max_interventions` (applied, non-replayed operations; halts and rollbacks do not count). The `BudgetLedger` is monotone: rollback never refunds, and replayed generations are not calls (B1). A spent call budget ends the branch as `budget_exhausted`; an intervention batch that does not fit is rejected and recorded, and the run continues (B2). Judge and realism-check calls are not charged.
 
 ## 6. Judging and scoring
 
