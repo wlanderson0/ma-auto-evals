@@ -7,16 +7,23 @@ store in ``_adopt`` (``MEASUREMENTS_KEY``), so abandoned branches survive. See
 
 from __future__ import annotations
 
+import logging
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from inspect_ai.event import Event
 
 from orbit_audit.timeline import AUDITOR_SPAN
 
+if TYPE_CHECKING:
+    from orbit_audit.controller import AuditController
+
 MEASUREMENTS_KEY = "orbit_audit:measurements"
 MEASUREMENTS_VERSION = 1
+
+logger = logging.getLogger(__name__)
 
 Entry = tuple[str, str]
 """A ``ModelEvent`` uuid and the branch whose run produced it."""
@@ -128,3 +135,37 @@ def stored_requests(alignment: Alignment) -> dict[str, dict[str, Any]]:
                 or "the agent's last generation has no model event of its own",
             }
     return stored
+
+
+class MeasurementRecorder:
+    """Collects one record per branch, in memory, until ``_adopt`` writes them."""
+
+    def __init__(self) -> None:
+        self._lists: dict[str, dict[str, list[Entry | None]]] = {}
+        self._branches: dict[str, dict[str, Any]] = {}
+
+    def record(self, controller: AuditController, parent: str | None,
+               events: Sequence[Event]) -> None:
+        """Record ``controller``'s branch, which has just ended. ``parent`` finished earlier."""
+        branch = controller.branch
+        generations = [Gen(t.agent, t.index, t.exposed, t.replayed)
+                       for t in controller.generations]
+        alignment = align_requests(
+            branch=branch, generations=generations, calls=target_model_calls(events),
+            parent=self._lists.get(parent) if parent is not None else None)
+        self._lists[branch] = alignment.lists
+        record: dict[str, Any] = {
+            "authors": None,
+            "generations": dict(Counter(g.agent for g in generations)),
+            "requests": stored_requests(alignment),
+        }
+        if controller.runtime is not None:
+            try:
+                record["authors"] = controller.authors()
+            except Exception as error:  # a view problem, not a run problem
+                logger.warning("orbit_audit: could not label %s's messages: %s", branch, error)
+                record["authors_error"] = f"{type(error).__name__}: {error}"
+        self._branches[branch] = record
+
+    def payload(self) -> dict[str, Any]:
+        return {"version": MEASUREMENTS_VERSION, "branches": dict(self._branches)}

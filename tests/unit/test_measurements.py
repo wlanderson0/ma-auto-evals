@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from orbit_audit.controller import GenerationTrace
 from orbit_audit.measurements import (
     Alignment,
     Gen,
+    MeasurementRecorder,
     ModelCall,
     align_requests,
     stored_requests,
@@ -95,3 +99,56 @@ def test_a_replayed_generation_with_no_parent_record_is_unknown():
                             generations=[replayed("bob", 0)], calls=[])
     assert result.lists["bob"] == [None]
     assert isinstance(result, Alignment)
+
+
+def trace(agent, index, *, exposed=True, replayed=False):
+    return GenerationTrace(agent=agent, index=index, turn=None, input=(), tools=(),
+                           exposed=exposed, replayed=replayed)
+
+
+RUNTIME = object()
+
+
+def fake(branch, generations, authors=lambda: {}, runtime=RUNTIME):
+    return SimpleNamespace(branch=branch, generations=generations, authors=authors,
+                           runtime=runtime)
+
+
+def test_the_recorder_keeps_each_branch_and_threads_the_parents_lists_to_children():
+    recorder = MeasurementRecorder()
+    parent_event = SimpleNamespace(
+        event="model", pending=False, error=None, uuid="p0", span_id="s-model")
+    spans = [
+        SimpleNamespace(event="span_begin", id="s-branch", parent_id=None, type="branch",
+                        name="branch-0"),
+        SimpleNamespace(event="span_begin", id="s-agent", parent_id="s-branch", type="agent",
+                        name="bob"),
+        SimpleNamespace(event="span_begin", id="s-model", parent_id="s-agent",
+                        type="orbit.model", name="model_generate"),
+    ]
+    recorder.record(fake("branch-0", [trace("bob", 0)], authors=lambda: {"m1": "agent:bob"}),
+                    None, [*spans, parent_event])
+    recorder.record(fake("branch-1", [trace("bob", 0, replayed=True)]), "branch-0", [])
+    payload = recorder.payload()
+    assert payload["version"] == 1
+    assert payload["branches"]["branch-0"]["authors"] == {"m1": "agent:bob"}
+    assert payload["branches"]["branch-0"]["generations"] == {"bob": 1}
+    assert payload["branches"]["branch-0"]["requests"]["bob"]["event"] == "p0"
+    assert payload["branches"]["branch-1"]["requests"]["bob"] == {
+        "event": "p0", "via": "branch-0", "why": ""}
+
+
+def test_a_branch_without_a_runtime_records_unknown_authors():
+    recorder = MeasurementRecorder()
+    recorder.record(fake("branch-0", [], runtime=None), None, [])
+    assert recorder.payload()["branches"]["branch-0"]["authors"] is None
+
+
+def test_a_failing_authors_call_is_recorded_not_raised():
+    def boom():
+        raise KeyError("m9")
+
+    recorder = MeasurementRecorder()
+    recorder.record(fake("branch-0", [], authors=boom), None, [])
+    record = recorder.payload()["branches"]["branch-0"]
+    assert record["authors"] is None and "KeyError" in record["authors_error"]
