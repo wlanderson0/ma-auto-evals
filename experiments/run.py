@@ -39,7 +39,7 @@ from inspect_ai.log import EvalLog, EvalSample
 from inspect_ai.model import Model, ModelOutput, get_model
 from orbit.ids import id_scope, sequential_ids
 
-from experiments.measures import (  # noqa: F401  (re-exported: tests and reverdict import from here)
+from experiments.measures import (  # noqa: F401  (re-exported for tests and reverdict)
     COPY_THRESHOLD,
     UNKNOWN_COUNTS,
     copied_share,
@@ -336,6 +336,7 @@ def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
             task, model=models["target"],
             log_dir=str(out / scenario.name / condition), display="none",
             max_samples=epochs, fail_on_error=False,
+            score_on_error=True,  # an errored sample's store is written: measure what it left
             max_tokens=MAX_TOKENS,  # per generation: cheap models can run away
             model_roles=roles,
         )[0]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,8 @@ from orbit.ids import id_scope, sequential_ids
 
 from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy, measure, run_condition
 from experiments.scenarios import SCENARIOS
-from experiments.scorers import measurement_scorers
+from experiments.scorers import counts_scorer, measurement_scorers, read_sample
+from orbit_audit.measurements import MEASUREMENTS_KEY, MEASUREMENTS_VERSION
 from orbit_audit.task import audit_task
 
 MISSING = "score missing (the sample errored or scoring did not run)"
@@ -59,6 +61,16 @@ def test_every_branch_is_counted_at_l1_for_a_mention_scenario(tmp_path):
     assert list(branches) == ["branch-0"]
     assert set(branches["branch-0"]["agents"]) == {"bob", "carol", "dave"}
     assert "plan" in branches["branch-0"]
+
+
+def test_counts_reports_a_seat_post_count_when_there_is_no_mention_to_count(tmp_path):
+    _, plain = run(tmp_path / "p", "mfa_rumor", "baseline")
+    counts = plain.scores["counts"]
+    final = counts.metadata["branches"][counts.metadata["final"]]
+    assert final["seat_posts"]  # the seat posted something
+    assert counts.value == {"seat_posts": len(final["seat_posts"])}  # no fake seat_mentions: 0
+    _, mention = run(tmp_path / "m", "kestrel_naming", "baseline")
+    assert set(mention.scores["counts"].value) == {"seat_mentions", "bob", "carol", "dave"}
 
 
 def test_a_failing_judge_call_makes_the_score_incomplete_but_not_the_sample(tmp_path):
@@ -251,3 +263,48 @@ def test_a_failed_judge_leaves_disclosure_unknown_but_keeps_the_skips(tmp_path):
         assert agent["flagged_posts"] is None
         assert agent["outcome"]["disclosed"] is None
         assert "skip_calls" in agent["outcome"] and "skips" in agent["outcome"]
+
+
+def _stored(recorded, nodes=("branch-0",)):
+    tree = [{"id": n, "status": "completed", "fork_reason": "", "messages": []} for n in nodes]
+    return SimpleNamespace(store={"orbit_audit:branches": tree, MEASUREMENTS_KEY: recorded})
+
+
+def test_a_branch_with_no_measurement_record_has_an_unknown_plan_not_an_off_plan_one():
+    scenario = SCENARIOS["kestrel_naming"]({})
+    recorded = {"version": MEASUREMENTS_VERSION, "branches": {}}
+    score = asyncio.run(counts_scorer(scenario, "l1")(_stored(recorded), None))
+    assert score.metadata["branches"]["branch-0"]["plan"] is None
+
+
+def test_a_record_without_branches_is_incomplete_not_an_error():
+    reason = read_sample(_stored({"version": MEASUREMENTS_VERSION}))
+    assert isinstance(reason, str) and "no branches" in reason
+    assert isinstance(read_sample(_stored({"version": MEASUREMENTS_VERSION, "branches": []})), str)
+
+
+def test_a_record_of_another_version_is_incomplete_not_misread():
+    for version in (MEASUREMENTS_VERSION + 1, None):
+        reason = read_sample(_stored({"version": version, "branches": {"branch-0": {}}}))
+        assert isinstance(reason, str) and "unsupported" in reason and "version" in reason
+
+
+def test_a_sample_whose_target_failed_is_still_measured_from_what_it_left(tmp_path):
+    calls = []
+
+    def dies_on_the_fourth_call(messages, tools, tool_choice, config):
+        calls.append(1)
+        if len(calls) >= 4:
+            raise RuntimeError("target is down")
+        return ModelOutput.for_tool_call("mockllm", "channel_post",
+                                         {"channel_id": "team", "message": "Status update."})
+
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["target"] = get_model("mockllm/model", custom_outputs=dies_on_the_fourth_call,
+                                 memoize=False)
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
+    assert "target is down" in row["error"]
+    assert [b["status"] for b in row["branches"]] == ["error"]
+    assert "incomplete" not in row  # every score was made, from the store the runner left
+    assert any(a["probe"] is not None for a in row["agents"].values())

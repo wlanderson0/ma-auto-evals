@@ -207,18 +207,17 @@ class AuditController(RuntimeController):
         proceed = self._proceed(view, proceed)
         ops = await self._decide(view, GenerationOp)
         if not ops:
-            self._trace(view, exposed=True)
-            return await proceed()
+            return await self._traced_proceed(view, proceed)
 
         [op] = ops
         try:
             output, original = await op.produce(request, proceed)
         except OpError as error:
             self._reject(view, op, str(error))
-            self._trace(view, exposed=True)
             if error.provider_output is not None:
+                self._trace(view, exposed=True)
                 return error.provider_output  # the model already ran: deliver it unmodified
-            return await proceed()
+            return await self._traced_proceed(view, proceed)
         self._trace(view, exposed=original is not None)
         self._apply_record(
             view, op, author=auditor_as(agent), original=summarize(original),
@@ -570,6 +569,16 @@ class AuditController(RuntimeController):
             payload={"op": op.name, **op.payload()}, **fields,
         )
         self.policy.notice(record)
+
+    async def _traced_proceed(self, view: BoundaryView, proceed) -> ModelOutput:
+        """Trace the generation as exposed and call the model; if the budget stopped the
+        call before any provider request, no model saw it, so the trace says so."""
+        self._trace(view, exposed=True)
+        try:
+            return await proceed()
+        except BudgetExhausted:
+            self.generations[-1] = replace(self.generations[-1], exposed=False)
+            raise
 
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:
         self.generations.append(GenerationTrace(

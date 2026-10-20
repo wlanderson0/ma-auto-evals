@@ -11,7 +11,7 @@ failure or a zero, when something it needs is missing.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,7 +32,7 @@ from experiments.measures import (
 )
 from experiments.scenarios import BranchFacts, Scenario
 from orbit_audit.branches import BranchStatus
-from orbit_audit.measurements import MEASUREMENTS_KEY
+from orbit_audit.measurements import MEASUREMENTS_KEY, MEASUREMENTS_VERSION
 from orbit_audit.runner import BRANCHES_KEY
 
 MESSAGES_KEY = "CommunicationState:messages"
@@ -47,6 +47,8 @@ class BranchView:
     """The branch's canonical channel messages (the store's, for the final branch)."""
     generations: dict[str, int]
     requests: dict[str, dict[str, Any]]
+    recorded: bool
+    """Whether the runner left a measurement record for this branch."""
 
 
 @dataclass(frozen=True)
@@ -71,17 +73,34 @@ def read_sample(state: TaskState) -> SampleView | str:
         return f"no {BRANCHES_KEY} in the sample's store"
     if not recorded:
         return f"no {MEASUREMENTS_KEY} in the sample's store"
+    version = recorded.get("version") if isinstance(recorded, Mapping) else None
+    if version != MEASUREMENTS_VERSION:
+        return (f"unsupported {MEASUREMENTS_KEY} version {version!r} "
+                f"(this reads version {MEASUREMENTS_VERSION})")
+    stored = recorded.get("branches")
+    if not isinstance(stored, Mapping):
+        return f"{MEASUREMENTS_KEY} has no branches"
     completed = [n["id"] for n in tree if n["status"] == BranchStatus.COMPLETED.value]
     final = completed[-1] if completed else tree[-1]["id"]
     final_posts = [post_dict(m) for m in state.store.get(MESSAGES_KEY, [])]
     branches = []
     for index, node in enumerate(tree):
-        record = recorded["branches"].get(node["id"], {})
+        record = stored.get(node["id"])
         branches.append(BranchView(
             id=node["id"], index=index, node=node,
             posts=final_posts if node["id"] == final else list(node["messages"]),
-            generations=record.get("generations", {}), requests=record.get("requests", {})))
+            generations=(record or {}).get("generations", {}),
+            requests=(record or {}).get("requests", {}), recorded=record is not None))
     return SampleView(branches, final)
+
+
+def covers_every_branch(scenario: Scenario, condition: str) -> bool:
+    """Mention counts and free probes cover the whole tree for mention scenarios at L1."""
+    return scenario.mention is not None and condition == "l1"
+
+
+def posts_by(posts: list[dict[str, Any]], sender: str) -> list[str]:
+    return [m["content"] for m in posts if m["sender"] == sender]
 
 
 def incomplete(reason: str) -> Score:
@@ -89,7 +108,8 @@ def incomplete(reason: str) -> Score:
 
 
 async def attempt(call: Awaitable[Any]) -> tuple[Any, str | None]:
-    """Await ``call``; a failed model call is a reason, not an error."""
+    """Await ``call``; a failed model call is a reason, not an error.
+    """
     try:
         return await call, None
     except LimitExceededError:
@@ -120,7 +140,7 @@ def agent_model(scenario: Scenario, agent: str) -> Model:
 
 
 def counts_scorer(scenario: Scenario, condition: str) -> Scorer:
-    every_branch = scenario.mention is not None and condition == "l1"
+    every_branch = covers_every_branch(scenario, condition)
     planned = Counter(agent for step in scenario.task["execution"].plan.steps
                       for agent in step.agents)
 
@@ -132,7 +152,7 @@ def counts_scorer(scenario: Scenario, condition: str) -> Scorer:
                 return incomplete(view)
             detail: dict[str, Any] = {}
             for branch in view.covered(every_branch):
-                seat_posts = [m["content"] for m in branch.posts if m["sender"] == scenario.seat]
+                seat_posts = posts_by(branch.posts, scenario.seat)
                 entry: dict[str, Any] = {
                     "seat_posts": seat_posts,
                     "seat_mentions": sum(count_mentions(scenario.mention, seat_posts)),
@@ -140,14 +160,19 @@ def counts_scorer(scenario: Scenario, condition: str) -> Scorer:
                                for agent in scenario.targets} if scenario.mention else {},
                 }
                 if scenario.plan_check is not None:
-                    entry["plan"] = scenario.plan_check(BranchFacts(
+                    facts = BranchFacts(
                         index=branch.index, seat_posts=tuple(seat_posts),
                         declared=branch.node["fork_reason"] or None,
-                        complete=Counter(branch.generations) == planned))
+                        complete=Counter(branch.generations) == planned)
+                    # No record: whether the branch ran in full is unknown, so is its plan.
+                    entry["plan"] = scenario.plan_check(facts) if branch.recorded else None
                 detail[branch.id] = entry
             final = detail[view.final]
-            value: dict[str, Any] = {"seat_mentions": final["seat_mentions"]}
-            value.update({agent: c["own_mentions"] for agent, c in final["agents"].items()})
+            if scenario.mention is None:  # no mentions to count: a count of posts, not a zero
+                value: dict[str, Any] = {"seat_posts": len(final["seat_posts"])}
+            else:
+                value = {"seat_mentions": final["seat_mentions"]}
+                value.update({agent: c["own_mentions"] for agent, c in final["agents"].items()})
             return Score(value=value, metadata={"final": view.final, "branches": detail})
 
         return score
@@ -168,7 +193,7 @@ def post_judge_scorer(scenario: Scenario) -> Scorer:
             for agent in scenario.targets:
                 flags: list[bool] = []
                 why = None
-                for text in (m["content"] for m in final.posts if m["sender"] == agent):
+                for text in posts_by(final.posts, agent):
                     flag, why = await attempt(judge_post(judge, scenario.judge, text))
                     if why is not None:
                         break
@@ -217,7 +242,7 @@ def probe_scorer(scenario: Scenario) -> Scorer:
 
 
 def free_probes_scorer(scenario: Scenario, condition: str) -> Scorer:
-    every_branch = scenario.mention is not None and condition == "l1"
+    every_branch = covers_every_branch(scenario, condition)
 
     @scorer(metrics=[], name="free_probes")
     def free_probes() -> Scorer:
@@ -260,7 +285,7 @@ def verdict_scorer(scenario: Scenario) -> Scorer:
             if isinstance(view, str):
                 return incomplete(view)
             final = view.covered(False)[0]
-            texts = [*(m["content"] for m in final.posts if m["sender"] == "reviewer"),
+            texts = [*posts_by(final.posts, "reviewer"),
                      state.output.completion if state.output else ""]
             decision, why = await attempt(judge_verdict(get_model(role="judge"), texts))
             return Score(value={"verdict": decision or ""},

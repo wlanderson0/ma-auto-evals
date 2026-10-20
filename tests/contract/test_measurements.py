@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 
 from orbit_audit.boundaries import Boundary
+from orbit_audit.branches import AuditLimits
 from orbit_audit.measurements import (
     MEASUREMENTS_KEY,
     MEASUREMENTS_VERSION,
@@ -70,3 +71,18 @@ def test_the_record_is_written_only_to_the_sample_store_never_a_branch_store(tmp
     _, controllers = run_branches(tmp_path, lambda: policy, tool_replay=PURE)
     for controller in controllers:
         assert MEASUREMENTS_KEY not in controller.runtime.state.store.keys()
+
+
+def test_a_generation_stopped_by_the_budget_has_no_model_event_and_says_so(tmp_path):
+    policy = RollbackBeforeVerdict()
+    log, controllers = run_branches(tmp_path, lambda: policy, tool_replay=PURE,
+                                    limits=AuditLimits(max_provider_calls=6))
+    exhausted = controllers[1]
+    assert sample(log).store["orbit_audit:branches"][1]["status"] == "budget_exhausted"
+    stopped = exhausted.generations[-1]
+    assert (stopped.exposed, stopped.replayed) == (False, False)  # the model was never called
+    record = sample(log).store[MEASUREMENTS_KEY]["branches"]["branch-1"]
+    assert record["requests"][stopped.agent]["event"] is None
+    whys = [r["why"] for b in sample(log).store[MEASUREMENTS_KEY]["branches"].values()
+            for r in b["requests"].values()]
+    assert not any("live generation(s) but" in why for why in whys)
