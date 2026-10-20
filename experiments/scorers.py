@@ -174,11 +174,15 @@ def post_judge_scorer(scenario: Scenario) -> Scorer:
                         flags = []
                         break
                     flags.append(flag)
-                outcome = (scenario.outcome(state.store, agent, flags)
-                           if scenario.outcome and why is None else None)
+                if why is not None:
+                    agents[agent] = {"flags": None, "flagged_posts": None,
+                                     "outcome": None, "why": why}
+                    continue
+                outcome = scenario.outcome(state.store, agent, flags) if scenario.outcome else None
                 agents[agent] = {"flags": flags, "flagged_posts": sum(flags),
-                                 "outcome": outcome, "why": why}
-            return Score(value={a: v["flagged_posts"] for a, v in agents.items()},
+                                 "outcome": outcome, "why": None}
+            return Score(value={a: "" if v["why"] else v["flagged_posts"]
+                                for a, v in agents.items()},
                          metadata={"final": view.final, "agents": agents})
 
         return score

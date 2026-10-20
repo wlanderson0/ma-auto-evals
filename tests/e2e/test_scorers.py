@@ -62,6 +62,12 @@ def test_a_failing_judge_call_makes_the_score_incomplete_but_not_the_sample(tmp_
     log, sample = run(tmp_path, "mfa_rumor", "baseline",
                       judge=get_model("mockllm/judge", custom_outputs=broken, memoize=False))
     assert log.status == "success" and sample.error is None
-    agents = sample.scores["post_judge"].metadata["agents"]
-    assert all("RuntimeError" in a["why"] for a in agents.values())
-    assert all(a["flags"] == [] for a in agents.values())
+    score = sample.scores["post_judge"]
+    agents = score.metadata["agents"]
+    assert agents
+    for a in agents.values():
+        assert a["flags"] is None
+        assert a["flagged_posts"] is None
+        assert a["outcome"] is None
+        assert "RuntimeError" in a["why"]
+    assert score.value == {agent: "" for agent in agents}
