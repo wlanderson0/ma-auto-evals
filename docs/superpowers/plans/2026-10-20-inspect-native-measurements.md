@@ -782,8 +782,7 @@ git commit -m "feat: record authors, generation counts and final requests for ev
 **Files:**
 - Modify: `experiments/measures.py` (add `mention_counts`, `mention_fields`, `EMPTY_COUNTS`)
 - Create: `experiments/scorers.py`
-- Modify: `experiments/run.py` (`run_condition` attaches scorers and model roles)
-- Test: `tests/e2e/test_scorers.py`
+- Test: `tests/e2e/test_scorers.py` (runs the scorers through `audit_task` directly; `run_condition` is wired in Task 6, so `measure()` and the existing harness tests are untouched here)
 
 **Interfaces:**
 - Consumes: Task 4's store key; Task 2's helpers.
@@ -803,23 +802,37 @@ git commit -m "feat: record authors, generation counts and final requests for ev
 
 from __future__ import annotations
 
-from inspect_ai.log import read_eval_log
+from pathlib import Path
+
+from inspect_ai import eval as inspect_eval
 from inspect_ai.model import get_model
+from orbit.ids import id_scope, sequential_ids
 
-from experiments.run import _mock_models, run_condition
+from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy
 from experiments.scenarios import SCENARIOS
+from experiments.scorers import measurement_scorers
+from orbit_audit.task import audit_task
 
 
-def run(tmp_path, name, condition, **replace):
+def run(tmp_path: Path, name: str, condition: str, **replace):
+    """One mock sample with only the measurement scorers attached: (log, sample)."""
     models = _mock_models()
     models["probe"] = models["judge"]
     models.update(replace)
-    [row] = run_condition(SCENARIOS[name]({}), condition, 1, tmp_path, models)
-    return row, read_eval_log(row["log"]).samples[0]
+    scenario = SCENARIOS[name]({})
+    task = audit_task(
+        policy=lambda: make_policy(condition, scenario, models["auditor"]),
+        tool_replay=scenario.tool_replay, limits=LIMITS, scope=scenario.scope, epochs=1,
+        scorer=measurement_scorers(scenario, condition), **scenario.task)
+    with id_scope(sequential_ids()):
+        log = inspect_eval(task, model=models["target"], log_dir=str(tmp_path), display="none",
+                           max_samples=1, fail_on_error=False, max_tokens=MAX_TOKENS,
+                           model_roles={"judge": models["judge"], "probe": models["probe"]})[0]
+    return log, log.samples[0]
 
 
 def test_each_measurement_is_a_score_in_the_log(tmp_path):
-    row, sample = run(tmp_path, "mfa_rumor", "l1")
+    _, sample = run(tmp_path, "mfa_rumor", "l1")
     assert set(sample.scores) == {"counts", "post_judge", "probe"}
     probe = sample.scores["probe"]
     assert set(probe.value) == {"bob", "carol", "dave"}
@@ -846,9 +859,9 @@ def test_a_failing_judge_call_makes_the_score_incomplete_but_not_the_sample(tmp_
     def broken(messages, tools, tool_choice, config):
         raise RuntimeError("judge is down")
 
-    row, sample = run(tmp_path, "mfa_rumor", "baseline",
+    log, sample = run(tmp_path, "mfa_rumor", "baseline",
                       judge=get_model("mockllm/judge", custom_outputs=broken, memoize=False))
-    assert row["status"] == "success" and sample.error is None
+    assert log.status == "success" and sample.error is None
     agents = sample.scores["post_judge"].metadata["agents"]
     assert all("RuntimeError" in a["why"] for a in agents.values())
     assert all(a["flags"] == [] for a in agents.values())
@@ -1186,7 +1199,54 @@ def measurement_scorers(scenario: Scenario, condition: str) -> list[Scorer]:
     return scorers
 ```
 
-- [ ] **Step 5: Attach the scorers in `run_condition`**
+- [ ] **Step 5: Run to verify they pass**
+
+Run: `uv run --no-sync pytest tests/e2e -q && uv run --no-sync ruff check src tests experiments`
+Expected: the new scorer tests and all earlier tests (including the 19 golden cases; `run_condition` and `measure()` are untouched in this task) pass. If `test_a_failing_judge_call…` shows the sample erroring because Inspect wraps the mock's exception differently, change the broken mock to return text that the scorer rejects only if you can show the error type in `why`; do not catch more broadly than `Exception`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add experiments/measures.py experiments/scorers.py tests/e2e/test_scorers.py
+git commit -m "feat: measurement scorers (counts, post_judge, probe, free_probes, verdict)"
+```
+
+---
+
+### Task 6: `measure()` reads the scores
+
+**Files:**
+- Modify: `experiments/run.py` (`run_condition` attaches the scorers and model roles; `measure`, imports; delete `ran_full_schedule`, `final_controller`, `measure_mentions`)
+- Test: `tests/e2e/test_scorers.py` (one wiring test), Task 1's golden test, existing `tests/e2e/test_experiment_harness.py`
+
+**Interfaces:**
+- Consumes: Task 5's score names and metadata.
+- Produces: `measure(scenario, condition, log, controllers) -> list[dict]` (synchronous, no `models` argument), same row shape as before.
+
+- [ ] **Step 1: Write the failing wiring test**
+
+Append to `tests/e2e/test_scorers.py` (merge the new imports into its top import block):
+
+```python
+from inspect_ai.log import read_eval_log
+
+from experiments.run import run_condition
+
+
+def test_run_condition_attaches_the_scorers_and_roles(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "l1", 1, tmp_path, models)
+    scores = read_eval_log(row["log"]).samples[0].scores
+    assert set(scores) == {"counts", "post_judge", "probe"}
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run --no-sync pytest tests/e2e/test_scorers.py::test_run_condition_attaches_the_scorers_and_roles -q`
+Expected: FAIL: `scores` is `None` (the scorers are not attached yet).
+
+- [ ] **Step 3: Attach the scorers, then replace `measure()` and delete the model-calling helpers**
 
 In `experiments/run.py` add `from experiments.scorers import measurement_scorers`. In `run_condition`, add `scorer=measurement_scorers(scenario, condition),` to the `audit_task(...)` call, build the roles before the eval, and pass them:
 
@@ -1196,33 +1256,7 @@ In `experiments/run.py` add `from experiments.scorers import measurement_scorers
         roles["probe"] = models["probe"]
 ```
 
-and add `model_roles=roles,` to the `inspect_eval(...)` call. Leave `measure()` unchanged for now: the scorers run alongside it.
-
-- [ ] **Step 6: Run to verify they pass**
-
-Run: `uv run --no-sync pytest tests/e2e -q && uv run --no-sync ruff check src tests experiments`
-Expected: the new scorer tests and all earlier tests (including the 19 golden cases, since `measure()` is untouched) pass. If `test_a_failing_judge_call…` shows the sample erroring because Inspect wraps the mock's exception differently, change the broken mock to return text that the scorer rejects only if you can show the error type in `why`; do not catch more broadly than `Exception`.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add experiments/measures.py experiments/scorers.py experiments/run.py tests/e2e/test_scorers.py
-git commit -m "feat: measurement scorers (counts, post_judge, probe, free_probes, verdict)"
-```
-
----
-
-### Task 6: `measure()` reads the scores
-
-**Files:**
-- Modify: `experiments/run.py` (`measure`, `run_condition`, imports; delete `ran_full_schedule`, `final_controller`, `measure_mentions`)
-- Test: Task 1's golden test; existing `tests/e2e/test_experiment_harness.py`
-
-**Interfaces:**
-- Consumes: Task 5's score names and metadata.
-- Produces: `measure(scenario, condition, log, controllers) -> list[dict]` (synchronous, no `models` argument), same row shape as before.
-
-- [ ] **Step 1: Replace `measure()` and delete the model-calling helpers**
+and add `model_roles=roles,` to the `inspect_eval(...)` call. Then do the following.
 
 Delete `ran_full_schedule`, `final_controller` and `measure_mentions` from `run.py`, and replace `measure` with:
 
@@ -1325,19 +1359,19 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
 
 In `run_condition` change the call to `rows = measure(scenario, condition, log, controllers)` (no `asyncio.run`, no `models`). Add `from experiments.measures import EMPTY_COUNTS, mention_fields` to the existing `experiments.measures` import.
 
-- [ ] **Step 2: Clean up imports**
+- [ ] **Step 4: Clean up imports**
 
 Run: `uv run --no-sync ruff check experiments --fix` and then delete by hand any import it leaves reported that this task orphaned (`asyncio`, `copy`, `Store`, `ChatMessageUser`, `GenerateConfig`, `BranchStatus`, `BranchFacts` are the likely ones). Keep `_fresh` and the re-exports: `experiments/reverdict.py` still uses them.
 
-- [ ] **Step 3: Verify the rows did not change**
+- [ ] **Step 5: Verify the rows did not change**
 
 Run: `uv run --no-sync pytest tests -q && uv run --no-sync ruff check src tests experiments`
 Expected: all pass, including all 19 golden cases and the existing harness tests (these check the per-branch free-probe call count: `3 * len(free_probes) * 2`, never re-asked). If a golden case differs, diff the failing case's JSON against the fixture and fix `measure()` or a scorer; never re-record the fixtures to make a test pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add experiments/run.py
+git add experiments/run.py tests/e2e/test_scorers.py
 git commit -m "refactor: measure() rebuilds result rows from the scorers' output"
 ```
 
