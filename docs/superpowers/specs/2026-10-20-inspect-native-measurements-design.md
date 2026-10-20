@@ -31,8 +31,10 @@ scorer, so its result is in the eval log and the viewer and can be rescored.
   (mentions, exposure, copying, plan check) share one model-free `counts`
   scorer.
 - Judge and probe models come from Inspect model roles, so
-  `inspect score --model-role judge=…` rescores with a different judge without
-  re-running the agents.
+  `inspect_ai.score_async(log, scorers, model_roles={"judge": …})` rescores a
+  saved log with a different judge without re-running the agents. (The
+  `inspect score` CLI cannot build a per-scenario scorer from the command
+  line; a small CLI wrapper is a follow-up.)
 - The authorship labels and each agent's final request are written to the
   sample's store for every branch, abandoned ones included.
 - `measure()` makes no model calls. For every scenario and condition under
@@ -70,6 +72,11 @@ Scripted mock models only; a baseline `mfa_rumor`, an L0 `mfa_rumor`, and L1
 - `src/orbit_audit/measurements.py` (new): collects each branch's record and
   holds the resolution rule. Stateless functions plus a small recorder the
   runner owns.
+- `experiments/measures.py` (new): the pure measurement helpers that now live
+  in `run.py` (`probe`, `judge_post`, `judge_verdict`, `count_mentions`,
+  `copied_share`, …), moved unchanged so `scorers.py` and `run.py` do not
+  import each other. `run.py` re-exports them (tests and `reverdict.py` import
+  them from there).
 - `src/orbit_audit/runner.py`: after each branch finishes, asks the recorder to
   record it; `_adopt` writes the result to the store beside `BRANCHES_KEY` and
   `BUDGET_KEY`. Nothing is written to the store during the run (T2: auditor-only
@@ -121,12 +128,24 @@ At the end of branch B, for each agent A with generations in B:
 
 The rule lives in one function and is tested on its own.
 
+Step 3 is refined so a child that ends with all of A's generations replayed
+still points at the right generation. The recorder keeps, per branch and agent,
+one entry per generation: `(event uuid, branch that owns it)`. In a child with
+`n` generations of A and `k` live events, the first `n - k` entries (the
+replayed prefix) are copied from the parent's list at the same indices and the
+last `k` are the live events. The stored `requests[A]` is the last entry. This
+differs from "the parent's final entry" when the child ends before reaching the
+parent's last generation of A.
+
 ### Scorers
 
-`measurement_scorers(scenario)` returns the list for `scorer=`. Each scorer
-returns `Score(value={agent: scalar, …}, metadata={"branches": {…}})`: the value
-is the final branch's, which the viewer shows; the metadata carries the same
-measurement for every branch (this replaces `branch_results`).
+`measurement_scorers(scenario, condition)` returns the list for `scorer=`. Each
+scorer returns `Score(value={agent: scalar, …}, metadata={…})`: the value is
+the final branch's, which the viewer shows. Branch coverage matches today's
+`measure()` so rows and model-call counts do not change: `probe`, `post_judge`
+and `verdict` measure the final branch only; `free_probes` and `counts` measure
+every branch when `scenario.mention` is set and `condition == "l1"` (this
+replaces `branch_results`), and the final branch otherwise.
 
 | Scorer | Model | Replaces |
 |---|---|---|
