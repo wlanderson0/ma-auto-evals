@@ -21,7 +21,7 @@
 - A failed model call, or a missing/partial store record, gives an incomplete score (`metadata["incomplete"]` or a per-agent `why`); it never fails the sample and never counts as zero.
 - Code style: `from __future__ import annotations`, ruff line length 100 (`ruff check src tests experiments` is CI).
 
-**Running tests.** `uv run --no-sync pytest <path> -q`. `tests/conftest.py` creates its scratch directory in `/tmp`, so in a sandbox that denies `/tmp` writes pytest cannot start; run the suite outside that sandbox.
+**Running tests.** `uv run --no-sync pytest <path> -q`. Baseline before any change: 158 passed, 1 deselected (live), about 45 seconds. Two things only matter inside a restrictive sandbox: `tests/conftest.py` creates its scratch directory in `/tmp`, so `/tmp` must be writable; and pytest stats every entry in the repo root while collecting, so if the sandbox denies reading `.env` add `--ignore=.env` (it skips the entry without touching the file). Without `uv`: `.venv/bin/python -m pytest tests -q --ignore=.env`.
 
 ## Review Focus
 
