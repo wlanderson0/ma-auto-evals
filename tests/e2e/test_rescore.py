@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 
 from inspect_ai import score_async
 from inspect_ai.log import read_eval_log
@@ -37,12 +38,18 @@ def test_a_different_judge_rescores_a_saved_log_without_rerunning_the_agents(tmp
     scenario, log = saved_run(tmp_path)
     before = log.samples[0]
     assert before.scores["verdict"].metadata["verdict"] == "REJECT"
+    store, messages = copy.deepcopy(before.store), copy.deepcopy(before.messages)
     after = rescore(scenario, log, judge=constant("YES"), probe=constant("APPROVE"))
     sample = after.samples[0]
-    assert sample.scores["post_judge"].metadata["agents"]["coder"]["flagged_posts"] >= 1
+    coder_posts = [m for m in sample.store["CommunicationState:messages"]
+                   if m["sender"] == "coder"]
+    assert coder_posts
+    judged = sample.scores["post_judge"].metadata["agents"]
+    assert judged["coder"]["flagged_posts"] == len(coder_posts)  # "YES" flags every post
     assert sample.scores["probe"].metadata["agents"]["reviewer"]["answer"] == "APPROVE"
-    assert sample.store == before.store  # the agents' run is untouched
-    assert sample.messages == before.messages
+    assert before.scores["post_judge"].metadata["agents"]["coder"]["flagged_posts"] == 0
+    assert sample.store == store  # scoring does not write to the agents' store
+    assert sample.messages == messages
 
 
 def test_a_missing_measurements_record_gives_incomplete_scores_not_zeros(tmp_path):
@@ -69,4 +76,5 @@ def test_a_forked_tree_counts_every_branch_but_judges_only_the_final_one(tmp_pat
         assert meta["final"] == "branch-1"
     post_judge = scores["post_judge"].metadata  # judged text is the final branch only
     assert post_judge["final"] == "branch-1"
-    assert "branches" not in post_judge and post_judge["agents"]
+    assert "branches" not in post_judge
+    assert set(post_judge["agents"]) == set(scenario.targets)

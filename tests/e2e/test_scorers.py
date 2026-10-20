@@ -220,16 +220,22 @@ def test_a_sample_with_no_scores_has_no_verdict():
     assert all(a["adopted"] is None for a in row["agents"].values())
 
 
-def test_an_incomplete_post_judge_alone_blanks_only_the_judged_fields():
+def test_an_incomplete_post_judge_blanks_only_the_judged_fields():
     scenario = SCENARIOS["mfa_rumor"]({})
-    scores = {"post_judge": Score(value="incomplete", metadata={"incomplete": "no judge"})}
-    [row] = measure(scenario, "baseline",
-                    SimpleNamespace(samples=[_fake_sample(scores)]), [])
-    assert row["incomplete"]["post_judge"] == "no judge"
-    assert set(row["incomplete"]) == {"counts", "post_judge", "probe"}
-    for agent in row["agents"].values():
+    adopted = {a: s.adopted for a, s in scenario.probes.items()}
+    counts = Score(value={}, metadata={"final": "branch-0", "branches": {"branch-0": {
+        "seat_posts": [], "seat_mentions": 0, "agents": {}}}})
+    probe = Score(value=adopted, metadata={"final": "branch-0", "agents": {
+        a: {"answer": answer, "why": None} for a, answer in adopted.items()}})
+    scores = {"counts": counts, "probe": probe,
+              "post_judge": Score(value="incomplete", metadata={"incomplete": "no judge"})}
+    [row] = measure(scenario, "baseline", SimpleNamespace(samples=[_fake_sample(scores)]), [])
+    assert row["incomplete"] == {"post_judge": "no judge"}  # the other two are complete
+    for name, agent in row["agents"].items():
         assert agent["flagged_posts"] is None and agent["flags"] == []
         assert agent["outcome"] is None and agent["judge_error"] == "no judge"
+        assert agent["probe"] == adopted[name] and agent["adopted"] is True  # untouched
+        assert "probe_error" not in agent
 
 
 def test_complete_runs_have_no_incomplete_key(tmp_path):
@@ -240,17 +246,18 @@ def test_complete_runs_have_no_incomplete_key(tmp_path):
         assert "incomplete" not in row
 
 
-def _judge_down_rows(tmp_path, name):
+def _rows(tmp_path, name, condition="baseline", *, judge_down=False):
     models = _mock_models()
     models["probe"] = models["judge"]
-    models["judge"] = _down("judge")
-    [row] = run_condition(SCENARIOS[name]({}), "baseline", 1, tmp_path, models)
+    if judge_down:
+        models["judge"] = _down("judge")
+    [row] = run_condition(SCENARIOS[name]({}), condition, 1, tmp_path, models)
     assert row["status"] == "success" and row["error"] is None
     return row
 
 
 def test_a_failed_judge_keeps_the_votes_it_does_not_need(tmp_path):
-    row = _judge_down_rows(tmp_path, "codename_vote")
+    row = _rows(tmp_path, "codename_vote", judge_down=True)
     for agent in row["agents"].values():
         assert agent["flagged_posts"] is None and "RuntimeError" in agent["judge_error"]
         assert agent["outcome"]["votes"] is not None
@@ -258,11 +265,44 @@ def test_a_failed_judge_keeps_the_votes_it_does_not_need(tmp_path):
 
 
 def test_a_failed_judge_leaves_disclosure_unknown_but_keeps_the_skips(tmp_path):
-    row = _judge_down_rows(tmp_path, "skipped_tests")
+    row = _rows(tmp_path, "skipped_tests", "l0", judge_down=True)  # the seat posts the skip line
+    outcomes = [a["outcome"] for a in row["agents"].values()]
+    skippers = [o for o in outcomes if o["skip_calls"]]
+    assert skippers and all(o["skips"] >= 1 for o in skippers)  # the tool's record survives
+    assert all(o["disclosed"] is None for o in outcomes)  # nothing to go by without flags
     for agent in row["agents"].values():
         assert agent["flagged_posts"] is None
-        assert agent["outcome"]["disclosed"] is None
-        assert "skip_calls" in agent["outcome"] and "skips" in agent["outcome"]
+
+
+def test_disclosure_is_a_bool_for_an_agent_that_skipped_when_the_judge_works(tmp_path):
+    row = _rows(tmp_path, "skipped_tests", "l0")
+    skippers = [a["outcome"] for a in row["agents"].values() if a["outcome"]["skip_calls"]]
+    assert skippers
+    for outcome in skippers:
+        assert outcome["skips"] >= 1 and isinstance(outcome["disclosed"], bool)
+
+
+def _constant(text):
+    return get_model("mockllm/other", memoize=False, custom_outputs=(
+        lambda messages, tools, tool_choice, config: ModelOutput.from_content("mockllm", text)))
+
+
+def test_run_condition_gives_the_scorers_the_judge_role(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["judge"] = _constant("YES")  # flags every post, unlike the mock judge's NO
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
+    assert row["status"] == "success"
+    for agent in row["agents"].values():
+        assert agent["flagged_posts"] == len(agent["posts"]) >= 1
+
+
+def test_run_condition_works_without_a_probe_model_when_the_agents_have_none(tmp_path):
+    models = _mock_models()  # no "probe": agents without a model use the task's
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    assert all(a["probe"] is not None for a in row["agents"].values())
+    assert "incomplete" not in row
 
 
 def _stored(recorded, nodes=("branch-0",)):
