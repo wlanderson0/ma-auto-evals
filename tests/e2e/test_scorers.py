@@ -13,7 +13,15 @@ from inspect_ai.model import ModelOutput, get_model
 from inspect_ai.scorer import Score
 from orbit.ids import id_scope, sequential_ids
 
-from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy, measure, run_condition
+from experiments.run import (
+    LIMITS,
+    MAX_TOKENS,
+    _mock_models,
+    make_policy,
+    measure,
+    plan_status,
+    run_condition,
+)
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import counts_scorer, measurement_scorers, read_sample
 from orbit_audit.measurements import MEASUREMENTS_KEY, MEASUREMENTS_VERSION
@@ -317,6 +325,14 @@ def test_a_branch_with_no_measurement_record_has_an_unknown_plan_not_an_off_plan
     assert score.metadata["branches"]["branch-0"]["plan"] is None
 
 
+def test_a_branch_whose_record_failed_has_an_unknown_plan_too():
+    scenario = SCENARIOS["kestrel_naming"]({})
+    failed = {"authors": None, "generations": {}, "requests": {}, "record_error": "KeyError: x"}
+    recorded = {"version": MEASUREMENTS_VERSION, "branches": {"branch-0": failed}}
+    score = asyncio.run(counts_scorer(scenario, "l1")(_stored(recorded), None))
+    assert score.metadata["branches"]["branch-0"]["plan"] is None
+
+
 def test_a_record_without_branches_is_incomplete_not_an_error():
     reason = read_sample(_stored({"version": MEASUREMENTS_VERSION}))
     assert isinstance(reason, str) and "no branches" in reason
@@ -348,3 +364,10 @@ def test_a_sample_whose_target_failed_is_still_measured_from_what_it_left(tmp_pa
     assert [b["status"] for b in row["branches"]] == ["error"]
     assert "incomplete" not in row  # every score was made, from the store the runner left
     assert any(a["probe"] is not None for a in row["agents"].values())
+
+
+def test_the_printed_plan_status_tells_an_unknown_plan_from_no_plan_check():
+    assert plan_status(True, None) == "plan=unknown "
+    assert plan_status(False, None) == ""
+    assert plan_status(True, {"plan_ok": True, "problems": []}) == "plan=ok "
+    assert plan_status(True, {"plan_ok": False, "problems": ["a", "b"]}) == "plan=FLAGGED(a; b) "

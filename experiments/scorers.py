@@ -53,7 +53,8 @@ class BranchView:
     generations: dict[str, int]
     requests: dict[str, dict[str, Any]]
     recorded: bool
-    """Whether the runner left a measurement record for this branch."""
+    """Whether the runner left a usable measurement record for this branch (a record it
+    failed to make counts as none)."""
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,8 @@ def read_sample(state: TaskState) -> SampleView | str:
             id=node["id"], index=index, node=node,
             posts=final_posts if node["id"] == final else list(node["messages"]),
             generations=(record or {}).get("generations", {}),
-            requests=(record or {}).get("requests", {}), recorded=record is not None))
+            requests=(record or {}).get("requests", {}),
+            recorded=record is not None and "record_error" not in record))
     return SampleView(branches, final)
 
 
@@ -172,7 +174,7 @@ def counts_scorer(scenario: Scenario, condition: str) -> Scorer:
                         index=branch.index, seat_posts=tuple(seat_posts),
                         declared=branch.node["fork_reason"] or None,
                         complete=Counter(branch.generations) == planned)
-                    # No record: whether the branch ran in full is unknown, so is its plan.
+                    # No usable record: whether the branch ran in full is unknown, so is its plan.
                     entry["plan"] = scenario.plan_check(facts) if branch.recorded else None
                 detail[branch.id] = entry
             final = detail[view.final]

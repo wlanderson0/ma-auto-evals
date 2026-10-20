@@ -573,11 +573,12 @@ class AuditController(RuntimeController):
     async def _traced_proceed(self, view: BoundaryView, proceed) -> ModelOutput:
         """Trace the generation as exposed and call the model; if the budget stopped the
         call before any provider request, no model saw it, so the trace says so."""
+        slot = len(self.generations)
         self._trace(view, exposed=True)
         try:
             return await proceed()
         except BudgetExhausted:
-            self.generations[-1] = replace(self.generations[-1], exposed=False)
+            self.generations[slot] = replace(self.generations[slot], exposed=False)
             raise
 
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:

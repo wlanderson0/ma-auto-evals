@@ -348,6 +348,13 @@ def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
     return rows
 
 
+def plan_status(has_plan_check: bool, plan: dict[str, Any] | None) -> str:
+    """The plan column of a branch's printed line; ``None`` is unknown when there is a check."""
+    if plan is None:
+        return "plan=unknown " if has_plan_check else ""
+    return "plan=ok " if plan["plan_ok"] else f"plan=FLAGGED({'; '.join(plan['problems'])}) "
+
+
 def _run_in_subprocess(name: str, condition: str, args: argparse.Namespace,
                        out: Path) -> list[dict[str, Any]]:
     import subprocess
@@ -421,10 +428,7 @@ def main() -> None:
                               for a, v in row["agents"].items()}
                     probes["seat"] = row["seat_mentions"]
                 for branch in row.get("branch_results", []):
-                    plan = branch.get("plan")
-                    status = ("" if plan is None else
-                              "plan=ok " if plan["plan_ok"] else
-                              f"plan=FLAGGED({'; '.join(plan['problems'])}) ")
+                    status = plan_status(scenario.plan_check is not None, branch.get("plan"))
                     print(f"     {branch['branch']} seat={branch['seat_mentions']} {status}"
                           + " | ".join(
                         f"{a}: own={v['own_mentions']} "

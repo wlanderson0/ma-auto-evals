@@ -152,3 +152,5 @@ def test_a_branch_that_errors_still_leaves_its_record_in_the_sample_store(tmp_pa
     recorded = s.store[MEASUREMENTS_KEY]["branches"]["branch-0"]
     assert recorded["generations"]  # what the branch had done before it failed
     assert set(recorded["requests"]) <= {"pm", "coder"}
+    [failed] = [r for r in recorded["requests"].values() if r["event"] is None]
+    assert failed["why"] == "its model call failed (1 failed call(s) in branch-0)"

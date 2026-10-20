@@ -12,6 +12,7 @@ from orbit_audit.measurements import (
     MeasurementRecorder,
     ModelCall,
     align_requests,
+    failed_model_calls,
     stored_requests,
     target_model_calls,
 )
@@ -114,6 +115,25 @@ def test_a_parent_list_shorter_than_the_replayed_index_is_unknown():
         branch="branch-1", parent=parent,
         generations=[replayed("bob", 0), replayed("bob", 1)], calls=[])
     assert result.lists["bob"] == [("p0", "branch-0"), None]
+
+
+def test_a_failed_model_call_is_named_as_the_reason_not_a_count_mismatch():
+    result = align_requests(
+        branch="branch-0", parent=None, generations=[live("bob", 0), live("bob", 1)],
+        calls=[ModelCall("e0", "bob", "branch-0")],
+        failed=[ModelCall("f1", "bob", "branch-0"), ModelCall("x", "bob", "branch-1")])
+    assert result.lists["bob"] == [None, None]
+    assert stored_requests(result)["bob"] == {
+        "event": None, "via": None,
+        "why": "its model call failed (1 failed call(s) in branch-0)"}
+
+
+def test_a_mismatch_the_failed_calls_do_not_explain_is_still_a_count_mismatch():
+    result = align_requests(
+        branch="branch-0", parent=None, generations=[live("bob", 0), live("bob", 1)],
+        calls=[], failed=[ModelCall("f", "bob", "branch-0")])
+    assert stored_requests(result)["bob"]["why"] == (
+        "2 live generation(s) but 0 model event(s) in branch-0")
 
 
 def test_a_replayed_generation_with_no_parent_record_is_unknown():
@@ -221,3 +241,21 @@ def test_the_auditors_own_model_calls_are_not_target_calls():
         call("auditor-call", "m1"), call("target-call", "m2"),
     ]
     assert target_model_calls(events) == [ModelCall("target-call", "bob", "branch-0")]
+
+
+def test_errored_target_calls_are_found_apart_from_the_auditors_and_the_ok_ones():
+    def begin(id, parent, type, name):
+        return SimpleNamespace(event="span_begin", id=id, parent_id=parent, type=type,
+                               name=name)
+
+    def call(uuid, span, error=None):
+        return SimpleNamespace(event="model", pending=False, error=error, uuid=uuid,
+                               span_id=span)
+
+    events = [
+        begin("b", None, "branch", "branch-0"), begin("a", "b", "agent", "bob"),
+        begin("aud", "a", AUDITOR_SPAN, "auditor"),
+        call("ok", "a"), call("broken", "a", error="boom"), call("auditor-broken", "aud", "boom"),
+    ]
+    assert target_model_calls(events) == [ModelCall("ok", "bob", "branch-0")]
+    assert failed_model_calls(events) == [ModelCall("broken", "bob", "branch-0")]

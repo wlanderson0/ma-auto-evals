@@ -63,6 +63,15 @@ def target_model_calls(events: Sequence[Event]) -> list[ModelCall]:
     The auditor's own model calls nest under the agent's span too (an
     ``orbit_audit.auditor`` span), so any call inside one is excluded.
     """
+    return _target_calls(events, failed=False)
+
+
+def failed_model_calls(events: Sequence[Event]) -> list[ModelCall]:
+    """The target-model calls that raised (an errored ``ModelEvent``), found as above."""
+    return _target_calls(events, failed=True)
+
+
+def _target_calls(events: Sequence[Event], *, failed: bool) -> list[ModelCall]:
     spans = {e.id: e for e in events if e.event == "span_begin"}
 
     def around(span_id: str | None) -> Iterator[SpanBeginEvent]:
@@ -73,7 +82,9 @@ def target_model_calls(events: Sequence[Event]) -> list[ModelCall]:
 
     calls: list[ModelCall] = []
     for event in events:
-        if event.event != "model" or event.pending or event.error or event.uuid is None:
+        if event.event != "model" or event.pending or event.uuid is None:
+            continue
+        if bool(event.error) != failed:
             continue
         enclosing = list(around(event.span_id))
         if any(span.type == AUDITOR_SPAN for span in enclosing):
@@ -87,14 +98,15 @@ def target_model_calls(events: Sequence[Event]) -> list[ModelCall]:
 
 def align_requests(
     *, branch: str, generations: Sequence[Gen], calls: Sequence[ModelCall],
-    parent: Mapping[str, list[Entry | None]] | None,
+    parent: Mapping[str, list[Entry | None]] | None, failed: Sequence[ModelCall] = (),
 ) -> Alignment:
     """Match each agent's generations in ``branch`` to model events.
 
     A replayed generation takes the parent's entry at the same index; one the
     auditor wrote (no model ran) has none; a live one takes the next model event
     of that agent in this branch. If the live generations and the events differ in
-    number, the live entries are left unknown and the problem is recorded.
+    number, the live entries are left unknown and the problem is recorded; when
+    ``failed`` (calls that raised) accounts for the difference, the problem says so.
     """
     lists: dict[str, list[Entry | None]] = {}
     problems: dict[str, str] = {}
@@ -102,9 +114,13 @@ def align_requests(
         mine = sorted((g for g in generations if g.agent == agent), key=lambda g: g.index)
         found = [c for c in calls if c.agent == agent and c.branch == branch]
         wanted = sum(g.exposed and not g.replayed for g in mine)
+        broke = sum(c.agent == agent and c.branch == branch for c in failed)
         if wanted != len(found):
-            problems[agent] = (f"{wanted} live generation(s) but {len(found)} model event(s) "
-                               f"in {branch}")
+            if broke and wanted == len(found) + broke:
+                problems[agent] = f"its model call failed ({broke} failed call(s) in {branch})"
+            else:
+                problems[agent] = (f"{wanted} live generation(s) but {len(found)} model "
+                                   f"event(s) in {branch}")
             found = []
         events = iter(found)
         inherited = (parent or {}).get(agent, [])
@@ -169,6 +185,7 @@ class MeasurementRecorder:
                        for t in controller.generations]
         alignment = align_requests(
             branch=branch, generations=generations, calls=target_model_calls(events),
+            failed=failed_model_calls(events),
             parent=self._lists.get(parent) if parent is not None else None)
         self._lists[branch] = alignment.lists
         record: dict[str, Any] = {
