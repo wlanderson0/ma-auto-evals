@@ -146,7 +146,24 @@ class MeasurementRecorder:
 
     def record(self, controller: AuditController, parent: str | None,
                events: Sequence[Event]) -> None:
-        """Record ``controller``'s branch, which has just ended. ``parent`` finished earlier."""
+        """Record ``controller``'s branch, which has just ended. ``parent`` finished earlier.
+
+        Measuring must never fail the audit: a problem is noted in the branch's
+        record (``record_error``) and the scorers read it as unknown.
+        """
+        branch = controller.branch
+        try:
+            self._record(controller, parent, events)
+        except Exception as error:
+            logger.warning("orbit_audit: could not record %s's measurements: %s",
+                           branch, error, exc_info=True)
+            self._lists[branch] = {}
+            self._branches[branch] = {
+                "authors": None, "generations": {}, "requests": {},
+                "record_error": f"{type(error).__name__}: {error}"}
+
+    def _record(self, controller: AuditController, parent: str | None,
+                events: Sequence[Event]) -> None:
         branch = controller.branch
         generations = [Gen(t.agent, t.index, t.exposed, t.replayed)
                        for t in controller.generations]
@@ -163,7 +180,8 @@ class MeasurementRecorder:
             try:
                 record["authors"] = controller.authors()
             except Exception as error:  # a view problem, not a run problem
-                logger.warning("orbit_audit: could not label %s's messages: %s", branch, error)
+                logger.warning("orbit_audit: could not label %s's messages: %s", branch, error,
+                               exc_info=True)
                 record["authors_error"] = f"{type(error).__name__}: {error}"
         self._branches[branch] = record
 

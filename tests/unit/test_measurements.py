@@ -12,7 +12,9 @@ from orbit_audit.measurements import (
     ModelCall,
     align_requests,
     stored_requests,
+    target_model_calls,
 )
+from orbit_audit.timeline import AUDITOR_SPAN
 
 
 def live(agent, index):
@@ -152,3 +154,39 @@ def test_a_failing_authors_call_is_recorded_not_raised():
     recorder.record(fake("branch-0", [], authors=boom), None, [])
     record = recorder.payload()["branches"]["branch-0"]
     assert record["authors"] is None and "KeyError" in record["authors_error"]
+
+
+def test_a_failing_record_is_noted_and_the_sample_goes_on():
+    class Broken:
+        branch = "branch-0"
+        runtime = RUNTIME
+
+        @property
+        def generations(self):
+            raise RuntimeError("bad trace")
+
+    recorder = MeasurementRecorder()
+    recorder.record(Broken(), None, [])
+    record = recorder.payload()["branches"]["branch-0"]
+    assert record["authors"] is None and record["requests"] == {}
+    assert "RuntimeError: bad trace" == record["record_error"]
+    recorder.record(fake("branch-1", [trace("bob", 0, replayed=True)]), "branch-0", [])
+    assert recorder.payload()["branches"]["branch-1"]["requests"]["bob"]["event"] is None
+
+
+def test_the_auditors_own_model_calls_are_not_target_calls():
+    def begin(id, parent, type, name):
+        return SimpleNamespace(event="span_begin", id=id, parent_id=parent, type=type,
+                               name=name)
+
+    def call(uuid, span):
+        return SimpleNamespace(event="model", pending=False, error=None, uuid=uuid,
+                               span_id=span)
+
+    events = [
+        begin("b", None, "branch", "branch-0"), begin("a", "b", "agent", "bob"),
+        begin("aud", "a", AUDITOR_SPAN, "auditor"), begin("m1", "aud", "orbit.model", "gen"),
+        begin("m2", "a", "orbit.model", "gen"),
+        call("auditor-call", "m1"), call("target-call", "m2"),
+    ]
+    assert target_model_calls(events) == [ModelCall("target-call", "bob", "branch-0")]

@@ -97,9 +97,10 @@ async def free_probe(model: Model, context: list, question: str) -> str:
     return output.completion.strip()
 
 
-EMPTY_COUNTS = {"exposure": 0, "mentions": 0, "own_mentions": 0, "copied_posts": 0,
-                "copied": [], "mention_channels": {}}
-"""What a target's mention counts read as when the ``counts`` score is missing."""
+UNKNOWN_COUNTS = {"exposure": None, "mentions": None, "own_mentions": None,
+                  "copied_posts": None, "copied": [], "mention_channels": {}}
+"""What a target's mention counts read as when the ``counts`` score is missing or
+incomplete: unknown, never zero."""
 
 
 def mention_counts(pattern: str | None, agent: str, posts: list[dict]) -> dict:
@@ -129,9 +130,12 @@ def mention_counts(pattern: str | None, agent: str, posts: list[dict]) -> dict:
 
 
 def mention_fields(pattern: str | None, counted: dict, answers: dict[str, str]) -> dict:
-    """``counted`` plus the free-text answers, each marked with whether it uses the name."""
+    """``counted`` plus the free-text answers, each marked with whether it uses the name.
+
+    ``spontaneous`` is None when the agent's own mentions are unknown."""
     free = {label: {"answer": text, "uses": bool(count_mentions(pattern, [text])[0])}
             for label, text in answers.items()}
-    spontaneous = (any(a["uses"] for label, a in free.items() if label != "recall")
-                   or counted["own_mentions"] > 0)
+    own = counted["own_mentions"]
+    spontaneous = None if own is None else (
+        any(a["uses"] for label, a in free.items() if label != "recall") or own > 0)
     return {**copy.deepcopy(counted), "free_probes": free, "spontaneous": spontaneous}

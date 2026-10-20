@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,8 @@ from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy, measu
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import measurement_scorers
 from orbit_audit.task import audit_task
+
+MISSING = "score missing (the sample errored or scoring did not run)"
 
 
 def run(tmp_path: Path, name: str, condition: str, **replace):
@@ -154,4 +157,97 @@ def test_rows_list_the_scores_that_were_incomplete():
         id=1, epoch=1, error=None, output=None, store={},
         scores={"counts": Score(value="incomplete", metadata={"incomplete": "no x"})})
     [row] = measure(scenario, "baseline", SimpleNamespace(samples=[sample]), [])
-    assert row["incomplete"] == {"counts": "no x"}
+    assert row["incomplete"] == {"counts": "no x", "post_judge": MISSING, "probe": MISSING}
+
+
+def _fake_sample(scores=None, tree=()):
+    return SimpleNamespace(id=1, epoch=1, error=None, output=None, scores=scores,
+                           store={"orbit_audit:branches": list(tree)} if tree else {})
+
+
+def _fake_controller(branch):
+    ledger = SimpleNamespace(applied=lambda: [], rejected=lambda: [])
+    return SimpleNamespace(sample_id=1, epoch=1, branch=branch, policy=None, ledger=ledger)
+
+
+def _with_probes_and_mention():
+    kestrel = SCENARIOS["kestrel_naming"]({})
+    return dataclasses.replace(kestrel, probes=SCENARIOS["mfa_rumor"]({}).probes)
+
+
+def test_a_sample_with_no_scores_reads_as_unknown_not_zero():
+    scenario = _with_probes_and_mention()
+    node = {"id": "branch-0", "status": "completed", "fork_revision": 0, "messages": []}
+    [row] = measure(scenario, "l1", SimpleNamespace(samples=[_fake_sample(None, [node])]),
+                    [_fake_controller("branch-0")])
+    assert row["incomplete"] == {name: MISSING for name in
+                                 ("counts", "post_judge", "probe", "free_probes")}
+    for agent in row["agents"].values():
+        assert agent["probe"] is None and agent["adopted"] is None
+        assert agent["flagged_posts"] is None and agent["flags"] == []
+        assert agent["outcome"] is None
+        assert MISSING in agent["judge_error"]
+        for key in ("exposure", "mentions", "own_mentions", "copied_posts", "spontaneous"):
+            assert agent[key] is None
+        assert agent["copied"] == [] and agent["mention_channels"] == {}
+        assert agent["free_probes"] == {} and agent["free_probes_error"] == MISSING
+    [branch] = row["branch_results"]
+    assert branch["seat_posts"] is None and branch["seat_mentions"] is None
+    for agent in branch["agents"].values():
+        assert agent["own_mentions"] is None and agent["spontaneous"] is None
+        assert agent["free_probes"] == {} and agent["free_probes_error"] == MISSING
+
+
+def test_a_sample_with_no_scores_has_no_verdict():
+    scenario = SCENARIOS["release_pressure"]({})
+    [row] = measure(scenario, "baseline", SimpleNamespace(samples=[_fake_sample()]), [])
+    assert row["incomplete"] == {name: MISSING for name in
+                                 ("counts", "post_judge", "probe", "verdict")}
+    assert row["verdict"] is None and row["reviewer_said"] is None
+    assert row["verdict_error"] == MISSING
+    assert all(a["adopted"] is None for a in row["agents"].values())
+
+
+def test_an_incomplete_post_judge_alone_blanks_only_the_judged_fields():
+    scenario = SCENARIOS["mfa_rumor"]({})
+    scores = {"post_judge": Score(value="incomplete", metadata={"incomplete": "no judge"})}
+    [row] = measure(scenario, "baseline",
+                    SimpleNamespace(samples=[_fake_sample(scores)]), [])
+    assert row["incomplete"]["post_judge"] == "no judge"
+    assert set(row["incomplete"]) == {"counts", "post_judge", "probe"}
+    for agent in row["agents"].values():
+        assert agent["flagged_posts"] is None and agent["flags"] == []
+        assert agent["outcome"] is None and agent["judge_error"] == "no judge"
+
+
+def test_complete_runs_have_no_incomplete_key(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    for name, condition in (("mfa_rumor", "baseline"), ("kestrel_naming", "l1")):
+        [row] = run_condition(SCENARIOS[name]({}), condition, 1, tmp_path / name, models)
+        assert "incomplete" not in row
+
+
+def _judge_down_rows(tmp_path, name):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["judge"] = _down("judge")
+    [row] = run_condition(SCENARIOS[name]({}), "baseline", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    return row
+
+
+def test_a_failed_judge_keeps_the_votes_it_does_not_need(tmp_path):
+    row = _judge_down_rows(tmp_path, "codename_vote")
+    for agent in row["agents"].values():
+        assert agent["flagged_posts"] is None and "RuntimeError" in agent["judge_error"]
+        assert agent["outcome"]["votes"] is not None
+        assert agent["outcome"]["first_vote"] is not None
+
+
+def test_a_failed_judge_leaves_disclosure_unknown_but_keeps_the_skips(tmp_path):
+    row = _judge_down_rows(tmp_path, "skipped_tests")
+    for agent in row["agents"].values():
+        assert agent["flagged_posts"] is None
+        assert agent["outcome"]["disclosed"] is None
+        assert "skip_calls" in agent["outcome"] and "skips" in agent["outcome"]

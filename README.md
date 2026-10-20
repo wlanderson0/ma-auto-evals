@@ -76,14 +76,28 @@ ones that apply to it). A saved log can be rescored with other models without
 re-running the agents:
 
 ```python
+import asyncio
+
 from inspect_ai import score_async
+from inspect_ai.log import read_eval_log, write_eval_log
+
+from experiments.run import TARGETS
+from experiments.scenarios import SCENARIOS
 from experiments.scorers import measurement_scorers
 
-# in an async context (a notebook, or inside asyncio.run); `log` is the EvalLog read
-# from the saved .eval file and `scenario` the scenario that produced it
-await score_async(log, measurement_scorers(scenario, "l1"),
-                  model_roles={"judge": "openrouter/openai/gpt-4.1"}, action="overwrite")
+name, condition = "mfa_rumor", "l1"  # the scenario and the condition the log was run with
+log = read_eval_log("logs/live/<run>/mfa_rumor/l1/<log>.eval")
+scenario = SCENARIOS[name](TARGETS[name])  # the same target models as the run
+rescored = asyncio.run(score_async(
+    log, measurement_scorers(scenario, condition),
+    model_roles={"judge": "openrouter/openai/gpt-4.1"}, action="overwrite"))
+write_eval_log(rescored, "rescored.eval")  # score_async returns a new log; it does not save one
 ```
+
+Pass the same condition the log was run with: it decides which branches are counted.
+Belief and free probes go to each agent's own model (the `probe` role is used only
+for agents that have none), so build the scenario with the run's target models as
+above. `inspect score` cannot do this: it cannot rebuild the per-scenario scorers.
 
 ## Working on Orbit and orbit_audit together
 

@@ -41,7 +41,7 @@ from orbit.ids import id_scope, sequential_ids
 
 from experiments.measures import (  # noqa: F401  (re-exported: tests and reverdict import from here)
     COPY_THRESHOLD,
-    EMPTY_COUNTS,
+    UNKNOWN_COUNTS,
     copied_share,
     count_mentions,
     free_probe,
@@ -53,7 +53,7 @@ from experiments.measures import (  # noqa: F401  (re-exported: tests and reverd
     reviewer_said,
 )
 from experiments.scenarios import SCENARIOS, Scenario
-from experiments.scorers import measurement_scorers
+from experiments.scorers import expected_scores, measurement_scorers
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.auditor.llm import final_boundary
 from orbit_audit.boundaries import Boundary
@@ -188,7 +188,7 @@ def _fresh(model: str | Model) -> Model:
     return get_model(model, memoize=False) if isinstance(model, str) else model
 
 
-MEASUREMENT_SCORES = ("counts", "post_judge", "probe", "free_probes", "verdict")
+MISSING_SCORE = "score missing (the sample errored or scoring did not run)"
 
 
 def _scored(sample: EvalSample, name: str) -> dict[str, Any]:
@@ -198,11 +198,16 @@ def _scored(sample: EvalSample, name: str) -> dict[str, Any]:
     return {} if "incomplete" in meta else meta
 
 
-def _incomplete(sample: EvalSample) -> dict[str, str]:
-    """Why each measurement score could not be made, by score name."""
+def _incomplete(sample: EvalSample, expected: tuple[str, ...]) -> dict[str, str]:
+    """Why each expected score could not be made, by score name (missing counts too)."""
     scores = sample.scores or {}
-    return {name: scores[name].metadata["incomplete"] for name in MEASUREMENT_SCORES
-            if name in scores and "incomplete" in (scores[name].metadata or {})}
+    reasons = {}
+    for name in expected:
+        if name not in scores:
+            reasons[name] = MISSING_SCORE
+        elif "incomplete" in (scores[name].metadata or {}):
+            reasons[name] = scores[name].metadata["incomplete"]
+    return reasons
 
 
 def measure(scenario: Scenario, condition: str, log: EvalLog,
@@ -214,6 +219,7 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
                 if (c.sample_id, c.epoch) == (sample.id, sample.epoch)]
         tree = sample.store.get(BRANCHES_KEY, [])
         posts = list(sample.store.get("CommunicationState:messages", []))
+        unknown = _incomplete(sample, expected_scores(scenario))
         counts, judged = _scored(sample, "counts"), _scored(sample, "post_judge")
         probed, freed = _scored(sample, "probe"), _scored(sample, "free_probes")
         decided = _scored(sample, "verdict")
@@ -238,16 +244,17 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
                 "flagged_posts": sum(flags), "flags": flags,
                 "outcome": judgement.get("outcome"),
             }
-            if spec and made.get("why"):  # the probe could not be made: not "did not adopt"
-                row["agents"][agent].update(adopted=None, probe_error=made["why"])
-            if judgement.get("why"):  # the judge could not be reached for this agent
-                row["agents"][agent].update(flagged_posts=None, judge_error=judgement["why"])
+            # A measurement that could not be made reads as unknown, not as zero or False.
+            if spec and (why := made.get("why") or unknown.get("probe")):
+                row["agents"][agent].update(adopted=None, probe_error=why)
+            if why := judgement.get("why") or unknown.get("post_judge"):
+                row["agents"][agent].update(flagged_posts=None, judge_error=why)
             if scenario.mention is not None:
                 row["agents"][agent].update(mention_fields(
-                    scenario.mention, counted.get(agent, EMPTY_COUNTS),
+                    scenario.mention, counted.get(agent, UNKNOWN_COUNTS),
                     answered.get(agent, {}).get("answers", {})))
-                if answered.get(agent, {}).get("why"):
-                    row["agents"][agent]["free_probes_error"] = answered[agent]["why"]
+                if why := answered.get(agent, {}).get("why") or unknown.get("free_probes"):
+                    row["agents"][agent]["free_probes_error"] = why
         policy = mine[0].policy if mine else None
         if scenario.mention is not None and condition == "l1":
             row["branch_results"] = []
@@ -259,16 +266,16 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
                 result = {
                     "branch": node["id"], "status": node["status"],
                     "fork_revision": node["fork_revision"],
-                    "seat_posts": entry.get("seat_posts", []),
-                    "seat_mentions": entry.get("seat_mentions", 0),
+                    "seat_posts": entry.get("seat_posts"),
+                    "seat_mentions": entry.get("seat_mentions"),
                     "agents": {agent: mention_fields(
-                        scenario.mention, entry.get("agents", {}).get(agent, EMPTY_COUNTS),
+                        scenario.mention, entry.get("agents", {}).get(agent, UNKNOWN_COUNTS),
                         free_agents.get(agent, {}).get("answers", {}))
                         for agent in scenario.targets},
                 }
                 for agent in scenario.targets:
-                    if free_agents.get(agent, {}).get("why"):
-                        result["agents"][agent]["free_probes_error"] = free_agents[agent]["why"]
+                    if why := free_agents.get(agent, {}).get("why") or unknown.get("free_probes"):
+                        result["agents"][agent]["free_probes_error"] = why
                 if scenario.plan_check is not None:
                     result["plan"] = entry.get("plan")
                 row["branch_results"].append(result)
@@ -279,8 +286,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         if scenario.name == "release_pressure":
             row["verdict"] = decided.get("verdict")
             row["reviewer_said"] = decided.get("reviewer_said")
-            if decided.get("why"):
-                row["verdict_error"] = decided["why"]
+            if why := decided.get("why") or unknown.get("verdict"):
+                row["verdict_error"] = why
         applied = [r for c in mine for r in c.ledger.applied() if not r.replayed]
         rejected = [r for c in mine for r in c.ledger.rejected() if not r.replayed]
         row["interventions"] = {
@@ -302,8 +309,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
             "refused": [{"branch": t["branch"], "revision": t["revision"], **r}
                         for t in turns for r in t.get("refused", [])],
         }
-        if reasons := _incomplete(sample):
-            row["incomplete"] = reasons
+        if unknown:
+            row["incomplete"] = unknown
         rows.append(row)
     return rows
 
