@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 from orbit_audit.controller import GenerationTrace
@@ -83,8 +84,9 @@ def test_a_last_generation_the_auditor_wrote_has_no_event_and_says_why():
     result = align_requests(
         branch="branch-0", parent=None, generations=[live("alice", 0), written("alice", 1)],
         calls=[ModelCall("a0", "alice", "branch-0")])
-    stored = stored_requests(result)["alice"]
-    assert stored["event"] is None and stored["via"] is None and stored["why"]
+    assert stored_requests(result)["alice"] == {
+        "event": None, "via": None,
+        "why": "the agent's last generation has no model event of its own"}
 
 
 def test_a_count_mismatch_is_reported_not_guessed():
@@ -94,6 +96,24 @@ def test_a_count_mismatch_is_reported_not_guessed():
     assert result.lists["bob"] == [None, None]
     stored = stored_requests(result)["bob"]
     assert stored["event"] is None and "2 live generation" in stored["why"]
+
+
+def test_more_events_than_live_generations_is_reported_not_guessed():
+    result = align_requests(
+        branch="branch-0", parent=None, generations=[live("bob", 0)],
+        calls=[ModelCall("e0", "bob", "branch-0"), ModelCall("e1", "bob", "branch-0")])
+    assert result.lists["bob"] == [None]
+    stored = stored_requests(result)["bob"]
+    assert stored["event"] is None
+    assert stored["why"] == "1 live generation(s) but 2 model event(s) in branch-0"
+
+
+def test_a_parent_list_shorter_than_the_replayed_index_is_unknown():
+    parent = {"bob": [("p0", "branch-0")]}
+    result = align_requests(
+        branch="branch-1", parent=parent,
+        generations=[replayed("bob", 0), replayed("bob", 1)], calls=[])
+    assert result.lists["bob"] == [("p0", "branch-0"), None]
 
 
 def test_a_replayed_generation_with_no_parent_record_is_unknown():
@@ -146,14 +166,25 @@ def test_a_branch_without_a_runtime_records_unknown_authors():
     assert recorder.payload()["branches"]["branch-0"]["authors"] is None
 
 
-def test_a_failing_authors_call_is_recorded_not_raised():
+def test_a_failing_authors_call_is_recorded_and_logged_not_raised(caplog):
     def boom():
         raise KeyError("m9")
 
     recorder = MeasurementRecorder()
-    recorder.record(fake("branch-0", [], authors=boom), None, [])
+    with caplog.at_level(logging.WARNING, logger="orbit_audit.measurements"):
+        recorder.record(fake("branch-0", [], authors=boom), None, [])
     record = recorder.payload()["branches"]["branch-0"]
     assert record["authors"] is None and "KeyError" in record["authors_error"]
+    assert any("branch-0" in r.getMessage() and r.levelno == logging.WARNING
+               for r in caplog.records)
+
+
+def test_a_working_authors_call_leaves_no_error_and_no_warning(caplog):
+    recorder = MeasurementRecorder()
+    with caplog.at_level(logging.WARNING, logger="orbit_audit.measurements"):
+        recorder.record(fake("branch-0", [], authors=lambda: {"m1": "agent:bob"}), None, [])
+    assert "authors_error" not in recorder.payload()["branches"]["branch-0"]
+    assert not caplog.records
 
 
 def test_a_failing_record_is_noted_and_the_sample_goes_on():

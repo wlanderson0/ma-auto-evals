@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from inspect_ai.event import Event
+from inspect_ai.event import Event, SpanBeginEvent
 
 from orbit_audit.timeline import AUDITOR_SPAN
 
@@ -65,13 +65,13 @@ def target_model_calls(events: Sequence[Event]) -> list[ModelCall]:
     """
     spans = {e.id: e for e in events if e.event == "span_begin"}
 
-    def around(span_id: str | None):
+    def around(span_id: str | None) -> Iterator[SpanBeginEvent]:
         while span_id in spans:
             span = spans[span_id]
             yield span
             span_id = span.parent_id
 
-    calls = []
+    calls: list[ModelCall] = []
     for event in events:
         if event.event != "model" or event.pending or event.error or event.uuid is None:
             continue
