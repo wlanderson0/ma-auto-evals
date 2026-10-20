@@ -69,6 +69,7 @@ Scripted mock models only; a baseline `mfa_rumor`, an L0 `mfa_rumor`, and L1
 
 ### Placement
 
+- `src/orbit_audit/controller.py`: `GenerationTrace.replayed`.
 - `src/orbit_audit/measurements.py` (new): collects each branch's record and
   holds the resolution rule. Stateless functions plus a small recorder the
   runner owns.
@@ -116,26 +117,30 @@ orbit_audit:measurements = {
 
 ### Resolving an agent's final request
 
-At the end of branch B, for each agent A with generations in B:
+`GenerationTrace` gains `replayed: bool` (set from `controller.replaying(view)`
+when the generation is traced; `exposed` already says whether a model ran).
+Each generation is then one of three kinds, and only the third has a
+`ModelEvent` in its own branch:
 
-1. Candidates: target `ModelEvent`s in `transcript().events` whose span chain
-   has `agent:A` and `branch:B` and no `orbit_audit.auditor` span, in order.
-2. If there is at least one, the last is A's final request; `via` is B.
-3. Otherwise (all A's generations in B were replayed) use B's parent's
-   resolved entry for A; `via` is that branch. The parent finished first, so it
-   is already resolved. Replay reproduces the parent's request (R7).
-4. If neither exists, `event` is `null` with a `why`.
+- **replayed** (`replayed`): re-executed from the parent's recording. Its
+  request is the parent's entry for the same agent and generation index.
+- **auditor-written** (`not exposed`): replaced or forced by the auditor; no
+  model ran, so there is no entry (`null`).
+- **live** (`exposed and not replayed`): matched, in order, to the target
+  `ModelEvent`s in `transcript().events` whose span chain has `agent:A` and
+  `branch:B` and no `orbit_audit.auditor` span.
 
-The rule lives in one function and is tested on its own.
+At the end of branch B the recorder builds, per agent A, one entry per
+generation: `(event uuid, branch that owns it)` or `null`. If the number of live
+generations differs from the number of matching events, A's live entries are
+`null` and the problem is recorded (never guessed). The stored `requests[A]` is
+the last entry, with `via` the owning branch; a `null` last entry stores
+`event: null` and a `why`. The parent's lists are kept in memory by the
+recorder (the parent always finishes before its child).
 
-Step 3 is refined so a child that ends with all of A's generations replayed
-still points at the right generation. The recorder keeps, per branch and agent,
-one entry per generation: `(event uuid, branch that owns it)`. In a child with
-`n` generations of A and `k` live events, the first `n - k` entries (the
-replayed prefix) are copied from the parent's list at the same indices and the
-last `k` are the live events. The stored `requests[A]` is the last entry. This
-differs from "the parent's final entry" when the child ends before reaching the
-parent's last generation of A.
+The rule lives in a pure function and is tested on its own. It replaces the
+earlier "first n−k entries are replayed" idea, which misaligns an agent that has
+both replaced and live generations in the same branch.
 
 ### Scorers
 
