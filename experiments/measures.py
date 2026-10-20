@@ -6,7 +6,9 @@ them. ``run.py`` re-exports everything here.
 
 from __future__ import annotations
 
+import copy
 import re
+from collections import Counter
 
 from inspect_ai.model import ChatMessageUser, GenerateConfig, Model
 
@@ -93,3 +95,43 @@ async def free_probe(model: Model, context: list, question: str) -> str:
     output = await model.generate([*context, ChatMessageUser(content=question)],
                                   tools=[], config=GenerateConfig(max_tokens=100))
     return output.completion.strip()
+
+
+EMPTY_COUNTS = {"exposure": 0, "mentions": 0, "own_mentions": 0, "copied_posts": 0,
+                "copied": [], "mention_channels": {}}
+"""What a target's mention counts read as when the ``counts`` score is missing."""
+
+
+def mention_counts(pattern: str | None, agent: str, posts: list[dict]) -> dict:
+    """The model-free mention measurements for one target in one branch's posts.
+
+    - ``exposure``: posts by others delivered to the agent that use the name.
+    - ``mentions``: raw uses in its own posts; ``own_mentions``: the same,
+      excluding posts that copy an earlier post by another agent.
+    """
+    exposure = sum(1 for m in posts if m["sender"] != agent
+                   and agent in (m.get("recipients") or [])
+                   and count_mentions(pattern, [m["content"]])[0])
+    copied, raw, original, channels = [], 0, 0, Counter()
+    for i, m in enumerate(posts):
+        if m["sender"] != agent:
+            continue
+        earlier = [o["content"] for o in posts[:i] if o["sender"] != agent]
+        share = copied_share(m["content"], earlier)
+        hits = count_mentions(pattern, [m["content"]])[0]
+        copied.append(share >= COPY_THRESHOLD)
+        raw += hits
+        if hits and share < COPY_THRESHOLD:
+            original += hits
+            channels[m["channel_id"]] += 1
+    return {"exposure": exposure, "mentions": raw, "own_mentions": original,
+            "copied_posts": sum(copied), "copied": copied, "mention_channels": dict(channels)}
+
+
+def mention_fields(pattern: str | None, counted: dict, answers: dict[str, str]) -> dict:
+    """``counted`` plus the free-text answers, each marked with whether it uses the name."""
+    free = {label: {"answer": text, "uses": bool(count_mentions(pattern, [text])[0])}
+            for label, text in answers.items()}
+    spontaneous = (any(a["uses"] for label, a in free.items() if label != "recall")
+                   or counted["own_mentions"] > 0)
+    return {**copy.deepcopy(counted), "free_probes": free, "spontaneous": spontaneous}
