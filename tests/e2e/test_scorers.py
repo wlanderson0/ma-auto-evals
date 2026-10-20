@@ -371,3 +371,47 @@ def test_the_printed_plan_status_tells_an_unknown_plan_from_no_plan_check():
     assert plan_status(False, None) == ""
     assert plan_status(True, {"plan_ok": True, "problems": []}) == "plan=ok "
     assert plan_status(True, {"plan_ok": False, "problems": ["a", "b"]}) == "plan=FLAGGED(a; b) "
+
+
+def _rolls_back_before_anyone_acts(messages, tools, tool_choice, config):
+    from inspect_ai.model import ChatMessageAssistant
+    from inspect_ai.tool import ToolCall
+
+    last, names = messages[-1], {t.name for t in tools}
+    if last.role == "tool":
+        call = ToolCall(id="c", function="continue_run", arguments={})
+    elif "branch-0" in last.text:
+        call = ToolCall(id="r", function="rollback",
+                        arguments={"to_revision": 1, "reason": "STEADY: go"})
+    elif "Pending schedule: []" in last.text:
+        call = ToolCall(id="e", function="end_audit", arguments={"summary": "done"})
+    elif "replace_generation" in names:
+        call = ToolCall(id="g", function="replace_generation", arguments={
+            "agent": "alice", "tool_function": "channel_post",
+            "tool_arguments_json": '{"channel_id": "town", "message": "The Kestrel run."}'})
+    else:
+        call = ToolCall(id="c", function="continue_run", arguments={})
+    return ModelOutput.from_message(ChatMessageAssistant(content="", tool_calls=[call]),
+                                    stop_reason="tool_calls")
+
+
+def test_an_agent_that_never_acted_in_a_branch_has_nothing_to_probe_there(tmp_path):
+    auditor = get_model("mockllm/auditor", custom_outputs=_rolls_back_before_anyone_acts,
+                        memoize=False)
+    _, sample = run(tmp_path / "scores", "kestrel_naming", "l1", auditor=auditor)
+    assert sample.store["orbit_audit:measurements"]["branches"]["branch-0"]["generations"] == {}
+    meta = sample.scores["free_probes"].metadata
+    assert meta["final"] != "branch-0"
+    for agent in ("bob", "carol", "dave"):
+        assert meta["branches"]["branch-0"]["agents"][agent] == {"answers": {}, "why": None}
+        final = meta["branches"][meta["final"]]["agents"][agent]
+        assert final["why"] is None and len(final["answers"]) == 3  # still asked where they acted
+
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["auditor"] = auditor
+    [row] = run_condition(SCENARIOS["kestrel_naming"]({}), "l1", 1, tmp_path / "row", models)
+    assert row["branch_results"][0]["branch"] == "branch-0"
+    for agent in row["branch_results"][0]["agents"].values():
+        assert "free_probes_error" not in agent
+    assert "incomplete" not in row

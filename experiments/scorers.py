@@ -265,6 +265,11 @@ def free_probes_scorer(scenario: Scenario, condition: str) -> Scorer:
             for branch in view.covered(every_branch):
                 agents: dict[str, Any] = {}
                 for agent in scenario.targets:
+                    if branch.recorded and not branch.generations.get(agent, 0):
+                        # recorded as never acting here: nothing to ask (an unusable record
+                        # is not that, and falls through to "no recorded request")
+                        agents[agent] = {"answers": {}, "why": None}
+                        continue
                     context, why = context_for(branch.requests.get(agent), events)
                     answers: dict[str, str] = {}
                     if context is not None:
