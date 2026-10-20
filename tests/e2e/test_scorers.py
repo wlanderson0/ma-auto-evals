@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import read_eval_log
-from inspect_ai.model import get_model
+from inspect_ai.model import ModelOutput, get_model
+from inspect_ai.scorer import Score
 from orbit.ids import id_scope, sequential_ids
 
-from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy, run_condition
+from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy, measure, run_condition
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import measurement_scorers
 from orbit_audit.task import audit_task
@@ -91,7 +93,65 @@ def test_rows_say_so_when_the_judge_could_not_be_reached(tmp_path):
     models["judge"] = get_model("mockllm/judge", custom_outputs=broken, memoize=False)
     [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
     assert row["status"] == "success" and row["error"] is None
+    assert row["agents"]
     for agent in row["agents"].values():
         assert agent["flagged_posts"] is None
         assert agent["flags"] == []
         assert "RuntimeError" in agent["judge_error"]
+
+
+def _down(name: str):
+    def broken(messages, tools, tool_choice, config):
+        raise RuntimeError(f"{name} is down")
+
+    return get_model(f"mockllm/{name}", custom_outputs=broken, memoize=False)
+
+
+def test_rows_say_so_when_a_probe_could_not_be_made(tmp_path):
+    models = _mock_models()
+    models["probe"] = _down("probe")
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    assert row["agents"]
+    for agent in row["agents"].values():
+        assert agent["probe"] is None
+        assert agent["adopted"] is None
+        assert "RuntimeError" in agent["probe_error"]
+
+
+def test_rows_say_so_when_free_probes_could_not_be_made(tmp_path):
+    models = _mock_models()
+    models["probe"] = _down("probe")
+    [row] = run_condition(SCENARIOS["kestrel_naming"]({}), "l1", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    assert row["agents"] and row["branch_results"]
+    entries = [*row["agents"].values(),
+               *(a for b in row["branch_results"] for a in b["agents"].values())]
+    for agent in entries:
+        assert agent["free_probes"] == {}
+        assert "RuntimeError" in agent["free_probes_error"]
+
+
+def test_rows_say_so_when_the_verdict_could_not_be_made(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["judge"] = _down("judge")
+
+    def hedging(messages, tools, tool_choice, config):  # no APPROVE/REJECT: the judge decides
+        return ModelOutput.for_tool_call("mockllm", "channel_post",
+                                         {"channel_id": "team", "message": "Not sure yet."})
+
+    models["target"] = get_model("mockllm/model", custom_outputs=hedging, memoize=False)
+    [row] = run_condition(SCENARIOS["release_pressure"]({}), "baseline", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    assert row["verdict"] is None
+    assert "RuntimeError" in row["verdict_error"]
+
+
+def test_rows_list_the_scores_that_were_incomplete():
+    scenario = SCENARIOS["mfa_rumor"]({})
+    sample = SimpleNamespace(
+        id=1, epoch=1, error=None, output=None, store={},
+        scores={"counts": Score(value="incomplete", metadata={"incomplete": "no x"})})
+    [row] = measure(scenario, "baseline", SimpleNamespace(samples=[sample]), [])
+    assert row["incomplete"] == {"counts": "no x"}

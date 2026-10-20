@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from inspect_ai import eval as inspect_eval
-from inspect_ai.log import EvalLog
+from inspect_ai.log import EvalLog, EvalSample
 from inspect_ai.model import Model, ModelOutput, get_model
 from orbit.ids import id_scope, sequential_ids
 
@@ -185,11 +185,21 @@ def _fresh(model: str | Model) -> Model:
     return get_model(model, memoize=False) if isinstance(model, str) else model
 
 
-def _scored(sample, name: str) -> dict[str, Any]:
+MEASUREMENT_SCORES = ("counts", "post_judge", "probe", "free_probes", "verdict")
+
+
+def _scored(sample: EvalSample, name: str) -> dict[str, Any]:
     """The metadata of one measurement score ({} when missing or incomplete)."""
     score = (sample.scores or {}).get(name)
     meta = dict(score.metadata or {}) if score is not None else {}
     return {} if "incomplete" in meta else meta
+
+
+def _incomplete(sample: EvalSample) -> dict[str, str]:
+    """Why each measurement score could not be made, by score name."""
+    scores = sample.scores or {}
+    return {name: scores[name].metadata["incomplete"] for name in MEASUREMENT_SCORES
+            if name in scores and "incomplete" in (scores[name].metadata or {})}
 
 
 def measure(scenario: Scenario, condition: str, log: EvalLog,
@@ -215,7 +225,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         }
         for agent in scenario.targets:
             spec = scenario.probes.get(agent)
-            answer = probed.get("agents", {}).get(agent, {}).get("answer")
+            made = probed.get("agents", {}).get(agent, {})
+            answer = made.get("answer")
             judgement = judged.get("agents", {}).get(agent, {})
             flags = judgement.get("flags") or []
             row["agents"][agent] = {
@@ -224,12 +235,16 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
                 "flagged_posts": sum(flags), "flags": flags,
                 "outcome": judgement.get("outcome"),
             }
+            if spec and made.get("why"):  # the probe could not be made: not "did not adopt"
+                row["agents"][agent].update(adopted=None, probe_error=made["why"])
             if judgement.get("why"):  # the judge could not be reached for this agent
                 row["agents"][agent].update(flagged_posts=None, judge_error=judgement["why"])
             if scenario.mention is not None:
                 row["agents"][agent].update(mention_fields(
                     scenario.mention, counted.get(agent, EMPTY_COUNTS),
                     answered.get(agent, {}).get("answers", {})))
+                if answered.get(agent, {}).get("why"):
+                    row["agents"][agent]["free_probes_error"] = answered[agent]["why"]
         policy = mine[0].policy if mine else None
         if scenario.mention is not None and condition == "l1":
             row["branch_results"] = []
@@ -248,6 +263,9 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
                         free_agents.get(agent, {}).get("answers", {}))
                         for agent in scenario.targets},
                 }
+                for agent in scenario.targets:
+                    if free_agents.get(agent, {}).get("why"):
+                        result["agents"][agent]["free_probes_error"] = free_agents[agent]["why"]
                 if scenario.plan_check is not None:
                     result["plan"] = entry.get("plan")
                 row["branch_results"].append(result)
@@ -258,6 +276,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         if scenario.name == "release_pressure":
             row["verdict"] = decided.get("verdict")
             row["reviewer_said"] = decided.get("reviewer_said")
+            if decided.get("why"):
+                row["verdict_error"] = decided["why"]
         applied = [r for c in mine for r in c.ledger.applied() if not r.replayed]
         rejected = [r for c in mine for r in c.ledger.rejected() if not r.replayed]
         row["interventions"] = {
@@ -279,6 +299,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
             "refused": [{"branch": t["branch"], "revision": t["revision"], **r}
                         for t in turns for r in t.get("refused", [])],
         }
+        if reasons := _incomplete(sample):
+            row["incomplete"] = reasons
         rows.append(row)
     return rows
 
