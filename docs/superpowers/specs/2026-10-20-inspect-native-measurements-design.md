@@ -177,9 +177,14 @@ no longer needed for judge and probe calls.
 - Verified against mock models only. A live run (OpenRouter) is a follow-up
   for the person with the key.
 - `edit_generation` is untested for the resolution rule; the plan adds a case.
-- Whether Inspect keeps a custom scorer list together with Orbit defaults is
-  not checked; no scenario sets `scorer` today, so the plan verifies what the
-  task scores with and without.
+- Checked with a throwaway mock run: with no `scorer` a sample has no scores
+  (Orbit adds no defaults); with a custom list it carries exactly those
+  scores. A dict `Score` with string values and metadata is stored and read
+  back, and `get_model(role="judge")` resolves inside a scorer when
+  `model_roles` is passed to `inspect_eval`. Scorers declare `@scorer(metrics=[])`,
+  so `log.results.scores` is empty: there is no aggregate row, only per-sample
+  scores. How the viewer shows those is unchecked; a numeric metric (e.g. share
+  of targets adopting) is a possible follow-up.
 - Inspect's role-resolution under `inspect score` was read in source
   (`_eval/score.py`), not run with a custom scorer; the rescoring test covers it.
 - Reading `transcript().events` once per branch is a scan of the whole
