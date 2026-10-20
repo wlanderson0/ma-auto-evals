@@ -99,6 +99,14 @@ Belief and free probes go to each agent's own model (the `probe` role is used on
 for agents that have none), so build the scenario with the run's target models as
 above. `inspect score` cannot do this: it cannot rebuild the per-scenario scorers.
 
+Scoring runs inside the sample, under half the scenario's `time_limit` (450 s of 900 s),
+and a timeout during scoring errors the sample; scorers that had already finished keep
+their scores and the rest read as missing (`incomplete` in the row). The L1 mention
+scenarios make many sequential probe calls per branch, so on slow models they are the
+ones that can hit it. If a live run's scores are missing for that reason, rescore the
+saved log later with `score_async` as above (rescoring applies no sample time limit). Samples
+that error are still scored, from the store the runner left.
+
 ## Working on Orbit and orbit_audit together
 
 Clone the fork next to this repo and install it editable over the pinned copy:

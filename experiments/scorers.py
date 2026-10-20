@@ -6,6 +6,11 @@ the agent's own model (role ``probe`` when the agent has none), so a saved log
 can be rescored with other models. Every scorer reads the store record the runner
 writes (``orbit_audit:measurements``) and returns an incomplete score, never a
 failure or a zero, when something it needs is missing.
+
+Inside a run, scoring is bounded by half the sample's ``time_limit``; a timeout there
+errors the sample (scorers that already finished keep their scores, the rest are
+missing). Many sequential probe calls in the L1 mention scenarios can hit it, so
+rescore the saved log later with ``score_async``, which has no such limit.
 """
 
 from __future__ import annotations
@@ -109,6 +114,9 @@ def incomplete(reason: str) -> Score:
 
 async def attempt(call: Awaitable[Any]) -> tuple[Any, str | None]:
     """Await ``call``; a failed model call is a reason, not an error.
+
+    A sample limit (time, tokens, ...) is not a measurement failure: it is re-raised so
+    Inspect applies it to the sample, while any other exception becomes a reason.
     """
     try:
         return await call, None
