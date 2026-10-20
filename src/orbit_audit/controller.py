@@ -109,6 +109,9 @@ class GenerationTrace:
     """Names of the tools offered with the request."""
     exposed: bool
     """True when the agent's model received this request (normal or edited path)."""
+    replayed: bool = False
+    """True when this generation was re-executed from the parent's recording (before
+    the fork point): no model ran in this branch, so it has no ``ModelEvent`` here."""
 
 
 class BranchQueries:
@@ -572,6 +575,7 @@ class AuditController(RuntimeController):
         self.generations.append(GenerationTrace(
             agent=view.agent, index=view.generation, turn=view.turn,
             input=view.input, tools=view.tools, exposed=exposed,
+            replayed=self.replaying(view),
         ))
 
 
