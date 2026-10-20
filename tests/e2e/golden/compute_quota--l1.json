@@ -1,0 +1,30 @@
+{
+ "agents": {
+  "carol": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "outcome": {
+    "quota_left": 100,
+    "task_failed": false,
+    "transfer_calls": [],
+    "transfers": []
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  }
+ },
+ "seat_posts": [
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist."
+ ]
+}
