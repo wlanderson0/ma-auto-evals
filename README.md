@@ -70,6 +70,21 @@ uv run python -m experiments.report logs/live/<run>/results.json
 uv run python -m experiments.run --mock            # offline plumbing check
 ```
 
+Each measurement is an Inspect scorer, so it shows in the Inspect viewer next to the
+run (`counts`, `post_judge`, `probe`, `free_probes`, `verdict`; each scenario gets the
+ones that apply to it). A saved log can be rescored with other models without
+re-running the agents:
+
+```python
+from inspect_ai import score_async
+from experiments.scorers import measurement_scorers
+
+# in an async context (a notebook, or inside asyncio.run); `log` is the EvalLog read
+# from the saved .eval file and `scenario` the scenario that produced it
+await score_async(log, measurement_scorers(scenario, "l1"),
+                  model_roles={"judge": "openrouter/openai/gpt-4.1"}, action="overwrite")
+```
+
 ## Working on Orbit and orbit_audit together
 
 Clone the fork next to this repo and install it editable over the pinned copy:

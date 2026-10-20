@@ -12,9 +12,12 @@ Offline plumbing check with scripted mock models (no network, no cost)::
 Each scenario runs under three conditions: ``baseline`` (a passive audit,
 identical to a plain Orbit run), ``l1`` (the LLM auditor acting at runtime
 boundaries, with rollback) and ``l0`` (the auditor's model occupying the
-scenario's seat as a peer). After each sample, every target agent answers a
-private belief probe with its own model and final context, and a judge model
-classifies each of the target's own channel posts. Planted (auditor-authored)
+scenario's seat as a peer). The measurements are Inspect scorers
+(``experiments/scorers.py``): after the run, every target answers a private
+belief probe with its own model and recorded final request, a judge model
+classifies each target's own channel posts, and model-free counters measure
+mentions and copying. Scores are in the eval log and the Inspect viewer;
+``results.json`` is rebuilt from them. Planted (auditor-authored)
 content is never counted as target behaviour: only targets' canonical posts
 are judged (P3). Results go to ``<out>/results.json``; Inspect logs to
 ``<out>/<scenario>/<condition>/``.
