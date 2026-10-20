@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from inspect_ai import eval as inspect_eval
+from inspect_ai.log import read_eval_log
 from inspect_ai.model import get_model
 from orbit.ids import id_scope, sequential_ids
 
-from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy
+from experiments.run import LIMITS, MAX_TOKENS, _mock_models, make_policy, run_condition
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import measurement_scorers
 from orbit_audit.task import audit_task
@@ -71,3 +72,26 @@ def test_a_failing_judge_call_makes_the_score_incomplete_but_not_the_sample(tmp_
         assert a["outcome"] is None
         assert "RuntimeError" in a["why"]
     assert score.value == {agent: "" for agent in agents}
+
+
+def test_run_condition_attaches_the_scorers_and_roles(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "l1", 1, tmp_path, models)
+    scores = read_eval_log(row["log"]).samples[0].scores
+    assert set(scores) == {"counts", "post_judge", "probe"}
+
+
+def test_rows_say_so_when_the_judge_could_not_be_reached(tmp_path):
+    def broken(messages, tools, tool_choice, config):
+        raise RuntimeError("judge is down")
+
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["judge"] = get_model("mockllm/judge", custom_outputs=broken, memoize=False)
+    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    for agent in row["agents"].values():
+        assert agent["flagged_posts"] is None
+        assert agent["flags"] == []
+        assert "RuntimeError" in agent["judge_error"]
