@@ -17,7 +17,8 @@ private belief probe with its own model and final context, and a judge model
 classifies each of the target's own channel posts. Planted (auditor-authored)
 content is never counted as target behaviour: only targets' canonical posts
 are judged (P3). Results go to ``<out>/results.json``; Inspect logs to
-``<out>/<scenario>/<condition>/``.
+``<out>/<scenario>/<condition>/``; ``<out>/manifest.json`` records the git commit,
+PR, scenarios, conditions, epochs and models of the run (read by ``cosmos upload``).
 """
 
 from __future__ import annotations
@@ -27,9 +28,13 @@ import asyncio
 import copy
 import dataclasses
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -331,7 +336,7 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
         store = Store(sample.store) if scenario.outcome else None
         row: dict[str, Any] = {
             "scenario": scenario.name, "condition": condition, "epoch": sample.epoch,
-            "branches": tree, "budget": sample.store.get(BUDGET_KEY),
+            "seat": scenario.seat, "branches": tree, "budget": sample.store.get(BUDGET_KEY),
             "error": str(sample.error.message) if sample.error else None,
             "agents": {},
         }
@@ -421,6 +426,90 @@ async def measure(scenario: Scenario, condition: str, log: EvalLog,
     return rows
 
 
+# ------------------------------------------------------------------ manifest
+MANIFEST_SCHEMA = "cosmos.manifest/1"
+REPO = Path(__file__).resolve().parent.parent
+
+
+def _git(cwd: Path, *args: str) -> str | None:
+    """A git command's output, or None when git or the checkout is unavailable."""
+    try:
+        completed = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                                   errors="replace", timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip()
+
+
+def git_info(cwd: Path = REPO) -> dict[str, Any]:
+    """Commit, branch and dirty flag of the checkout at ``cwd``; nulls outside one."""
+    sha = _git(cwd, "rev-parse", "HEAD")
+    if not sha:
+        return {"sha": None, "short_sha": None, "branch": None, "dirty": None}
+    branch = _git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    status = _git(cwd, "status", "--porcelain")
+    return {"sha": sha, "short_sha": sha[:7],
+            "branch": branch if branch and branch != "HEAD" else None,  # None when detached
+            "dirty": None if status is None else bool(status)}
+
+
+def resolve_pr(flag: int | None) -> int | None:
+    """``--pr``, else ``$COSMOS_PR``, else ``$GITHUB_PR``."""
+    if flag is not None:
+        return flag
+    for name in ("COSMOS_PR", "GITHUB_PR"):
+        value = os.environ.get(name, "").strip()
+        if value.isdigit():
+            return int(value)
+    return None
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def redact_argv(argv: list[str], root: Path = REPO) -> list[str]:
+    """``argv`` without absolute local paths (they reveal user names and directory layout):
+    a path inside ``root`` becomes relative to it, any other keeps only its last part."""
+    def redact(value: str) -> str:
+        path = Path(value)
+        if not path.is_absolute():
+            return value
+        try:
+            return path.resolve().relative_to(root.resolve()).as_posix() or "."
+        except ValueError:
+            return f".../{path.name}"
+
+    redacted = []
+    for arg in argv:
+        flag, eq, value = arg.partition("=")
+        redacted.append(f"{flag}={redact(value)}" if arg.startswith("--") and eq else redact(arg))
+    return redacted
+
+
+def build_manifest(scenarios: dict[str, Scenario], conditions: list[str], epochs: int,
+                   models: dict[str, Any], *, pr: int | None, argv: list[str],
+                   cwd: Path = REPO) -> dict[str, Any]:
+    """What ``cosmos upload`` files a run under. ``models``: the model id per role,
+    and per scenario each agent's model (its own, else the default target); ``seats``:
+    the agent each scenario's auditor plays. ``argv`` has absolute paths redacted."""
+    roles: dict[str, Any] = {role: str(model) for role, model in models.items()}
+    roles["agents"] = {name: {spec.name: str(spec.model or models["target"])
+                              for spec in scenario.task["setup"].agents}
+                       for name, scenario in scenarios.items()}
+    return {"schema": MANIFEST_SCHEMA, **git_info(cwd), "pr": resolve_pr(pr),
+            "scenarios": list(scenarios), "conditions": list(conditions), "epochs": epochs,
+            "seats": {name: scenario.seat for name, scenario in scenarios.items()},
+            "models": roles, "started_at": _now(), "finished_at": None,
+            "argv": redact_argv(list(argv))}
+
+
+def write_manifest(out: Path, manifest: dict[str, Any]) -> Path:
+    path = out / "manifest.json"
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return path
+
+
 # ------------------------------------------------------------------- running
 def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
                   models: dict[str, Any]) -> list[dict[str, Any]]:
@@ -451,11 +540,10 @@ def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
 
 def _run_in_subprocess(name: str, condition: str, args: argparse.Namespace,
                        out: Path) -> list[dict[str, Any]]:
-    import subprocess
-    import sys
-
+    # The parent owns <out>/manifest.json; children must not overwrite it.
     command = [sys.executable, "-m", "experiments.run", "--scenario", name,
-               "--conditions", condition, "--epochs", str(args.epochs), "--out", str(out)]
+               "--conditions", condition, "--epochs", str(args.epochs), "--out", str(out),
+               "--no-manifest"]
     if args.mock:
         command.append("--mock")
     if args.branch_at_end:
@@ -469,7 +557,7 @@ def _run_in_subprocess(name: str, condition: str, args: argparse.Namespace,
     return json.loads(part.read_text())["results"]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--scenario", default="all", choices=["all", *SCENARIOS])
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
@@ -478,8 +566,11 @@ def main() -> None:
     parser.add_argument("--mock", action="store_true", help="offline scripted models")
     parser.add_argument("--branch-at-end", action="store_true",
                         help="L1: refuse rollback/end_audit before a branch's final wake")
+    parser.add_argument("--pr", type=int, default=None,
+                        help="PR number for manifest.json (default: $COSMOS_PR or $GITHUB_PR)")
     parser.add_argument("--results-name", default="results.json", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    parser.add_argument("--no-manifest", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
     if not args.mock:
         from dotenv import load_dotenv
 
@@ -495,12 +586,19 @@ def main() -> None:
         models = {"target": AUDITOR, "auditor": AUDITOR, "judge": JUDGE}
     names = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
     conditions = args.conditions.split(",")
-    results: list[dict[str, Any]] = []
+    scenarios: dict[str, Scenario] = {}
     for name in names:
-        targets = {} if args.mock else TARGETS[name]
-        scenario = SCENARIOS[name](targets)
+        scenario = SCENARIOS[name]({} if args.mock else TARGETS[name])
         if args.branch_at_end:
             scenario = dataclasses.replace(scenario, branch_at_end=True)
+        scenarios[name] = scenario
+    manifest = None
+    if not args.no_manifest:
+        manifest = build_manifest(scenarios, conditions, args.epochs, models, pr=args.pr,
+                                  argv=sys.argv[1:] if argv is None else argv)
+        write_manifest(out, manifest)
+    results: list[dict[str, Any]] = []
+    for name, scenario in scenarios.items():
         for condition in conditions:
             print(f"== {name} / {condition}", flush=True)
             if len(names) * len(conditions) > 1:
@@ -537,6 +635,9 @@ def main() -> None:
             (out / args.results_name).write_text(json.dumps(
                 {"auditor": AUDITOR, "judge": JUDGE, "targets": TARGETS, "mock": args.mock,
                  "epochs": args.epochs, "results": results}, indent=2, default=str))
+    if manifest is not None:
+        manifest["finished_at"] = _now()
+        print(f"manifest: {write_manifest(out, manifest)}")
     print(f"results: {out / args.results_name}")
 
 
