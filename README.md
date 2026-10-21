@@ -70,9 +70,18 @@ uv run python -m experiments.report logs/live/<run>/results.json
 uv run python -m experiments.run --mock            # offline plumbing check
 ```
 
-Each run writes `logs/live/<run>/manifest.json` (git SHA, branch, PR from
-`--pr` or `$COSMOS_PR`/`$GITHUB_PR`, scenarios, conditions, epochs, models);
-share a run with `cosmos upload logs/live/<run>`.
+### Sharing runs
+
+Each run writes `logs/live/<run>/manifest.json` (git SHA, branch, dirty flag,
+PR from `--pr` or `$COSMOS_PR`/`$GITHUB_PR`, scenarios, conditions, epochs,
+models). Upload the folder to [cosmos](https://cosmos.danhelo.com) and put the
+printed link in the PR description:
+
+```bash
+cosmos upload logs/live/<run>
+```
+
+Install, login, reading runs and troubleshooting: [`docs/cosmos.md`](docs/cosmos.md).
 
 ## Working on Orbit and orbit_audit together
 
