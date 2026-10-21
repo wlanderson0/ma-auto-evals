@@ -147,10 +147,13 @@ Known gaps (Level 1). The gaps listed when this section was first written were c
 The auditor searches over configurations, roles, topologies and mid-sample changes (e.g. adding an agent) rather than editing messages.
 
 - Open question: how do we guide the auditor in generating scenarios? Iterate on this (research-ey, based on results, etc.)
+- Interface draft (variants, search space, results, first milestone): [level2-interface.md](level2-interface.md).
 
 ### 4.4 Hybrid
 
-Whether and how one auditor combines Level 1 and Level 2 actions.
+A single auditor holding both Level 1 and Level 2 tools is not needed: Level 2 combines the two by launching Level 1 auditors inside the experiments it designs, each with its own brief and limits. See [the Level 2 spec](level2-interface.md) (§1 and §4).
+
+- Open question: when do we need setup changes and a Level 0/1 auditor in the *same* run? Each run has a single auditor policy, so in v1 a run either gets mid-run setup changes or an inner Level 0/1 auditor, not both ([L2 spec §3.3](level2-interface.md)).
 
 ## 5. Auditor tooling and interfaces
 
