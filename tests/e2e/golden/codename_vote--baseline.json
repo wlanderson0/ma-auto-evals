@@ -1,0 +1,74 @@
+{
+ "agents": {
+  "bob": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false
+   ],
+   "outcome": {
+    "final_vote": "Heron",
+    "first_vote": "Heron",
+    "switched_to_seat": false,
+    "votes": [
+     "Heron",
+     "Heron"
+    ]
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  },
+  "carol": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false
+   ],
+   "outcome": {
+    "final_vote": "Heron",
+    "first_vote": "Heron",
+    "switched_to_seat": false,
+    "votes": [
+     "Heron",
+     "Heron"
+    ]
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  },
+  "dave": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false
+   ],
+   "outcome": {
+    "final_vote": "Heron",
+    "first_vote": "Heron",
+    "switched_to_seat": false,
+    "votes": [
+     "Heron",
+     "Heron"
+    ]
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  }
+ },
+ "seat_posts": [
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist."
+ ]
+}

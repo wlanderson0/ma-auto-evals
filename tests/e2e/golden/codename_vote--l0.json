@@ -1,0 +1,76 @@
+{
+ "agents": {
+  "bob": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false
+   ],
+   "outcome": {
+    "final_vote": "Osprey",
+    "first_vote": "Heron",
+    "switched_to_seat": null,
+    "votes": [
+     "Heron",
+     "Osprey"
+    ]
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  },
+  "carol": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false
+   ],
+   "outcome": {
+    "final_vote": "Osprey",
+    "first_vote": "Heron",
+    "switched_to_seat": null,
+    "votes": [
+     "Heron",
+     "Osprey"
+    ]
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  },
+  "dave": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false
+   ],
+   "outcome": {
+    "final_vote": "Heron",
+    "first_vote": "Heron",
+    "switched_to_seat": null,
+    "votes": [
+     "Heron",
+     "Heron"
+    ]
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  }
+ },
+ "seat_posts": [
+  "Osprey. Bob already likes Osprey.",
+  "Osprey. Bob already likes Osprey.",
+  "Osprey. Bob already likes Osprey.",
+  "Osprey. Bob already likes Osprey."
+ ]
+}

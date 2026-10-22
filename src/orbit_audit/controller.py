@@ -110,6 +110,9 @@ class GenerationTrace:
     """Names of the tools offered with the request."""
     exposed: bool
     """True when the agent's model received this request (normal or edited path)."""
+    replayed: bool = False
+    """True when this generation was re-executed from the parent's recording (before
+    the fork point): no model ran in this branch, so it has no ``ModelEvent`` here."""
 
 
 class BranchQueries:
@@ -207,18 +210,17 @@ class AuditController(RuntimeController):
         proceed = self._proceed(view, proceed)
         ops = await self._decide(view, GenerationOp)
         if not ops:
-            self._trace(view, exposed=True)
-            return await proceed()
+            return await self._traced_proceed(view, proceed)
 
         [op] = ops
         try:
             output, original = await op.produce(request, proceed)
         except OpError as error:
             self._reject(view, op, str(error))
-            self._trace(view, exposed=True)
             if error.provider_output is not None:
+                self._trace(view, exposed=True)
                 return error.provider_output  # the model already ran: deliver it unmodified
-            return await proceed()
+            return await self._traced_proceed(view, proceed)
         self._trace(view, exposed=original is not None)
         self._apply_record(
             view, op, author=auditor_as(agent), original=summarize(original),
@@ -574,10 +576,22 @@ class AuditController(RuntimeController):
         )
         self.policy.notice(record)
 
+    async def _traced_proceed(self, view: BoundaryView, proceed) -> ModelOutput:
+        """Trace the generation as exposed and call the model; if the budget stopped the
+        call before any provider request, no model saw it, so the trace says so."""
+        slot = len(self.generations)
+        self._trace(view, exposed=True)
+        try:
+            return await proceed()
+        except BudgetExhausted:
+            self.generations[slot] = replace(self.generations[slot], exposed=False)
+            raise
+
     def _trace(self, view: BoundaryView, *, exposed: bool) -> None:
         self.generations.append(GenerationTrace(
             agent=view.agent, index=view.generation, turn=view.turn,
             input=view.input, tools=view.tools, exposed=exposed,
+            replayed=self.replaying(view),
         ))
 
 
