@@ -31,7 +31,7 @@ L2 research loop
   - a fixed budget per run, so runs are comparable: each run obeys its own `AuditLimits`, and each variant gets a fixed number of epochs (§7);
   - a measure the searcher cannot change (our `measure`, fixed in the brief, §2, and frozen scorers, §6.2).
 
-  One difference matters: autoresearch maximises a single number, whereas L2 answers a question. In `characterise` mode, setups where the behaviour does _not_ happen are results too, so L2 must not drift into simply maximising spread.
+  One difference matters: autoresearch optimises a single number, whereas L2 answers a question. In `characterise` mode, setups where the behaviour does _not_ happen are results too, so L2 must not drift into simply maximising spread.
 
 Intended flow: an L1 audit builds intuitions about a behaviour in one specific scenario; L2 then studies it more rigorously and completely across setups and can itself launch L1 audits.
 
@@ -84,7 +84,9 @@ class Variant:
 
 `at` is either `"start"` (applied before the run) or `"after_round:<n>"` (applied at the between-turns pause after round _n_; only schedule changes can use it, §3.3). The controller counts turns, not rounds, so `apply` converts rounds to turns from the variant's schedule (in `migration_team`, one round is four turns).
 
-`apply(scenario, variant)` builds a new, edited copy of the scenario; it runs nothing and leaves the original unchanged.
+`apply(scenario: Scenario, variant: Variant) -> Scenario` builds a new, edited copy of the scenario; it runs nothing and leaves the original unchanged.
+
+Every variant is defined against its base scenario, never against another variant: to build on an earlier variant, L2 copies its mutation list and adds or changes one item. Each variant can then be rebuilt on its own, and any two can be compared by how their mutation lists differ.
 
 Variants are recorded as a diff against the base so results stay comparable. Each log records its condition (baseline / scripted / L0 / L1) inside the file itself, as proposed in issue #19, rather than only in the name of the folder it's saved in.
 
