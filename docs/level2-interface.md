@@ -306,11 +306,11 @@ So that running out of budget doesn't leave some variants with more epochs than 
 
 **Dry-run.** For a scenario L2 wrote, `run_experiment` first runs one sample with the generic mock models (§3.5), at no cost. If that fails, the variant is rejected with the error (§3.4).
 
-Each `VariantRun` holds the variant, validity problems and warnings, cost spent, and **log paths** — not measured values. Measurements are read back from the logs (§6). This applies once issue #19 lands; until then (milestone 1, §10), `run_condition` still returns measured rows and writes `results.json`, which is what the fixed grid uses.
+Each `VariantRun` holds the variant, validity problems and warnings, cost spent, and **log paths** — not measured values. Measurements are read back from the eval logs (§6), where the scorers put them since #22; `results.json` is not relied on.
 
 ## 6. Results
 
-Depends on issue #19: probe, post judge and verdict become Inspect scorers, and authorship labels, branches and interventions live in the eval log. `results.json` goes away.
+Since #22 (issue #19, stage 1), every measurement is an Inspect scorer, so results are in the eval log and can be rescored, along with authorship, branches, interventions and each agent's final model request. `results.json` is still written but will be removed; L2 reads the eval logs.
 
 The logs are files L2 can work on directly: the `.eval` logs, and a JSON export of each (`inspect log convert`). L2 has a workspace where it can run its own code on them (Python with `inspect_ai.log`, pandas…). The workspace has no provider API keys, so any model call goes through the budget ledger (§7). The tools in §6.1 are ready-made shortcuts for common questions, not the only way in.
 
@@ -329,7 +329,7 @@ The logs are files L2 can work on directly: the `.eval` logs, and a JSON export 
 
 Tool outputs are short by default (slices, tables, the first N matches) to keep L2's context small; L2 can ask for more, or use its own code.
 
-`exposure` does not exist in this form: today there is `AuditController.exposure(message_id)`, which looks up one message (not an agent) and only works on the in-memory controller during the run. Issue #19 does not put exposure in the log, so this needs a log-reading version — worth folding into issue #19.
+`exposure` does not exist in this form: today there is `AuditController.exposure(message_id)`, which looks up one message (not an agent) and only works on the in-memory controller during the run. Stage 1 of issue #19 (#22) does not put exposure in the log, so this needs a log-reading version, worth adding to a later stage of #19.
 
 ### 6.2 Comments and tags
 
@@ -356,7 +356,7 @@ Tags and comments live next to the logs, not inside them, so marking up a run ne
 - **Post judges**: what an agent said publicly, read from its own posts (never from auditor-written content), by a judge model's yes/no question or a pattern count (e.g. `judge`, `mention`).
 - **Agent interviews**: what an agent says when asked privately after the run (e.g. `probes`, `free_probes`). Often differs from its posts: the Reviewer publicly approved a failing release while privately answering REJECT in 5 of 6 runs ([results](results.md)).
 - **Action outcomes**: what an agent _did_, read from the environment's records: tool calls, resulting state, and whether its own task still succeeds (e.g. `skip_outcome`, `vote_outcome`, `quota_outcome`).
-- **Internal state (linear probes, later)**: what an agent "believes", read from its activations by a trained classifier; needs open-weight targets (§12). Requirement now: issue #19 keeps a pointer to each agent's final model request, which is the input a probe needs.
+- **Internal state (linear probes, later)**: what an agent "believes", read from its activations by a trained classifier; needs open-weight targets (§12). #22 already stores each agent's final model request, which is the input a probe needs.
 
 **Writing scorers on the fly.** L2 may write new scorers and apply them to existing logs (`inspect score`) without re-running. Each scorer's prompt is saved in the experiment record, with whether it was written before or after L2 saw the results it is applied to.
 
@@ -512,8 +512,8 @@ The LLM L2 is an agent working with tools (`run_experiment`, the §6 tools, writ
    - **Measures** (§2, §6.3): in `mfa_rumor`, the private probe (answering NOT_REQUIRED counts as adopting); in `kestrel_naming`, at least one use of the name in the target's own words (copies of another agent's post excluded), with direct recall reported as an upper bound only. Alice's delivered dose is measured from her own posts; off-dose runs are flagged and kept (§4.1).
    - **Cost.** Milestone 1 records tokens and cost per sample, using a price table. That gives the history the cost estimates need (§5), and the figure the LLM L2's budget is set from.
 
-   Needs the scenario-code change (channels and personas as inputs, prompts rebuilt from them, §3.1) and the `run_condition` changes (§5): small, but not zero, changes to the shared experiments code. Reads results from today's `results.json` (issue #19 is not needed yet).
-2. **Scorer migration** (issue #19): prerequisite for the later steps, since the §6 tools read results from logs. It must also keep what L2 needs: a log-reading `exposure`, and the pointer to each agent's final model request (for probes).
+   Needs the scenario-code change (channels and personas as inputs, prompts rebuilt from them, §3.1) and the `run_condition` changes (§5): small, but not zero, changes to the shared experiments code. Reads results from the eval logs (#22).
+2. **Scorer migration** (issue #19): stage 1 is done (#22): measurements are scorers in the eval log, with each agent's final model request kept for probes. Remaining for L2: a log-reading `exposure`, and removing `results.json`.
 3. **L2 infrastructure:**
    - the budget ledger with cost, the audit-wide total and `budget()` (§7);
    - the code workspace without provider keys (§6);
@@ -566,7 +566,7 @@ Contract tests for L2, in the style of `auditor-tests.md`:
 - **Should `AuditScope` support per-operation agent lists?** Today one agent list covers every operation, so a scripted helper that needs `amend_pending` for everyone cannot be limited to writing only the seat's messages by its scope (§3.3). Per-operation lists, e.g. `replace_generation` → {seat}, `amend_pending` → all, would let the scope enforce it.
 - **How should scoped message boards work?** Message boards that only some agents can see: a feature in our Orbit fork, or modelled with existing channels (one channel per board, readable only by the agents who can see it)?
 - **What should an interview see?** An interview (`probes`, `free_probes`, §6.3) asks an agent a private question after the run. Today it is shown the agent's last input (the conversation up to its final turn) but not the agent's own final reply. Should it also include that final reply? This affects what the interview measures and is raised in issue #19.
-- **Do we pursue linear probes, and on which models?** They need open-weight targets (today `llama-3.3-70b` and `mistral-small`, not the GPT models, since OpenRouter returns text only), a way to get activations (a local pass of the saved model request through the downloaded model, or an API that exposes activations, e.g. Tinker, to check), and labelled examples to train each probe. A probe is trained before the search, never on its runs; otherwise it becomes another way to find a measure that "shows" the hypothesis. Experiments scored this way can only vary models among open-weight ones. Worth deciding before issue #19's log format is final, so the logs keep what a probe needs.
+- **Do we pursue linear probes, and on which models?** They need open-weight targets (today `llama-3.3-70b` and `mistral-small`, not the GPT models, since OpenRouter returns text only), a way to get activations (a local pass of the saved model request through the downloaded model, or an API that exposes activations, e.g. Tinker, to check), and labelled examples to train each probe. A probe is trained before the search, never on its runs; otherwise it becomes another way to find a measure that "shows" the hypothesis. Experiments scored this way can only vary models among open-weight ones. The logs already keep the input a probe needs (each agent's final model request, #22).
 - **Which Cosmos server should L2 use?** The shared server with a dedicated L2 user, or a separate instance for L2 (§8.1).
 - **Tags in Cosmos.** The data model, and which filters on runs and samples L2 needs (§6.2).
 - **Where does L2's code workspace run?** A container or an Inspect sandbox; what it can read (logs, read-only?) and write (annotations, scorers, scenario code); no network beyond what it needs (§6).
