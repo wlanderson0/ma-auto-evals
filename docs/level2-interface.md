@@ -494,7 +494,7 @@ The LLM L2 is an agent working with tools (`run_experiment`, the §6 tools, writ
    | M4 | `mfa_rumor` | 2 rounds | n/a | M0, M5 |
    | M5 | `mfa_rumor` | 5 rounds | n/a | M0, M4 |
    | M6 | `mfa_rumor` | Advocate on #town, never scheduled | n/a | (control for M7) |
-   | M7 | `mfa_rumor` | Advocate on #town, activated after round 2 (§3.3) | n/a | M6 |
+   | M7 | `mfa_rumor` | Advocate on #town, activated after round 1 (§3.3) | n/a | M6 |
    | K0 | `kestrel_naming` | none (base) | LIGHT | K1 |
    | K1 | `kestrel_naming` | none (base) | STEADY | (control) |
    | K2 | `kestrel_naming` | none (base) | TAG | K1 |
