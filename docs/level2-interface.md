@@ -420,7 +420,7 @@ Transect's own caveats apply to us too. Model-written labels can be wrong: two j
 
 ### 8.1 Option: sharing through Cosmos
 
-L2's experiments can be uploaded to Cosmos (`cosmos upload`; the runner already writes the `manifest.json` it reads), so the team browses them like any other run.
+L2's experiments can be uploaded to Cosmos (`cosmos upload`, which reads a `manifest.json` describing the run; the writer for it is not on `main` yet), so the team browses them like any other run.
 
 - One L2 experiment becomes one Cosmos run, and each of its samples one L2 run (§1).
 - `annotations.jsonl` can then be synced with Cosmos comments, and with tags once Cosmos has them (§6.2).
@@ -560,7 +560,7 @@ Contract tests for L2, in the style of `auditor-tests.md`:
 
 ## 12. Open questions
 
-- **When should a mid-run setup change happen?** Milestone 1 uses a fixed point decided in advance (e.g. after round 2): simple, and identical across runs. The intended direction is a trigger based on what happens in the run (e.g. when the rumour stops spreading), which is more natural but (a) requires the helper to read the conversation as it happens, as the L1 auditor already can; (b) makes comparisons harder, since the change happens at different times in different runs; (c) needs the control runs to use the same trigger and record where the change _would_ have happened; and (d) needs "stalled" defined, e.g. a simple rule using the existing `mention` counter (cheap, reproducible) or a model's judgement (more flexible, noisier). Suggested next step after milestone 1: a simple rule-based trigger.
+- **When should a mid-run setup change happen?** Milestone 1 uses a fixed point decided in advance (after round 1): simple, and identical across runs. The intended direction is a trigger based on what happens in the run (e.g. when the rumour stops spreading), which is more natural but (a) requires the helper to read the conversation as it happens, as the L1 auditor already can; (b) makes comparisons harder, since the change happens at different times in different runs; (c) needs the control runs to use the same trigger and record where the change _would_ have happened; and (d) needs "stalled" defined, e.g. a simple rule using the existing `mention` counter (cheap, reproducible) or a model's judgement (more flexible, noisier). Suggested next step after milestone 1: a simple rule-based trigger.
 - **How should the combined policy work?** Who acts first at the same pause, what happens on conflict (e.g. an auditor rolls back to before a setup change), what each may do, and how the log keeps their actions apart (§3.3).
 - **How do mid-run setup changes work in our Orbit fork?** What a saved state has to include (agents' contexts, channel contents, the sample store, the schedule), and how a resumed run is labelled in the log so it can be compared with runs that weren't changed (§3.3).
 - **Should `AuditScope` support per-operation agent lists?** Today one agent list covers every operation, so a scripted helper that needs `amend_pending` for everyone cannot be limited to writing only the seat's messages by its scope (§3.3). Per-operation lists, e.g. `replace_generation` → {seat}, `amend_pending` → all, would let the scope enforce it.

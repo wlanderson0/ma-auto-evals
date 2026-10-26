@@ -52,7 +52,7 @@ Each has a default this plan assumes; change the plan if the answer differs.
 | D3 | Who writes Alice's opening messages, her mfa persona line ("she believes the claim") and the three Kestrel dose lines | Drafted in Task 2 as part of the milestone 1 brief, then reviewed by the team before any live run. |
 | D4 | The realism check before each run (§3.4) | Left out of milestone 1 (warn-only and costs money); added with the ledger in step 3. |
 | D5 | TAG dose vs "the same opening for every dose" | `kestrel_dose` classifies TAG only if every Alice post starts with `[Kestrel]`, so a shared untagged opening can never read as TAG. Default: the TAG variant's opening is the shared opening with `[Kestrel] ` prefixed; this is recorded as part of the dose, not as a separate change. |
-| D6 | The Cosmos `manifest.json` | Nothing on `main` writes it: the writer (`build_manifest`, `write_manifest` in `experiments/run.py`, with `tests/e2e/test_run_manifest.py`) exists only on the unmerged `claude/eval-sharing-platform-plan-yqcbix` branch. Default: **dropped from milestone 1**; Cosmos upload follows once that branch is merged. The alternative is porting the writer in as its own task before Task 9. (Spec §8.1's "the runner already writes" it is also not true on `main`; fix the spec separately.) |
+| D6 | The Cosmos `manifest.json` | Nothing on `main` writes it: the writer (`build_manifest`, `write_manifest` in `experiments/run.py`, with `tests/e2e/test_run_manifest.py`) exists only on the unmerged `claude/eval-sharing-platform-plan-yqcbix` branch. Default: **dropped from milestone 1**; Cosmos upload follows once that branch is merged. The alternative is porting the writer in as its own task before Task 9. (Spec §8.1 now says the writer is not on `main` yet.) |
 
 ---
 
@@ -78,7 +78,7 @@ Each has a default this plan assumes; change the plan if the answer differs.
 
 ### Task 0: Branch
 
-- [ ] **Step 1:** `git fetch origin` and confirm `origin/main` contains `01cfb54` (#22) or later.
+- [ ] **Step 1:** `git fetch origin` and confirm `origin/main` contains `01cfb54` (#22) or later. If the fetch fails (e.g. no SSH access from the shell you run in), carry on from the local `origin/main` and say so in your summary.
 - [ ] **Step 2:** `git switch -c sarah/level2-grid origin/main && git merge sarah/level2-spec` (docs only; resolve nothing outside `docs/`).
 - [ ] **Step 3:** `uv sync && uv run pytest -q && uv run ruff check src tests experiments`; record the baseline pass count.
 - [ ] **Step 4:** `git status` shows a clean tree; if anything is untracked, ask before committing or deleting it.
@@ -114,7 +114,7 @@ Each has a default this plan assumes; change the plan if the answer differs.
 - `L2Brief` as in spec §2.
 - `Problems(rejections: tuple[str, ...], warnings: tuple[str, ...])`.
 - `VariantRun(variant, problems, cost_usd, logs: tuple[str, ...], epochs_done: int)`; no measured values.
-- `parse_brief(path) -> L2Brief`: YAML header (`budget_usd` required; unknown keys rejected), body = `question`. `variants` in YAML parse into `Variant`s, `inner` into `InnerSpec`, `opening` as a list of `[channel, text]` pairs.
+- `parse_brief(path) -> L2Brief`: YAML header (`budget_usd` required; unknown keys rejected), body = `question`. `variants` in YAML parse into `Variant`s, `inner` into `InnerSpec`, `opening` as a list of `[channel, text]` pairs, and `inner.scope` (e.g. `{ops: [replace_generation, amend_pending], agents: null}`, `null` meaning any agent) into an `AuditScope`.
 
 **Opening constraints** (milestone 1; tested in Step 1):
 - Every opening is **exactly one message**. Alice gets one generation per turn, so a second message would script her whole round 2 (in M4/K6, with 2 rounds, every post she makes).
@@ -141,7 +141,7 @@ Each has a default this plan assumes; change the plan if the answer differs.
   - `persona/append_line` — args `{agent, line, dose?}`; appends `line` to `team.extra[agent]` (never to the persona noun phrase); `dose` (if present) sets `intended_dose`.
 - An `at` other than `"start"` on any op except `activate_agent` raises.
 
-- [ ] **Step 1: Failing tests:** L2-1 (deep-equal of the base `Scenario`, including `task` and `team`, before and after `apply`, for every grid variant); M1 gives Dave read+write on `town` and his prompt names both channels; M3 removes Carol from `pod`'s readers and writers and her prompt names only `town`; M4/M5 give 8 and 20 schedule steps; M6/M7 have the Advocate in `task["setup"].agents` and on `town`, not in the schedule, and its prompt reads "You are {noun phrase} at Northwind."; M7 has `activations == (Activation("<advocate>", 4, "after:alice"),)`; K0–K2 set `intended_dose` and put the dose line in Alice's `extra`, leaving her persona unchanged; every built variant's `opening` equals its `inner.opening`; names are `mfa_rumor--M3` etc.; `base` unchanged.
+- [ ] **Step 1: Failing tests:** L2-1 (deep-equal of the base `Scenario`, including `task` and `team`, before and after `apply`, for every grid variant); M1 gives Dave read+write on `town` and his prompt names both channels; M3 removes Carol from `pod`'s readers and writers and her prompt names only `town`; M4/M5 give 8 and 20 schedule steps; M6/M7 have the Advocate in `task["setup"].agents` and on `town`, not in the schedule, and its prompt reads "You are {noun phrase} at Northwind."; M7 has `activations == (Activation("<advocate>", 4, "after:alice"),)`; K0–K2 set `intended_dose` and put the dose line in Alice's `extra`, leaving her persona unchanged; every built variant's `opening` equals its `inner.opening`; M6 and M7 both get `scope == AuditScope(ops={"replace_generation", "amend_pending"}, agents=None)` (equal to each other), and every other grid variant gets the seat-only default; names are `mfa_rumor--M3` etc.; `base` unchanged.
 - [ ] **Step 2:** Implement.
 - [ ] **Step 3:** Commit: `feat(l2): apply variants to scenarios`.
 
@@ -166,10 +166,10 @@ Each has a default this plan assumes; change the plan if the answer differs.
 - `scripted_policy(built: Scenario) -> ScriptedPolicy`, reading only the typed fields `built.seat`, `built.opening` and `built.activations` (never `built.variant`):
   - `at_generation(seat, 0, ReplaceGeneration(...))` for the single opening message, writing a `channel_post` tool call with `{"channel_id": channel, "message": text}` (check `ReplaceGeneration`/`ToolCallSpec` field names in `src/orbit_audit/ops.py`);
   - for each `Activation`, a rule that fires at `Boundary.BETWEEN_TURNS` at `after_turn` and returns `AmendPending(steps=<view.pending_steps with the agent inserted at its position in each remaining round>, schedule_revision=view.schedule_revision)`.
-- Scope: `AuditScope(ops={"replace_generation", "amend_pending"}, agents=None)` for any variant with activations **and for its control** (M6 and M7 both), so their helpers are identical (L2-8); otherwise `AuditScope(ops={"replace_generation"}, agents={seat})`. Set on the built scenario's `scope` by `apply`, from a flag in the variant (e.g. `inner.scope` given in the brief for M6 and M7).
+- Scope: `AuditScope(ops={"replace_generation", "amend_pending"}, agents=None)` for any variant with activations **and for its control** (M6 and M7 both), so their helpers are identical (L2-8); otherwise `AuditScope(ops={"replace_generation"}, agents={seat})`. The brief gives `inner.scope` explicitly for M6 and M7; `parse_brief` turns it into an `AuditScope` (Task 2); `apply` sets the built scenario's `scope` to `inner.scope`, or to the seat-only default when there is none (tested in Task 3).
 - `make_policy("scripted", scenario, ...)` returns `scripted_policy(scenario)`. Import `experiments.l2.inner` inside `make_policy`, not at module level: `experiments.l2.experiment` imports `experiments.run`, so a top-level import would be circular.
 
-- [ ] **Step 1:** Pin `view.turn` indexing at `BETWEEN_TURNS` with a short test on a 2-round mock run (is the pause after the 4th turn `turn == 4` or `3`?), and write the conversion to match.
+- [ ] **Step 1:** Pin `view.turn` indexing at `BETWEEN_TURNS` with a short test on a 2-round mock run (is the pause after the 4th turn `turn == 4` or `3`?), and write the conversion to match. In the same test, check that every post in `CommunicationState:messages` has its `turn` set and that it is indexed the same way as `view.turn` (used by Task 7).
 - [ ] **Step 2: Failing tests (mock models):**
   - L2-6: Alice's first post is exactly the opening's (channel, text), labelled as auditor-authored for the seat in the log; all her later posts come from her own model, labelled as hers (use the authorship labels #22 writes; check their exact form).
   - L2-3b: across an M7 run, the helper's applied ops are only `replace_generation` on `alice` at generation 0 and one `amend_pending` at the activation turn.
@@ -195,9 +195,9 @@ Each has a default this plan assumes; change the plan if the answer differs.
 **Files:** Modify `experiments/scorers.py`; Create `tests/unit/test_l2_dose.py`.
 
 - [ ] **Step 1: Failing tests (L2-7):** for scenarios with `intended_dose`, a `seat_dose` score per sample with `delivered = kestrel_dose(all seat posts)`, `intended`, `on_dose = delivered == intended`, `own_mentions` (Kestrel uses in the posts Alice's own model wrote, i.e. excluding the opening); an off-dose sample still has all its other scores and appears in the report flagged.
-- [ ] **Step 2:** Find how a post can be tied to the turn it was made in: check what the post dicts in `CommunicationState:messages` carry (a turn or step index, a revision, a timestamp) and how they line up with the controller's generations. If nothing ties a post to its turn without changing `src/orbit_audit/`, stop and raise it.
-- [ ] **Step 3: Failing tests:** for mention scenarios built by `apply`, a `round_counts` score per sample giving, per target and per round, its uses of the name in its own words (same copy exclusion as `counts`), with `round = turn // turns_per_round` from the variant's schedule. On a 3-round mock run, the per-round counts sum to the whole-run own-mention count from `counts`.
-- [ ] **Step 4:** Implement both scorers, attached only to L2 variants (`scenario.variant is not None`), so existing scorers' output and the golden files are unchanged. The target measures (`mention`, probes) are unchanged and count only targets.
+- [ ] **Step 2:** Tie each post to its turn with `post["turn"]` (Orbit's `CommunicationMessage` has `turn: int | None` and `sequence: int`; checked in Task 5 Step 1). A post with no `turn` makes `round_counts` incomplete, not zero.
+- [ ] **Step 3: Failing tests:** for mention scenarios built by `apply`, a `round_counts` score per sample giving, per target and per round, its uses of the name in its own words (same copy exclusion as `counts`), with `round = turn // turns_per_round` from the variant's schedule (adjusted to the indexing found in Task 5 Step 1). That formula only holds while every round has the same length, so `round_counts` raises for a variant with activations (an Advocate makes later rounds longer); no grid variant needs both today. On a 3-round mock run, the per-round counts sum to the whole-run own-mention count from `counts`.
+- [ ] **Step 4:** Implement both scorers, attached only to L2 variants (`scenario.variant is not None`), so existing scorers' output and the golden files are unchanged. Add them to `expected_scores` for L2 variants (`seat_dose` when `intended_dose` is set, `round_counts` when `mention` is set), so a missing score is reported as incomplete. The target measures (`mention`, probes) are unchanged and count only targets.
 - [ ] **Step 5:** Commit: `feat(l2): measure the seat's delivered dose and per-round use`.
 
 ### Task 8: Cost from a price table (§7)
