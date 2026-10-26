@@ -24,7 +24,7 @@ async def main(run: Path) -> None:
     data = json.loads(results_path.read_text())
     judge = _fresh(JUDGE)
     for row in data["results"]:
-        if row["scenario"] != "release_pressure":
+        if row.get("base", row["scenario"]) != "release_pressure":  # variants: <base>--<id>
             continue
         log = read_eval_log(row["log"])
         sample = next(s for s in log.samples if s.epoch == row["epoch"])

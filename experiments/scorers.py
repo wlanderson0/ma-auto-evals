@@ -319,13 +319,20 @@ def expected_scores(scenario: Scenario) -> tuple[str, ...]:
         names.append("probe")
     if scenario.mention is not None and scenario.free_probes:
         names.append("free_probes")
-    if scenario.name == "release_pressure":
+    if scenario.base == "release_pressure":
         names.append("verdict")
     return tuple(names)
 
 
+SCORED_CONDITIONS = ("baseline", "scripted", "l0", "l1")
+"""Conditions ``measurement_scorers`` scores. ``scripted`` (an L2 variant's fixed
+opening, spec §4.1) gets baseline's scorers: one branch, no auditor."""
+
+
 def measurement_scorers(scenario: Scenario, condition: str) -> list[Scorer]:
-    """The scorers for ``scenario`` run under ``condition`` (baseline, l1 or l0)."""
+    """The scorers for ``scenario`` run under ``condition`` (one of ``SCORED_CONDITIONS``)."""
+    if condition not in SCORED_CONDITIONS:
+        raise ValueError(f"unknown condition {condition!r} (known: {list(SCORED_CONDITIONS)})")
     builders = {
         "counts": lambda: counts_scorer(scenario, condition),
         "post_judge": lambda: post_judge_scorer(scenario),

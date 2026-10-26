@@ -31,9 +31,11 @@ import json
 import re
 import time
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from inspect_ai import Task
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import EvalLog, EvalSample
 from inspect_ai.model import Model, ModelOutput, get_model
@@ -232,7 +234,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         counted = counts.get("branches", {}).get(final, {}).get("agents", {})
         answered = freed.get("branches", {}).get(final, {}).get("agents", {})
         row: dict[str, Any] = {
-            "scenario": scenario.name, "condition": condition, "epoch": sample.epoch,
+            "scenario": scenario.name, "base": scenario.base, "condition": condition,
+            "epoch": sample.epoch,
             "branches": tree, "budget": sample.store.get(BUDGET_KEY),
             "error": str(sample.error.message) if sample.error else None,
             "agents": {},
@@ -288,7 +291,7 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         row["seat_posts"] = seat_posts
         if scenario.mention is not None:
             row["seat_mentions"] = sum(count_mentions(scenario.mention, seat_posts))
-        if scenario.name == "release_pressure":
+        if scenario.base == "release_pressure":
             row["verdict"] = decided.get("verdict")
             row["reviewer_said"] = decided.get("reviewer_said")
             if why := decided.get("why") or unknown.get("verdict"):
@@ -321,17 +324,53 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
 
 
 # ------------------------------------------------------------------- running
+def build_task(scenario: Scenario, condition: str, models: dict[str, Any],
+               limits: AuditLimits = LIMITS, metadata: dict[str, Any] | None = None,
+               epochs: int = 1,
+               on_controller: Callable[[AuditController], None] | None = None) -> Task:
+    """The audited Inspect task for ``scenario`` under ``condition``, with its scorers.
+
+    ``models["auditor"]`` is the l1/l0 auditor's model (required there, unused by
+    baseline and scripted); ``metadata`` becomes the task's metadata in the eval log."""
+
+    def policy() -> AuditPolicy:
+        # Read per sample, as before: an l1/l0 run without an auditor fails, never
+        # falls back to the task's model.
+        auditor = models["auditor"] if condition in ("l1", "l0") else models.get("auditor")
+        return make_policy(condition, scenario, auditor)
+
+    options: dict[str, Any] = {} if metadata is None else {"metadata": metadata}
+    return audit_task(
+        policy=policy,
+        on_controller=on_controller, tool_replay=scenario.tool_replay, limits=limits,
+        scope=scenario.scope, epochs=epochs,
+        scorer=measurement_scorers(scenario, condition), **options, **scenario.task,
+    )
+
+
+def l2_metadata(scenario: Scenario, condition: str, epoch: int) -> dict[str, Any] | None:
+    """A variant's record for its task metadata (``{"l2": ...}``), so a log states its
+    variant, condition and epoch itself; ``None`` for a scenario that is no variant.
+    The epoch is L2's (each log holds one epoch, so ``sample.epoch`` is always 1)."""
+    if scenario.variant is None:
+        return None
+    recorded = scenario.variant
+    if condition != recorded["inner"]["condition"]:
+        raise ValueError(f"{scenario.name} is a {recorded['inner']['condition']} variant, "
+                         f"not {condition}")
+    return {"l2": {"variant_id": recorded["id"], "base": scenario.base,
+                   "mutations": recorded["mutations"], "inner": recorded["inner"],
+                   "condition": condition, "rationale": recorded["rationale"],
+                   "epoch": epoch}}
+
+
 def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
-                  models: dict[str, Any]) -> list[dict[str, Any]]:
+                  models: dict[str, Any], limits: AuditLimits = LIMITS) -> list[dict[str, Any]]:
     """Run one condition. ``models``: ``target`` (default model for agents without
     one), ``auditor``, ``judge`` and, for agents without a model, ``probe``."""
     controllers: list[AuditController] = []
-    task = audit_task(
-        policy=lambda: make_policy(condition, scenario, models["auditor"]),
-        on_controller=controllers.append, tool_replay=scenario.tool_replay, limits=LIMITS,
-        scope=scenario.scope,
-        epochs=epochs, scorer=measurement_scorers(scenario, condition), **scenario.task,
-    )
+    task = build_task(scenario, condition, models, limits=limits, epochs=epochs,
+                      on_controller=controllers.append)
     roles = {"judge": models["judge"]}
     if "probe" in models:
         roles["probe"] = models["probe"]
