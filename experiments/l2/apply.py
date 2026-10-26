@@ -120,6 +120,7 @@ def activation(mutation: Mutation, team: TeamSetup) -> Activation:
     if match is None:
         raise ApplyError(f"activate_agent needs at='after_round:<n>', got {mutation.at!r}")
     args = _args(dict(mutation.args), {"agent", "position"}, "activate_agent")
+    _text(args, "agent", "activate_agent")
     if not POSITION.fullmatch(str(args["position"])):
         raise ApplyError(f"activate_agent position must be 'after:<agent>' or "
                          f"'before:<agent>', got {args['position']!r}")
