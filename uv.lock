@@ -1720,6 +1720,7 @@ dependencies = [
     { name = "inspect-ai" },
     { name = "orbit" },
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -1738,6 +1739,7 @@ requires-dist = [
     { name = "inspect-ai", specifier = ">=0.3.263,<0.4" },
     { name = "orbit", git = "https://github.com/Danhelo/orbit?rev=dc4ea5ee56f0a8e2ec67ecbead5aecc30a7ba508" },
     { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [package.metadata.requires-dev]

@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import yaml  # PyYAML, a dependency of inspect-ai
+import yaml  # PyYAML
 
 from experiments.l2.model import (
     AXES,

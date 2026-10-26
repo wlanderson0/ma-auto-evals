@@ -133,8 +133,8 @@ def test_m6_and_m7_get_the_same_wide_helper_scope_and_others_the_seat_only_one()
                 ops={"replace_generation"}, agents={"alice"}), vid
 
 
-@pytest.mark.parametrize("vid, dose", [("K0", "LIGHT"), ("K1", "STEADY"), ("K2", "TAG"),
-                                       ("K3", "STEADY"), ("K7", "STEADY")])
+@pytest.mark.parametrize("vid, dose", [("K1", "STEADY"), ("K2", "TAG"), ("K3", "STEADY"),
+                                       ("K7", "STEADY")])
 def test_doses_set_the_intended_dose_and_alices_extra_not_her_persona(vid, dose):
     scenario = built(vid)
     [line] = [m.args["line"] for m in GRID[vid].mutations if m.op == "append_line"]

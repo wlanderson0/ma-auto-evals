@@ -189,7 +189,7 @@ def grid() -> L2Brief:
 
 def test_milestone1_fixes_variants_measure_and_inner(grid):
     assert [v.id for v in grid.variants] == [f"M{i}" for i in range(8)] + [
-        f"K{i}" for i in range(8)]
+        f"K{i}" for i in range(1, 8)]
     assert {v.base for v in grid.variants if v.id[0] == "M"} == {"mfa_rumor"}
     assert {v.base for v in grid.variants if v.id[0] == "K"} == {"kestrel_naming"}
     assert all(v.inner.condition == "scripted" for v in grid.variants)
@@ -213,7 +213,7 @@ def openings(grid, ids) -> set[str]:
 def test_milestone1_openings_are_shared_within_a_scenario(grid):
     [mfa] = openings(grid, {f"M{i}" for i in range(8)})
     assert "MFA" in mfa and not KESTREL.search(mfa)
-    [shared] = openings(grid, {"K0", "K1", "K3", "K4", "K5", "K6", "K7"})
+    [shared] = openings(grid, {"K1", "K3", "K4", "K5", "K6", "K7"})
     [tag] = openings(grid, {"K2"})
     assert tag == "[Kestrel] " + shared  # D5: the tag is part of the TAG dose
 
@@ -222,9 +222,6 @@ def test_milestone1_kestrel_openings_fit_their_doses(grid):
     [shared] = openings(grid, {"K1"})
     [tag] = openings(grid, {"K2"})
     assert len(KESTREL.findall(shared)) == 1
-    # A single post with one mention reads STEADY (kestrel_dose checks STEADY before
-    # LIGHT), so LIGHT is checked on the opening plus a follow-up without the name.
-    assert kestrel_dose((shared, "Database step done.")) == "LIGHT"
     assert kestrel_dose((shared, "Kestrel database step done.")) == "STEADY"
     assert kestrel_dose((tag,)) == "TAG"
 
@@ -233,7 +230,7 @@ def test_milestone1_doses_and_persona_lines(grid):
     by_id = {v.id: v for v in grid.variants}
     doses = {vid: [m.args.get("dose") for m in v.mutations if m.op == "append_line"]
              for vid, v in by_id.items()}
-    assert doses["K0"] == ["LIGHT"] and doses["K2"] == ["TAG"]
+    assert "K0" not in doses and doses["K2"] == ["TAG"]
     assert all(doses[f"K{i}"] == ["STEADY"] for i in (1, 3, 4, 5, 6, 7))
     assert all(doses[f"M{i}"] == [None] for i in range(8))  # Alice's belief line
     lines = {m.args["line"] for v in grid.variants for m in v.mutations
@@ -283,7 +280,5 @@ def test_milestone1_each_variant_changes_one_thing_from_its_control(grid):
         ops={"replace_generation", "amend_pending"}, agents=None)
     assert by_id["M6"].inner.opening == by_id["M0"].inner.opening
     assert all(by_id[v].inner.scope is None for v in by_id if v not in ("M6", "M7"))
-    # K0 and K2 differ from K1 only in the dose line (and, for TAG, the tagged opening).
-    for vid in ("K0", "K2"):
-        assert [m.op for m in by_id[vid].mutations] == ["append_line"]
-    assert by_id["K0"].inner == by_id["K1"].inner
+    # K2 differs from K1 only in the dose line (and the tagged opening).
+    assert [m.op for m in by_id["K2"].mutations] == ["append_line"]
