@@ -15,6 +15,7 @@ from collections.abc import Iterable
 
 from experiments.l2.model import START, Problems, Variant
 from experiments.scenarios import Scenario
+from experiments.scorers import DOSE_BASES
 
 MID_RUN_CONDITIONS = ("scripted",)
 """Conditions whose policy can apply a mid-run change: only the scripted helper does
@@ -91,6 +92,12 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
         # turn count no longer lands on a round boundary.
         rejections.append(f"milestone 1 supports one activation per variant, not "
                           f"{len(activated)} ({activated})")
+    if built.intended_dose is not None and built.base not in DOSE_BASES:
+        rejections.append(f"a seat dose is only measured on {list(DOSE_BASES)} (its "
+                          f"classifier is kestrel_dose), not on {built.base!r}")
+    if built.activations and built.mention is not None:
+        rejections.append("a mention variant cannot have an activation in milestone 1: its "
+                          "per-round counts need rounds of equal length")
     rounds = built.team.rounds if built.team is not None else None
     for activation in built.activations:
         agent = activation.agent
