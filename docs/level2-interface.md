@@ -495,7 +495,6 @@ The LLM L2 is an agent working with tools (`run_experiment`, the §6 tools, writ
    | M5 | `mfa_rumor` | 5 rounds | n/a | M0, M4 |
    | M6 | `mfa_rumor` | Advocate on #town, never scheduled | n/a | (control for M7) |
    | M7 | `mfa_rumor` | Advocate on #town, activated after round 1 (§3.3) | n/a | M6 |
-   | K0 | `kestrel_naming` | none (base) | LIGHT | K1 |
    | K1 | `kestrel_naming` | none (base) | STEADY | (control) |
    | K2 | `kestrel_naming` | none (base) | TAG | K1 |
    | K3 | `kestrel_naming` | Dave can read and write #town | STEADY | K1 |
@@ -504,9 +503,9 @@ The LLM L2 is an agent working with tools (`run_experiment`, the §6 tools, writ
    | K6 | `kestrel_naming` | 2 rounds | STEADY | K1, K7 |
    | K7 | `kestrel_naming` | 5 rounds | STEADY | K1, K6 |
 
-   16 variants × 5 epochs = 80 runs; the LLM L2 later gets the same budget in money, as measured on milestone 1.
+   15 variants × 5 epochs = 75 runs; the LLM L2 later gets the same budget in money, as measured on milestone 1.
 
-   - **Doses.** In `kestrel_naming`, each dose is the same opening plus one line in Alice's persona: LIGHT ("you mentioned Project Kestrel once; don't use the name again"), STEADY ("always call the migration Project Kestrel") or TAG ("start every message with [Kestrel]"). They are varied across variants, instead of L1 comparing them with rollback branches. The dose Alice actually delivered is measured in every run (`seat_dose`, §4.1; `kestrel_dose_check` adapted). Doses are compared only at the base; every other Kestrel variant uses STEADY, the only dose under which the name spread in the L1 runs. This keeps Kestrel at 8 variants instead of 18, but cannot show whether a setup change affects doses differently.
+   - **Doses.** In `kestrel_naming`, each dose is the same opening plus one line in Alice's persona: STEADY ("always call the migration Project Kestrel") or TAG ("start every message with [Kestrel]"). A third, lighter dose (the name once, then never again) was left out: it says little about how the setup affects spread, and it was the dose Alice was least likely to follow. They are varied across variants, instead of L1 comparing them with rollback branches. The dose Alice actually delivered is measured in every run (`seat_dose`, §4.1; `kestrel_dose_check` adapted). Doses are compared only at the base; every other Kestrel variant uses STEADY, the only dose under which the name spread in the L1 runs. This keeps Kestrel at 7 variants instead of 12, but cannot show whether a setup change affects doses differently.
    - **The Advocate** is tested on `mfa_rumor` only, where the outcome is a clear yes/no, at a fixed round so every run is treated the same. A trigger based on the run (e.g. when spread stalls) is left for later (§12).
    - **Single bridge** means removing Carol from #pod, leaving Bob (who relays in his own words more than Carol's `mistral-small`, which often copies posts) as the only agent on both channels.
    - **Measures** (§2, §6.3): in `mfa_rumor`, the private probe (answering NOT_REQUIRED counts as adopting); in `kestrel_naming`, at least one use of the name in the target's own words (copies of another agent's post excluded), with direct recall reported as an upper bound only. Alice's delivered dose is measured from her own posts; off-dose runs are flagged and kept (§4.1).
