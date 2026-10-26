@@ -96,9 +96,14 @@ def branch_at_end(view: BoundaryView, name: str, arguments: dict[str, Any]) -> s
     return None
 
 
-def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> AuditPolicy:
+def make_policy(condition: str, scenario: Scenario, auditor: str | Model | None) -> AuditPolicy:
     if condition == "baseline":
         return AuditPolicy()
+    if condition == "scripted":
+        # Imported here: experiments.l2 imports this module, so a top-level import is circular.
+        from experiments.l2.inner import scripted_policy
+
+        return scripted_policy(scenario)  # the seat's opening, then the seat itself
     if condition == "l1":
         def wake(view) -> bool:
             # Where this auditor can act: its seat's generations, and every post

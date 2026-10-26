@@ -85,8 +85,12 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
                           "amendment affects every agent in the pending schedule), e.g. "
                           "{ops: [replace_generation, amend_pending], agents: null}, as its "
                           "control should too")
-    if twice := sorted({a for a in activated if activated.count(a) > 1}):
-        rejections.append(f"activate_agent names {twice} more than once")
+    if len(activated) > 1:
+        # Two at one pause would share a schedule revision (Orbit refuses the second);
+        # at different rounds, the first makes later rounds longer, so the second's
+        # turn count no longer lands on a round boundary.
+        rejections.append(f"milestone 1 supports one activation per variant, not "
+                          f"{len(activated)} ({activated})")
     rounds = built.team.rounds if built.team is not None else None
     for activation in built.activations:
         agent = activation.agent

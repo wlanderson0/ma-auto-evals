@@ -128,9 +128,12 @@ def test_an_activation_needs_a_scope_with_amend_pending_for_everyone():
     assert problems(ADVOCATE, activate(), scope=narrow).rejected
 
 
-def test_activating_the_same_agent_twice_is_rejected():
+def test_more_than_one_activation_is_rejected():
     found = problems(ADVOCATE, activate(), activate("after_round:2"), scope=WIDE)
-    assert any("['erin'] more than once" in r for r in found.rejections)
+    assert any("one activation per variant, not 2" in r for r in found.rejections)
+    other = Mutation("roster", "add_agent", {**ADVOCATE.args, "name": "finn"})
+    found = problems(ADVOCATE, other, activate(), activate(agent="finn"), scope=WIDE)
+    assert any("one activation per variant, not 2" in r for r in found.rejections)
 
 
 @pytest.mark.parametrize("condition", ["l0", "l1"])
@@ -161,7 +164,7 @@ def test_a_one_round_variant_cannot_activate_anyone():
 def test_repeated_problems_are_listed_once():
     found = problems(activate(agent="zed"), activate("after_round:2", agent="zed"), scope=WIDE)
     assert found.rejections.count("activate_agent: 'zed' is not in the setup") == 1
-    assert any("['zed'] more than once" in r for r in found.rejections)
+    assert any("one activation per variant" in r for r in found.rejections)
 
 
 def test_a_malformed_activation_agent_is_a_build_error():

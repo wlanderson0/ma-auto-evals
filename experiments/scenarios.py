@@ -197,9 +197,10 @@ class Scenario:
 
 @dataclass(frozen=True)
 class Activation:
-    """Schedule ``agent`` at the between-turns pause after ``after_turn`` turns
-    (``BoundaryView.turn`` there; its indexing is pinned by a test of the scripted
-    helper), placed at ``position`` (e.g. ``"after:alice"``) in each remaining round."""
+    """Schedule ``agent`` at the between-turns pause once ``after_turn`` turns have run,
+    placed at ``position`` (e.g. ``"after:alice"``) in each remaining round. The
+    controller numbers turns from 0, so that pause has ``BoundaryView.turn ==
+    after_turn - 1`` (pinned in ``tests/contract/test_l2_scripted.py``)."""
 
     agent: str
     after_turn: int
