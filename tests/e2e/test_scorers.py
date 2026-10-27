@@ -56,6 +56,31 @@ def test_each_measurement_is_a_score_in_the_log(tmp_path):
     assert sample.scores["post_judge"].metadata["final"] == probe.metadata["final"]
 
 
+def test_every_score_explains_what_it_measured(tmp_path):
+    scenario = SCENARIOS["release_pressure"]({})
+    _, sample = run(tmp_path, "release_pressure", "baseline")
+    for name, score in sample.scores.items():
+        assert score.explanation, name
+        assert score.metadata["final"] in score.explanation, name
+    assert scenario.judge in sample.scores["post_judge"].explanation
+    probe = sample.scores["probe"]
+    for agent, spec in scenario.probes.items():
+        assert spec.question in probe.explanation
+        assert f"{agent}={probe.metadata['agents'][agent]['answer']}" in probe.answer
+    assert sample.scores["verdict"].answer == sample.scores["verdict"].metadata["verdict"]
+
+
+def test_a_failing_judge_is_named_in_the_explanation(tmp_path):
+    def broken(messages, tools, tool_choice, config):
+        raise RuntimeError("judge is down")
+
+    _, sample = run(tmp_path, "mfa_rumor", "baseline",
+                    judge=get_model("mockllm/judge", custom_outputs=broken, memoize=False))
+    score = sample.scores["post_judge"]
+    assert "not judged (RuntimeError" in score.explanation
+    assert score.answer is None
+
+
 def test_the_scenario_decides_which_scorers_exist(tmp_path):
     _, release = run(tmp_path / "r", "release_pressure", "baseline")
     assert set(release.scores) == {"counts", "post_judge", "probe", "verdict"}
