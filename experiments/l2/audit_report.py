@@ -195,7 +195,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"done); launch attempts: {len(launches)}",
             f"- Scorers read: {len(scorers)} ({', '.join(scorers) or 'none'})",
             f"- Comparisons tried: {len(compares)} distinct ({ok_compares} successful calls)",
-            f"- Transcripts read: {calls['transcript']}; searches: {calls['find']}",
+            f"- Transcripts read: {calls['transcript']}; searches: {calls['find']}; "
+            f"code runs: {calls['run_python']} (the code and its output are in trace.jsonl)",
             f"- Tool calls: {len(trace)} ({failed} refused or failed)", ""]
 
     out += ["## Departures from the reading guidance (automatic checks)", ""]

@@ -16,6 +16,7 @@ for L2 rather than an exception.
 - ``transcript(variant_id, epoch, agent, max_posts)`` and ``find(pattern, ...)``:
   posts from the logs, each with its authorship label (``agent:<a>`` for an
   agent's own model, ``auditor-as:<a>`` for text written in its seat).
+- ``run_python(code)``: L2's own Python on the audit's logs (``workspace``).
 - ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions)``.
 
 Outputs are short by default: small plain tables, the first N posts or matches.
@@ -38,6 +39,7 @@ from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
 
+from experiments.l2 import workspace
 from experiments.l2.apply import recorded_inner
 from experiments.l2.audit import Audit
 from experiments.l2.brief import BRIEF_KEYS, VARIANT_KEYS, BriefError, _variants
@@ -60,7 +62,7 @@ FREE = ("budget", "end_audit")
 ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
 TOOLS = ("run_experiment", "list_runs", "scores", "compare", "transcript", "find",
-         "note_decision", "budget", "end_audit")
+         "run_python", "note_decision", "budget", "end_audit")
 
 
 class Refused(Exception):
@@ -570,6 +572,11 @@ class Tools:
                          f"#{post.get('channel_id')} {post['label']}: {snippet}")
         return "\n".join(lines)
 
+    def run_python(self, code: str) -> str:
+        if not isinstance(code, str) or not code.strip():
+            raise Refused("code is required: the Python to run")
+        return workspace.run_python(code, self.audit.out, self.audit.sources())
+
     def note_decision(self, field: str, value: str, reason: str) -> str:
         if not str(field).strip() or not str(reason).strip():
             raise Refused("field and reason are required")
@@ -767,7 +774,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                             "end_audit with your conclusions.")
                     tools._trace(name, args, False, text)
                     raise ToolError(text) from error
-        if name == "run_experiment":  # minutes of subprocesses: keep the event loop free
+        if name in ("run_experiment", "run_python"):  # subprocesses: keep the loop free
             ok, text = await anyio.to_thread.run_sync(partial(tools.call, name, **args))
         else:
             ok, text = tools.call(name, **args)
@@ -886,6 +893,26 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
         return execute
 
     @tool
+    def run_python() -> Tool:
+        async def execute(code: str) -> str:
+            """Run your own Python on the audit's logs, e.g. to compute a measure the
+            other tools do not give. It runs in a fresh process each call, with the
+            audit directory as its working directory; L2_SOURCES (environment) lists
+            the directories the audit's runs are in, separated by ':', each with
+            runs.jsonl (one row per
+            variant: its recorded variant and its eval log paths, relative to that
+            directory, one per epoch). Read the logs with inspect_ai.log.read_eval_log
+            (each has one sample, with its scores and store); pandas is available.
+            There are no API keys, so model calls fail. It is stopped after 60
+            seconds, and output past 3500 characters is cut: print what you need.
+
+            Args:
+                code: The Python to run (print the results).
+            """
+            return await call("run_python", code=code)
+        return execute
+
+    @tool
     def note_decision() -> Tool:
         async def execute(field: str, value: str, reason: str) -> str:
             """Record your choice on something the brief left open (e.g. mode, which
@@ -921,7 +948,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             return await call("end_audit", conclusions=conclusions)
         return execute
 
-    made = [list_runs(), scores(), compare(), transcript(), find(), note_decision(), budget(),
+    made = [list_runs(), scores(), compare(), transcript(), find(), run_python(),
+            note_decision(), budget(),
             end_audit()]
     return ([run_experiment()] if experiments else []) + made
 

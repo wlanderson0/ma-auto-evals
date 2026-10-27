@@ -79,8 +79,9 @@ conclusions must say where and why.
   never a finding.
 - Same scorers. Read every run in a comparison with the same scorer.
 - Findings vs leads. A result on the brief's measure, from a comparison you planned, is a
-  finding. A result on a measure you chose, or a pattern you noticed only after looking
-  at the data, is a lead until fresh epochs confirm it. In characterise mode, confirming
+  finding. A result on a measure you chose (one you compute with run_python included),
+  or a pattern you noticed only after looking at the data, is a lead until fresh epochs
+  confirm it. In characterise mode, confirming
   means fresh epochs of every variant in the comparison. In elicit mode, a claim that the
   behaviour can happen needs no comparison, only recurrence on fresh epochs of the setup
   that produced it.
