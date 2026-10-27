@@ -136,13 +136,15 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
 - **Info events**: `transcript().info({"event": ..., ...}, source="orbit_audit")`,
   attributed to the enclosing `span(type="branch")`, whose name is the branch id
   (`runner.py`).
-  - `orbit_audit_branch` (`branches.py`, `BranchTree`): `action` (`started` or
-    `finished`) plus the `BranchNode` fields `id`, `index`, `parent`,
-    `fork_revision`, `fork_reason`, `status`, `reason`, `revisions`, `output`
-    and `messages` (end-of-branch channel posts: `id`, `sender`, `channel_id`,
-    `recipients`, `content`, `sequence`).
-  - `orbit_audit_intervention` (`evidence.py`, `InterventionRecord`): `op`,
-    `outcome` (`applied` or `rejected`), `sequence`, `op_version`, `boundary`,
+  - `orbit_audit_branch` (`branches.py`, `BranchTree`): `version`
+    (`BRANCH_EVENT_VERSION`), `action` (`started` or `finished`) plus the
+    `BranchNode` fields `id`, `index`, `parent`, `fork_revision`, `fork_reason`,
+    `interventions` (the rollback's ops a child applies at its fork: `op` plus
+    the op's payload), `status`, `reason`, `revisions`, `output` and `messages`
+    (end-of-branch channel posts: `id`, `sender`, `channel_id`, `recipients`,
+    `content`, `sequence`).
+  - `orbit_audit_intervention` (`evidence.py`, `InterventionRecord`): `version`
+    (`EVIDENCE_VERSION`), `op`, `outcome` (`applied` or `rejected`), `sequence`, `op_version`, `boundary`,
     `actor`, `author`, `agents`, `turn`, `revision`, `branch`, `replayed`,
     `reason`, `payload`, `original`, `replacement`, `orbit`, `details`.
   - `orbit_audit_auditor_turn` (`auditor/llm.py`): `branch`, `revision`,
