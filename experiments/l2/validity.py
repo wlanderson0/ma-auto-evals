@@ -84,8 +84,8 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
             scope.allows_op("amend_pending") and scope.agents is None):
         rejections.append("the inner scope must allow amend_pending with agents: null (an "
                           "amendment affects every agent in the pending schedule), e.g. "
-                          "{ops: [replace_generation, amend_pending], agents: null}, as its "
-                          "control should too")
+                          "{ops: [replace_generation, amend_pending], agents: null}, as the "
+                          "variant it is compared with should have too")
     if len(activated) > 1:
         # Two at one pause would share a schedule revision (Orbit refuses the second);
         # at different rounds, the first makes later rounds longer, so the second's

@@ -7,8 +7,10 @@ and its shortened result in ``trace.jsonl``, and turns any error into a message
 for L2 rather than an exception.
 
 - ``run_experiment(variants, epochs, confirm=False)``: each variant is a JSON
-  object naming the control (from the brief's ``controls``) it is a copy of, with
-  mutations added; nothing runs if any variant is rejected.
+  object with a ``base`` scenario, its ``mutations`` and its ``inner`` spec, in the
+  brief's format; or it names one of the brief's ``controls``, and is that control's
+  base, mutations and inner with its own ``mutations`` added. Nothing runs if any
+  variant is rejected.
 - ``list_runs()``, ``scores(variant_ids, scorer)``, ``compare(a, b, scorer, rounds)``:
   milestone 1's ``Results`` across every experiment of the audit.
 - ``transcript(variant_id, epoch, agent, max_posts)`` and ``find(pattern, ...)``:
@@ -36,11 +38,12 @@ from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
 
-from experiments.l2.audit import CONDITIONS, TEXT_OPS, Audit
-from experiments.l2.brief import BRIEF_KEYS, BriefError, _mutation
+from experiments.l2.apply import recorded_inner
+from experiments.l2.audit import Audit
+from experiments.l2.brief import BRIEF_KEYS, VARIANT_KEYS, BriefError, _variants
 from experiments.l2.cost import PRICES, events_cost
 from experiments.l2.experiment import variant_from
-from experiments.l2.model import Variant
+from experiments.l2.model import L2Brief, Variant
 from experiments.l2.report import SCORER as MEASURE_SCORER
 from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
 from experiments.scenarios import SCENARIOS
@@ -54,7 +57,7 @@ POST_CHARS = 600
 """Posts longer than this are cut in tool output."""
 FREE = ("budget", "end_audit")
 """Tools that still run after the hard stop."""
-VARIANT_KEYS = {"id", "control", "mutations", "rationale", "condition"}
+ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
 TOOLS = ("run_experiment", "list_runs", "scores", "compare", "transcript", "find",
          "note_decision", "budget", "end_audit")
@@ -65,50 +68,48 @@ class Refused(Exception):
 
 
 # ------------------------------------------------------------------ variants
-def from_control(entry: Any, controls: Mapping[str, Variant]) -> tuple[Variant | None, list[str]]:
-    """L2's JSON variant as a full variant: a copy of its control with mutations added
-    (and optionally a different inner condition). ``(None, problems)`` if it cannot be."""
+def entry_variant(entry: Any, brief: L2Brief) -> tuple[Variant | None, list[str]]:
+    """L2's JSON variant as a variant, with what is wrong with it.
+
+    With ``base``, the entry is a variant in the brief's format. With ``control``, it is
+    that control's base, mutations and inner, with the entry's ``mutations`` added after
+    the control's. Either way, an ``inner`` the entry gives replaces the default (the
+    control's, else the brief's) whole. ``allowed_changes`` limits the mutations L2
+    wrote, not a control's. The variant comes back (with problems) whenever it parses,
+    so the audit's own checks can add theirs."""
     if not isinstance(entry, Mapping):
         return None, [f"a variant must be a JSON object, not {entry!r}"]
-    problems = []
-    if unknown := sorted(set(entry) - VARIANT_KEYS, key=str):
-        problems.append(f"unknown key(s) {unknown} (allowed: {sorted(VARIANT_KEYS)})")
-    for key in ("id", "rationale", "control"):
-        if not isinstance(entry.get(key), str) or not entry[key].strip():
-            problems.append(f"{key} is required text")
-    control = controls.get(entry.get("control")) if isinstance(entry.get("control"), str) \
-        else None
-    if isinstance(entry.get("control"), str) and control is None:
-        problems.append(f"does not start from a control: {entry['control']!r} is not one of "
-                        f"the brief's controls {sorted(controls)}")
-    added = entry.get("mutations") or []
-    mutations = []
-    if not isinstance(added, list):
-        problems.append("mutations must be a list")
-        added = []
-    for i, data in enumerate(added):
-        try:
-            mutation = _mutation(data, f"mutations[{i}]")
-        except BriefError as error:
-            problems.append(str(error))
-            continue
-        if mutation.op in TEXT_OPS:
-            problems.append(f"mutations[{i}]: {mutation.op} writes {TEXT_OPS[mutation.op]}; "
-                            "in milestone 2 setup texts come only from the controls")
-        mutations.append(mutation)
-    condition = entry.get("condition")
-    if condition is not None and condition not in CONDITIONS:
-        problems.append(f"condition must be one of {list(CONDITIONS)}, not {condition!r}")
-    if problems or control is None:
-        return None, problems
-    inner = control.inner
-    if condition is not None and condition != inner.condition:
-        inner = type(inner)(condition=condition, brief=inner.brief,
-                            opening=inner.opening if condition == "scripted" else (),
-                            scope=inner.scope, limits=inner.limits)
-    return Variant(id=entry["id"].strip(), base=control.base,
-                   mutations=(*control.mutations, *mutations), inner=inner,
-                   rationale=entry["rationale"].strip()), []
+    if unknown := sorted(set(entry) - ENTRY_KEYS, key=str):
+        return None, [f"unknown key(s) {unknown} (allowed: {sorted(ENTRY_KEYS)})"]
+    if ("base" in entry) == ("control" in entry):
+        return None, ["give either base (a scenario) or control (one of the brief's "
+                      "controls), not both or neither"]
+    raw = {key: entry[key] for key in VARIANT_KEYS if key in entry}
+    control = None
+    if "control" in entry:
+        controls = {c.id: c for c in brief.controls or ()}
+        control = controls.get(entry["control"]) if isinstance(entry["control"], str) else None
+        if control is None:
+            return None, [f"control {entry['control']!r} is not one of the brief's controls "
+                          f"{sorted(controls)}"]
+        raw["base"] = control.base
+    default = control.inner if control is not None else brief.inner
+    if raw.get("inner") is None and default is not None:
+        raw["inner"] = recorded_inner(default)
+    try:  # only L2's own mutations are parsed, so errors point at its own list
+        [variant] = _variants([raw], None, None)
+    except BriefError as error:
+        return None, [str(error)]
+    if control is not None:
+        variant = dataclasses.replace(variant,
+                                      mutations=(*control.mutations, *variant.mutations))
+    own = variant.mutations[len(control.mutations):] if control is not None else \
+        variant.mutations
+    allowed = brief.allowed_changes
+    if allowed is not None and (banned := sorted({m.axis for m in own} - set(allowed))):
+        return variant, [f"the brief's allowed_changes {list(allowed)} do not allow "
+                         f"{banned}"]
+    return variant, []
 
 
 def describe(mutation: Mapping[str, Any]) -> str:
@@ -283,15 +284,14 @@ class Tools:
         problems: list[list[str]] = []
         built: dict[int, Variant] = {}
         for i, entry in enumerate(entries):
-            variant, found = from_control(entry, self.audit.controls())
+            variant, found = entry_variant(entry, self.audit.brief)
             problems.append(found)
             if variant is not None:
                 built[i] = variant
-        claimed = {v.id: entries[i]["control"] for i, v in built.items()}
         if any(problems):
             # The audit's own checks too, so L2 sees every rejection at once.
             if built:
-                checked = self.audit.check(list(built.values()), claimed)
+                checked = self.audit.check(list(built.values()))
                 for i, (_, _, found) in zip(built, checked, strict=True):
                     problems[i] += list(found.rejections)
             result = self.audit.record_rejection(list(zip(names, problems, strict=True)),
@@ -301,8 +301,7 @@ class Tools:
                  "problems": problems[i]} for i in range(len(entries))])
             raise Refused(self._launch_text(result))
         try:
-            result = self.audit.launch(list(built.values()), epochs, confirm,
-                                       controls=claimed)
+            result = self.audit.launch(list(built.values()), epochs, confirm)
         except Exception as error:
             self._propose(entries, "error", None, [
                 {"problems": [f"{type(error).__name__}: {error}"]}] * len(entries))
@@ -363,19 +362,17 @@ class Tools:
                 + (f" STOPPED: {b['stopped']}." if b["stopped"] else ""))
 
     def variant_rows(self) -> list[dict[str, Any]]:
-        """Every variant run so far: experiment, control, what it adds, status, epochs."""
+        """Every variant run so far: experiment, base, its changes, status, epochs."""
         results = self.results()
         rows = []
         for vid, run in results.runs.items():
             record = results.variants.get(vid, {})
             variant = variant_from(run["variant"])
-            control = self.audit.control_of(variant)
-            added = variant.mutations[len(control.mutations):] if control else variant.mutations
             rows.append({
-                "id": vid, "experiment": self._where.get(vid, "?"),
-                "control": control.id if control else "-",
+                "id": vid, "experiment": self._where.get(vid, "?"), "base": variant.base,
                 "condition": variant.inner.condition,
-                "changes": "; ".join(describe(dataclasses.asdict(m)) for m in added) or "none",
+                "changes": "; ".join(describe(dataclasses.asdict(m))
+                                     for m in variant.mutations) or "none",
                 "status": record.get("status", "?"), "epochs": run["epochs_done"],
                 "cost": run["cost_usd"], "rationale": variant.rationale,
                 "flags": len(record.get("warnings", [])) + len(run.get("errors", []))})
@@ -383,14 +380,13 @@ class Tools:
 
     def list_runs(self) -> str:
         results = self.results()
-        rows = [[r["id"], r["experiment"], r["control"], r["condition"], r["changes"],
+        rows = [[r["id"], r["experiment"], r["base"], r["condition"], r["changes"],
                  r["status"], r["epochs"], f"${r['cost']:.4f}", r["flags"]]
                 for r in self.variant_rows()]
         if not rows:
             return "No variants have run yet."
-        head = ["variant", "experiment", "control", "condition",
-                "changes (added to the control; all mutations if none)", "status", "epochs",
-                "cost", "warnings+errors"]
+        head = ["variant", "experiment", "base", "condition", "changes (its mutations)",
+                "status", "epochs", "cost", "warnings+errors"]
         return table(head, rows) + (f"\nProblems in the logs: {results.problems}"
                                     if results.problems else "")
 
@@ -504,7 +500,7 @@ class Tools:
                          "comparison.")
         if self._where.get(a) != self._where.get(b):
             notes.append(f"Note: {a} ran in {self._where.get(a)} and {b} in "
-                         f"{self._where.get(b)}; the guidance is to run the control in the "
+                         f"{self._where.get(b)}; the guidance is to run both in the "
                          "same experiment.")
         ea, eb = len(results.epochs(a)), len(results.epochs(b))
         if ea != eb:
@@ -627,8 +623,10 @@ def _difference(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
             return "rounds"
         if m["op"] in ("add_agent", "activate_agent"):
             return f"{args.get('name') or args.get('agent')} in the run"
-        if m["op"] == "append_line":
+        if m["axis"] == "persona":
             return f"{args.get('agent')}'s persona"
+        if m["axis"] == "models":
+            return f"{args.get('agent')}'s model"
         return f"{m['axis']}.{m['op']}"
 
     only: dict[str, list[str]] = {}
@@ -721,7 +719,7 @@ def _baseline(a: str, b: str, ra: Mapping[str, Any], rb: Mapping[str, Any],
                 f"not have {agent} in its setup at all. Compare with the same setup where "
                 f"{agent} is present but never scheduled"
                 + (f" (run so far: {', '.join(fits)})" if fits else
-                   " (e.g. a copy of the control that has the idle agent, such as M6)")
+                   " (the same variant without its activate_agent)")
                 + ", so the activation is the only difference.")
     return notes
 
@@ -781,18 +779,23 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
         async def execute(variants: str, epochs: int, confirm: bool = False) -> str:
             """Run an experiment: some variants, each for the same number of epochs.
 
-            Each variant is a copy of one of the brief's controls with changes added.
             Nothing runs if any variant is rejected; the rejections are returned. If the
             estimated cost exceeds what is left for experiments, nothing runs unless you
             call again with confirm=true.
 
             Args:
                 variants: A JSON list of variant objects, each {"id": a new short id
-                    (letters, digits, _ or -), "control": the id of the control it copies,
-                    "mutations": a list of changes added to the control's, each {"axis",
-                    "op", "args", optional "at"}, "rationale": why you propose it}, and
-                    optionally "condition": "scripted" (the control's) or "baseline" (no
-                    scripted opening).
+                    (letters, digits, _ or -; unique in the audit), "base": the scenario
+                    it changes, "mutations": a list of changes, each {"axis", "op",
+                    "args", optional "at"}, "inner": what runs inside it, "rationale":
+                    why you propose it}. inner is {"condition": "scripted", "opening":
+                    [[channel, text], ...]} (the seat's first posts, then its own model)
+                    or {"condition": "baseline"} (the seat's own model throughout); left
+                    out, it is the brief's inner, if it sets one. A variant may name one
+                    of the brief's controls instead of a base: {"id", "control",
+                    "mutations", "rationale", optional "inner"} is that control's base,
+                    mutations and inner with these mutations added (an inner given
+                    replaces the control's).
                 epochs: Runs of each variant (the same for every variant).
                 confirm: Launch even if the estimate exceeds what is left.
             """
@@ -803,7 +806,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
     @tool
     def list_runs() -> Tool:
         async def execute() -> str:
-            """List every variant run so far: its experiment, control, changes, status,
+            """List every variant run so far: its experiment, base, changes, status,
             epochs and cost."""
             return await call("list_runs")
         return execute
@@ -834,7 +837,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
             Args:
                 a: A variant id.
-                b: The variant id it is compared with (usually its control).
+                b: The variant id it is compared with (e.g. the same setup without
+                    the change).
                 scorer: Leave out to read the brief's measure; otherwise probe or counts.
                 rounds: counts only: compare post counts up to this round.
             """

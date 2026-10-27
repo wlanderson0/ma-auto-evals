@@ -11,12 +11,14 @@ import pytest
 from experiments.l2.apply import ApplyError, UnknownOp, apply, seat_scope
 from experiments.l2.brief import parse_brief
 from experiments.l2.model import InnerSpec, Mutation, Variant
+from experiments.run import TARGETS
 from experiments.scenarios import SCENARIOS, Activation
 from orbit_audit.scope import AuditScope
 
 MILESTONE1 = Path(__file__).parents[2] / "experiments" / "l2" / "briefs" / "milestone1.md"
 GRID = {v.id: v for v in parse_brief(MILESTONE1).variants}
 SCRIPTED = InnerSpec(condition="scripted")
+PRICED = "openrouter/openai/gpt-4o-mini"
 
 
 def base(variant: Variant):
@@ -236,6 +238,20 @@ def test_non_scripted_variants_keep_the_scenario_scope():
      ApplyError, "ValidationError"),  # Orbit refuses a channel with no readers
     ((Mutation("schedule", "activate_agent", {"agent": "erin", "position": "after:alice"},
                at="after_round:١"),), ApplyError, "after_round"),  # ASCII digits only
+    ((Mutation("models", "set_model", {"agent": "carol", "model": "openrouter/acme/x"}),),
+     ApplyError, "no price for 'openrouter/acme/x'"),
+    ((Mutation("models", "set_model", {"agent": "zed", "model": PRICED}),), ApplyError,
+     "not in the setup"),
+    ((Mutation("models", "set_model", {"agent": "carol"}),), ApplyError, "needs ['model']"),
+    ((Mutation("models", "set_model", {"agent": "carol", "model": "mockllm/model"}),),
+     ApplyError, "no price for 'mockllm/model'"),  # free, but not a model to study
+    ((Mutation("roster", "add_agent", {"name": "erin", "persona": "E",
+                                       "model": "openrouter/acme/x", "channels": {}}),),
+     ApplyError, "no price for 'openrouter/acme/x'"),
+    ((Mutation("persona", "set_persona", {"agent": "zed", "persona": "Zed"}),), ApplyError,
+     "not in the setup"),
+    ((Mutation("persona", "set_persona", {"agent": "bob", "persona": " "}),), ApplyError,
+     "persona must be non-empty text"),
 ])
 def test_bad_mutations_raise(mutations, error, message):
     with pytest.raises(error, match=message.replace("[", r"\[").replace("]", r"\]")):
@@ -255,3 +271,52 @@ def test_an_unknown_agent_on_a_channel_is_left_for_the_validity_checks():
     scenario = apply(SCENARIOS["mfa_rumor"]({}), variant(
         Mutation("topology", "add_reader", {"agent": "zed", "channel": "town"})))
     assert "zed" in channel(scenario, "town").readers
+
+
+def models(scenario) -> dict[str, str | None]:
+    return {spec.name: spec.model for spec in scenario.task["setup"].agents}
+
+
+def test_set_model_changes_only_that_agents_model():
+    live = SCENARIOS["mfa_rumor"](dict(TARGETS["mfa_rumor"]))
+    scenario = apply(live, variant(Mutation("models", "set_model",
+                                            {"agent": "carol", "model": PRICED})))
+    assert models(scenario) == {**models(live), "carol": PRICED}
+    assert scenario.team.models["carol"] == PRICED
+    assert prompts(scenario) == prompts(live)
+
+
+def test_set_persona_replaces_the_persona_phrase_and_clears_extra():
+    plain = SCENARIOS["mfa_rumor"]({})
+    line = Mutation("persona", "append_line", {"agent": "carol", "line": "You trust security."})
+    new = Mutation("persona", "set_persona",
+                   {"agent": "carol", "persona": "Carol, a database administrator"})
+    scenario = apply(plain, variant(line, new))
+    assert scenario.team.personas["carol"] == "Carol, a database administrator"
+    assert "carol" not in scenario.team.extra
+    carol = prompts(scenario)["carol"]
+    assert carol.startswith("You are Carol, a database administrator at Northwind. ")
+    assert "trust security" not in carol
+    assert {a: p for a, p in prompts(scenario).items() if a != "carol"} == {
+        a: p for a, p in prompts(plain).items() if a != "carol"}
+
+
+def test_set_persona_on_the_seat_removes_its_dose_line_and_so_its_dose():
+    dose = Mutation("persona", "append_line", {"agent": "alice", "line": "Say Kestrel.",
+                                               "dose": "STEADY"})
+    new = Mutation("persona", "set_persona", {"agent": "alice", "persona": "Alice, an SRE"})
+    kestrel = SCENARIOS["kestrel_naming"]({})
+    spec = Variant(id="X", base="kestrel_naming", mutations=(dose, new), inner=SCRIPTED,
+                   rationale="r")
+    scenario = apply(kestrel, spec)
+    assert scenario.intended_dose is None and "Say Kestrel" not in prompts(scenario)["alice"]
+
+
+def test_every_ready_made_change_describes_its_arguments():
+    from experiments.l2.apply import OPS, describe_ops
+
+    text = describe_ops()
+    for axis, ops in OPS.items():
+        for op in ops:
+            assert f"{axis}/{op} " in text, (axis, op)
+    assert "models/set_model {agent, model}" in text

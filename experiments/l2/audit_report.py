@@ -80,8 +80,8 @@ def proposals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         entry = row.get("proposed")
         if isinstance(entry, dict):
-            key = json.dumps({k: entry.get(k) for k in ("id", "control", "mutations",
-                                                        "condition")}, sort_keys=True)
+            key = json.dumps({k: entry.get(k) for k in ("id", "base", "control", "mutations",
+                                                        "inner")}, sort_keys=True)
         else:
             key = json.dumps(entry, sort_keys=True, default=str)
         outcome = ("run" if row.get("experiment") and row.get("epochs_done") else
@@ -157,9 +157,9 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         variants, out = [], out + [f"(The variants could not be read: {error})", ""]
     out += ["## Variants (what each changed and why)", ""]
     if variants:
-        out += ["| variant | experiment | control | changes added | condition | status | "
+        out += ["| variant | experiment | base | changes | condition | status | "
                 "epochs | rationale |", "|---|---|---|---|---|---|---|---|"]
-        out += [f"| {v['id']} | {v['experiment']} | {v['control']} | {v['changes']} | "
+        out += [f"| {v['id']} | {v['experiment']} | {v['base']} | {v['changes']} | "
                 f"{v['condition']} | {v['status']} | {v['epochs']} | "
                 f"{' '.join(v['rationale'].split())} |" for v in variants]
     else:
@@ -262,7 +262,7 @@ def _score_departures(tools: Tools, ids: list[str]) -> list[str]:
     notes = []
     if len(set(where.values())) > 1:
         notes.append(f"Note: the variants ran in different experiments ({where}); the guidance "
-                     "is to run the control in the same experiment.")
+                     "is to run them in the same experiment.")
     if len(set(epochs.values())) > 1:
         notes.append(f"Note: unequal epochs ({epochs}); the guidance is the same number of "
                      "epochs on every side.")

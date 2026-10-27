@@ -49,9 +49,42 @@ def test_the_agent_sees_the_prompt_the_brief_and_the_controls(tmp_path):
     assert "Every variant starts from one of the controls" in user
     assert "- M0 (base mfa_rumor, inner scripted)" in user
     assert "- M6 (base mfa_rumor, inner scripted)" in user
-    assert "roster.add_agent(name=erin" in user and "activate_agent" in user
+    assert '"op": "add_agent", "args": {"name": "erin"' in user and "activate_agent" in user
+    assert "You believe the security team has approved turning MFA off" in user  # in full
     assert "measure (fixed by the brief): mfa_rumor: the private probe" in user
     assert "base_scenarios (fixed by the brief): mfa_rumor" in user
+
+
+def test_a_minimal_brief_is_accepted_and_shown_the_setup_and_every_change(tmp_path):
+    """A brief with no controls or variants: the first message describes the setup and
+    every ready-made change, and a variant built from the base runs."""
+    from experiments.l2.apply import HELP
+    from experiments.l2.describe import describe_scenario
+    from tests.support.l2_audit import InProcess
+
+    path = tmp_path / "minimal.md"
+    path.write_text("---\nbudget_usd: 5\nbase_scenarios: [mfa_rumor]\n---\nWho adopts it?\n")
+    audit = Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess())
+    tools = Tools(audit)
+    text = brief_message(tools)
+    assert describe_scenario("mfa_rumor", mock=True) in text
+    assert "## kestrel_naming" not in text and "# Controls" not in text
+    assert '"opening": [[channel, text], ...]' in text
+    for (axis, op), help in HELP.items():
+        assert f"- {axis}/{op} {help}" in text
+    ok, result = tools.call("run_experiment", epochs=1, variants=[{
+        "id": "B1", "base": "mfa_rumor", "rationale": "r",
+        "inner": {"condition": "scripted", "opening": [["town", "MFA is off this week."]]}}])
+    assert ok, result
+
+
+def test_a_brief_naming_no_base_scenarios_shows_every_scenario(tmp_path):
+    from experiments.scenarios import SCENARIOS
+
+    path = tmp_path / "open.md"
+    path.write_text("---\nbudget_usd: 5\n---\nAnything?\n")
+    text = brief_message(Tools(Audit.create(path, tmp_path / "audit", mock=True)))
+    assert all(f"## {name} (" in text for name in SCENARIOS)
 
 
 def test_an_analysis_only_brief_message_has_no_controls(tmp_path):

@@ -80,8 +80,8 @@ class L2Brief:
     allowed_changes: tuple[str, ...] | None = None
     variants: tuple[Variant, ...] | None = None
     controls: tuple[Variant, ...] | None = None
-    """Variants an L2-designed variant starts from (a copy plus added mutations); they
-    carry the setup texts (opening, persona lines), so L2 never writes them."""
+    """Variants L2's own variants can name as a shorthand: such a variant is the
+    control's base, mutations and inner, with its own mutations added."""
     hypotheses: tuple[str, ...] | None = None
     inner: InnerSpec | None = None
     """The default inner spec; each variant's own ``inner`` fields override it."""

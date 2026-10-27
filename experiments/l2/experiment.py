@@ -58,7 +58,7 @@ from experiments.run import (
     build_task,
     l2_metadata,
 )
-from experiments.scenarios import SCENARIOS, Scenario
+from experiments.scenarios import SCENARIOS, Scenario, build_team
 from orbit_audit.branches import AuditLimits
 from orbit_audit.scope import AuditScope
 
@@ -76,25 +76,28 @@ log's ``error_retries``."""
 
 
 # ------------------------------------------------------------------ building
-def offline(variant: Variant) -> Variant:
-    """``variant`` for the mock models: agents it adds get no model of their own, so
-    they fall back to the task's mock instead of a live provider."""
-    return dataclasses.replace(variant, mutations=tuple(
-        dataclasses.replace(m, args={**m.args, "model": None}) if m.op == "add_agent" else m
-        for m in variant.mutations))
+def base_scenario(name: str, mock: bool) -> Scenario:
+    """The base scenario a variant is built on: on the mock models, or on the live
+    models of ``experiments.run.TARGETS``."""
+    return SCENARIOS[name]({} if mock else TARGETS[name])
 
 
 def build(variant: Variant, mock: bool) -> tuple[Scenario | None, Scenario | None, Problems]:
-    """``(base, built, problems)``; a variant that cannot be built is a rejection."""
+    """``(base, built, problems)``; a variant that cannot be built is a rejection. On the
+    mock models every agent runs on the task's mock, whatever model a mutation gave it
+    (it is still checked against the price table)."""
     if variant.base not in SCENARIOS:
         return None, None, Problems(rejections=(f"unknown base scenario {variant.base!r}",))
-    base = SCENARIOS[variant.base]({} if mock else TARGETS[variant.base])
-    spec = offline(variant) if mock else variant
+    base = base_scenario(variant.base, mock)
     try:
-        built = apply(base, spec)
+        built = apply(base, variant)
     except ApplyError as error:
-        return base, None, check(base, None, spec, build_error=f"{type(error).__name__}: {error}")
-    return base, built, check(base, built, spec)
+        return base, None, check(base, None, variant,
+                                 build_error=f"{type(error).__name__}: {error}")
+    if mock:
+        team = dataclasses.replace(built.team, models={})
+        built = dataclasses.replace(built, team=team, task=build_team(built.name, team))
+    return base, built, check(base, built, variant)
 
 
 def models_for(mock: bool) -> dict[str, Any]:

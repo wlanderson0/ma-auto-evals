@@ -17,6 +17,7 @@ is complete however L2 stopped.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -29,10 +30,13 @@ from inspect_ai.log import EvalLog, read_eval_log
 from inspect_ai.model import Model, get_model
 from inspect_ai.tool import ToolDef
 
-from experiments.l2.audit import EPSILON, TEXT_OPS
+from experiments.l2.apply import describe_ops, recorded_inner
+from experiments.l2.audit import EPSILON
 from experiments.l2.audit_report import write_report
 from experiments.l2.cost import PRICES, UnknownPrice, log_cost, price
-from experiments.l2.tools import Tools, describe, inspect_tools, transcript_spend
+from experiments.l2.describe import describe_scenario
+from experiments.l2.tools import Tools, inspect_tools, transcript_spend
+from experiments.scenarios import SCENARIOS
 
 MODEL = "openrouter/openai/gpt-4.1-mini"
 """L2's model in milestone 2 (already in the price table: the judge and L0/L1 auditor)."""
@@ -138,7 +142,9 @@ def token_backstop(budget_usd: float, model: str,
 
 
 def brief_message(tools: Tools) -> str:
-    """The first user message: the brief, the controls and the changes L2 can make."""
+    """The first user message: the brief, then (unless the audit is analysis only) the
+    setup of every scenario L2 may start from, the brief's controls, how a scripted
+    opening is given, and every ready-made change."""
     audit = tools.audit
     brief = audit.brief
     lines = ["# The brief", "", brief.question.strip(), ""]
@@ -152,25 +158,37 @@ def brief_message(tools: Tools) -> str:
     if audit.analysis is not None:
         lines += ["", "This audit is analysis only: you cannot run experiments. Read the "
                   "runs already made with the query tools."]
-    elif brief.controls:
-        lines += ["", "# Controls", "",
-                  "Each variant you run is a copy of one of these with changes added:"]
+        return "\n".join(lines)
+    lines += ["", "# The setup", "",
+              "The scenarios you can start from, as they run before any change:", ""]
+    for name in brief.base_scenarios or tuple(SCENARIOS):
+        lines += [describe_scenario(name, audit.mock), ""]
+    if brief.controls:
+        lines += ["# Controls", "",
+                  "The brief's controls: a variant can name one instead of a base, and is "
+                  "then its base, mutations and inner with your mutations added."]
         for control in brief.controls:
-            mutations = "; ".join(describe(_plain(m)) for m in control.mutations) or "none"
             lines += [f"- {control.id} (base {control.base}, inner "
                       f"{control.inner.condition}): {control.rationale}",
-                      f"  its mutations: {mutations}"]
-        lines += ["", "# Changes you can add", "",
-                  "- topology: add_reader / remove_reader / add_writer / remove_writer, "
-                  "args {agent, channel}",
-                  "- schedule: set_rounds, args {rounds}; activate_agent, args {agent, "
-                  "position: \"after:<agent>\"} with at: \"after_round:<n>\" (an agent in "
-                  "the setup with no turns, e.g. the Advocate in M6)",
-                  f"- not allowed: {', '.join(sorted(TEXT_OPS))} (setup texts come from the "
-                  "controls)"]
-        if brief.allowed_changes is not None:
-            lines.append(f"- the brief allows only these axes: "
-                         f"{', '.join(brief.allowed_changes)}")
+                      f"  its mutations: {json.dumps([_plain(m) for m in control.mutations])}"]
+            lines += [f"  its opening: #{channel}: {text}"
+                      for channel, text in control.inner.opening]
+        lines.append("")
+    lines += ["# What runs inside a variant", "",
+              "- scripted: inner {\"condition\": \"scripted\", \"opening\": [[channel, "
+              "text], ...]}. The seat's first posts are these messages, each on a channel "
+              "it can write to; after them its own model writes its posts.",
+              "- baseline: inner {\"condition\": \"baseline\"}. The seat's own model writes "
+              "everything.", ""]
+    if brief.inner is not None:
+        lines += [f"The brief's inner, used when a variant leaves inner out: "
+                  f"{json.dumps(recorded_inner(brief.inner))}", ""]
+    lines += ["# Ready-made changes", "",
+              "Each mutation is {\"axis\", \"op\", \"args\", optional \"at\"}; at is "
+              "\"start\" unless said otherwise.", describe_ops()]
+    if brief.allowed_changes is not None:
+        lines.append(f"- the brief allows only these axes: "
+                     f"{', '.join(brief.allowed_changes)}")
     return "\n".join(lines)
 
 

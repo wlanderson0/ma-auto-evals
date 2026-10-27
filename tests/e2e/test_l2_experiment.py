@@ -278,3 +278,24 @@ def test_the_launch_decision_is_on_disk_before_the_first_epoch(tmp_path):
 
     run_experiment(subset(tmp_path, ["K1"]), 1, out, mock=True, launch=launch)
     assert seen == {"launched": True, "runs": 1, "cost": True}
+
+
+def test_on_the_mock_models_every_agent_runs_on_the_mock_whatever_its_set_model():
+    """A set_model is checked against the price table, then ignored on the mocks."""
+    import dataclasses
+
+    from experiments.l2.experiment import build
+    from experiments.l2.model import InnerSpec, Mutation, Variant
+
+    spec = Variant(id="X", base="mfa_rumor", inner=InnerSpec(condition="baseline"),
+                   rationale="r", mutations=(Mutation("models", "set_model", {
+                       "agent": "carol", "model": "openrouter/openai/gpt-4o-mini"}),))
+    _, mock, problems = build(spec, mock=True)
+    assert not problems.rejected
+    assert {a.model for a in mock.task["setup"].agents} == {None}
+    _, live, _ = build(spec, mock=False)
+    assert {a.name: a.model for a in live.task["setup"].agents}["carol"] == \
+        "openrouter/openai/gpt-4o-mini"
+    bad = dataclasses.replace(spec, mutations=(Mutation("models", "set_model", {
+        "agent": "carol", "model": "openrouter/acme/x"}),))
+    assert build(bad, mock=True)[2].rejected

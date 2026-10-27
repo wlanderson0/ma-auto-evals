@@ -148,19 +148,9 @@ def test_variant_ids_are_unique_in_the_audit(tmp_path):
     assert rejections[1] == [] and any("used twice" in r for r in rejections[2])
 
 
-def test_allowed_changes_limit_what_is_added_to_the_control(tmp_path):
-    """M0's own persona line is the control's, not a change L2 made."""
-    path = brief(tmp_path, 1.0, extra="\nallowed_changes: [topology]")
-    a = Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess())
-    rounds = Mutation("schedule", "set_rounds", {"rounds": 2})
-    result = a.launch([variant(path, "M0", "V1", *DAVE_ON_TOWN), variant(path, "M0", "V2",
-                                                                         rounds)], 1)
-    by_id = {v["id"]: v for v in result["variants"]}
-    assert by_id["V1"]["rejections"] == []
-    assert any("do not allow ['schedule']" in r for r in by_id["V2"]["rejections"])
-
-
-def test_a_variant_must_start_from_a_control_and_add_no_setup_text(tmp_path):
+def test_a_variant_need_not_start_from_a_control_and_may_write_setup_text(tmp_path):
+    """Milestone 3: variants are a base with mutations and an inner spec; persona lines,
+    added agents and openings are L2's to write."""
     a, path = audit(tmp_path)
     m0 = variant(path, "M0", "X0")
     no_belief = dataclasses.replace(m0, id="X1", mutations=())
@@ -169,12 +159,8 @@ def test_a_variant_must_start_from_a_control_and_add_no_setup_text(tmp_path):
     persona = variant(path, "M0", "X3", Mutation("persona", "append_line",
                                                  {"agent": "bob", "line": "You agree."}))
     result = a.launch([no_belief, new_opening, persona], 1)
-    rejections = {v["id"]: " ".join(v["rejections"]) for v in result["variants"]}
-    assert "does not start from a control" in rejections["X1"]
-    assert "does not start from a control" in rejections["X2"]
-    assert "setup texts come only from the controls" in rejections["X3"]
-    assert a.control_of(variant(path, "M6", "A1")).id == "M6"  # the longest match
-    assert a.check([variant(path, "M0", "Y")], controls={"Y": "M6"})[0][2].rejected
+    assert result["status"] == "ran", result
+    assert all(v["rejections"] == [] for v in result["variants"])
 
 
 def test_spend_from_one_launch_shrinks_the_next(tmp_path):

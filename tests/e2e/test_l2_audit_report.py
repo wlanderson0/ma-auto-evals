@@ -41,7 +41,8 @@ def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_pa
     assert "- `epochs` = 2: pipeline test" in text
     assert "| exp-1 | C0, V1 | 2 | ran | - | $0.0000 |" in text
     assert "Launches that did not run: 1 rejected" in text
-    assert ("| V1 | exp-1 | M0 | topology.add_reader(agent=dave, channel=town); "
+    assert "| V1 | exp-1 | mfa_rumor | persona.append_line(agent=alice, line=" in text
+    assert ("; topology.add_reader(agent=dave, channel=town); "
             "topology.add_writer(agent=dave, channel=town) | scripted | accepted | 2 | "
             "Dave on #town |") in text
     assert text.count("### compare") == 1 and "V1 vs C0 on probe" in text
@@ -110,5 +111,5 @@ def test_an_analysis_only_report_and_a_damaged_trace(tmp_path):
     assert tools.call("end_audit", conclusions="Little can be concluded.")[0]
     text = (audit.out / "report.md").read_text()
     assert "Analysis only, on the runs in" in text and "mock" not in text.split("\n")[2]
-    assert "| V1 | exp-1 | M0 |" in text and "### compare V1 vs C0 (probe)" in text
+    assert "| V1 | exp-1 | mfa_rumor |" in text and "### compare V1 vs C0 (probe)" in text
     assert "- Experiments launched: 0" in text

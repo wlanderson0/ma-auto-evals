@@ -23,7 +23,8 @@ from typing import Any
 
 from orbit import ChannelConfig
 
-from experiments.l2.model import START, Mutation, Variant
+from experiments.l2.cost import PRICES, UnknownPrice, price
+from experiments.l2.model import START, InnerSpec, Mutation, Variant
 from experiments.scenarios import DOSES, Activation, Scenario, TeamSetup, build_team
 from orbit_audit.scope import AuditScope
 
@@ -58,14 +59,22 @@ class Draft:
 
 Op = Callable[[Draft, dict[str, Any]], None]
 OPS: dict[str, dict[str, Op]] = {}
+HELP: dict[tuple[str, str], str] = {}
+"""(axis, op) -> its arguments and what it does, as L2 is shown them."""
 
 
-def register(axis: str, op: str) -> Callable[[Op], Op]:
+def register(axis: str, op: str, help: str) -> Callable[[Op], Op]:
     def add(function: Op) -> Op:
         OPS.setdefault(axis, {})[op] = function
+        HELP[axis, op] = help
         return function
 
     return add
+
+
+def describe_ops() -> str:
+    """Every ready-made change, one per line: ``- axis/op {args}: what it does``."""
+    return "\n".join(f"- {axis}/{op} {HELP[axis, op]}" for axis in OPS for op in OPS[axis])
 
 
 def apply(scenario: Scenario, variant: Variant) -> Scenario:
@@ -143,18 +152,22 @@ def inner_scope(scenario: Scenario, variant: Variant) -> AuditScope | None:
 
 def recorded(variant: Variant) -> dict[str, Any]:
     """The variant as plain JSON-able data, for logs and metadata."""
-    inner = variant.inner
     return {
         "id": variant.id, "base": variant.base, "rationale": variant.rationale,
         "mutations": [dataclasses.asdict(m) for m in variant.mutations],
-        "inner": {
-            "condition": inner.condition, "brief": inner.brief,
-            "opening": [list(message) for message in inner.opening],
-            "scope": None if inner.scope is None else {  # sorted: frozensets dump unordered
-                key: None if value is None else sorted(value)
-                for key, value in (("ops", inner.scope.ops), ("agents", inner.scope.agents))},
-            "limits": None if inner.limits is None else inner.limits.model_dump(mode="json"),
-        },
+        "inner": recorded_inner(variant.inner),
+    }
+
+
+def recorded_inner(inner: InnerSpec) -> dict[str, Any]:
+    """An inner spec as plain data, in the brief's format."""
+    return {
+        "condition": inner.condition, "brief": inner.brief,
+        "opening": [list(message) for message in inner.opening],
+        "scope": None if inner.scope is None else {  # sorted: frozensets dump unordered
+            key: None if value is None else sorted(value)
+            for key, value in (("ops", inner.scope.ops), ("agents", inner.scope.agents))},
+        "limits": None if inner.limits is None else inner.limits.model_dump(mode="json"),
     }
 
 
@@ -173,6 +186,23 @@ def _text(args: dict[str, Any], key: str, op: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ApplyError(f"{op}: {key} must be non-empty text, got {value!r}")
     return value.strip()
+
+
+def _agent(team: TeamSetup, args: dict[str, Any], op: str) -> str:
+    agent = _text(args, "agent", op)
+    if agent not in team.roster:
+        raise ApplyError(f"{op}: {agent} is not in the setup ({list(team.roster)})")
+    return agent
+
+
+def _priced(model: str, op: str) -> None:
+    """Runs are costed from the price table, so an agent's model must have a price
+    (offline ``mockllm/`` models are free)."""
+    try:
+        price(model)
+    except UnknownPrice as error:
+        raise ApplyError(f"{op}: no price for {model!r}, so its runs could not be costed; "
+                         f"models with a price: {sorted(PRICES)}") from error
 
 
 def _channel(team: TeamSetup, channel: str) -> ChannelConfig:
@@ -209,11 +239,25 @@ def _membership(field: str, add: bool) -> Op:
 
 for _field in ("readers", "writers"):
     for _add in (True, False):
-        register("topology", f"{'add' if _add else 'remove'}_{_field[:-1]}")(
+        _word = _field[:-1]
+        register("topology", f"{'add' if _add else 'remove'}_{_word}",
+                 f"{{agent, channel}}: {'make' if _add else 'stop'} the agent "
+                 f"{'' if _add else 'being '}a {_word} of the channel")(
             _membership(_field, _add))
 
 
-@register("schedule", "set_rounds")
+@register("models", "set_model", "{agent, model}: put the agent on another model, one with "
+          f"a price (runs are costed from the price table): {', '.join(PRICES)}")
+def set_model(draft: Draft, args: dict[str, Any]) -> None:
+    _args(args, {"agent", "model"}, "set_model")
+    agent, model = _agent(draft.team, args, "set_model"), _text(args, "model", "set_model")
+    if model not in PRICES:  # a mockllm/ model would pass price() but run mock filler
+        raise ApplyError(f"set_model: no price for {model!r}; models with a price: "
+                         f"{sorted(PRICES)}")
+    draft.team = dataclasses.replace(draft.team, models={**draft.team.models, agent: model})
+
+
+@register("schedule", "set_rounds", "{rounds}: the number of rounds")
 def set_rounds(draft: Draft, args: dict[str, Any]) -> None:
     _args(args, {"rounds"}, "set_rounds")
     rounds = args["rounds"]
@@ -224,13 +268,20 @@ def set_rounds(draft: Draft, args: dict[str, Any]) -> None:
     draft.team = dataclasses.replace(draft.team, rounds=rounds)
 
 
-@register("schedule", "activate_agent")
+@register("schedule", "activate_agent",
+          "{agent, position: \"after:<agent>\" or \"before:<agent>\"} with at: "
+          "\"after_round:<n>\": give turns from round n+1 on to an agent that is in the "
+          "setup with no turns (one added by roster/add_agent); one per variant")
 def activate_agent(draft: Draft, args: dict[str, Any]) -> None:
     """Never called on the setup: ``apply`` turns the mutation into an ``Activation``."""
     raise AssertionError("activate_agent is applied mid-run")
 
 
-@register("roster", "add_agent")
+@register("roster", "add_agent",
+          "{name, persona, model, channels: {read: [channel ids], write: [channel ids]}, "
+          "optional extra, turns: false}: add an agent with no turns (give it turns with "
+          "schedule/activate_agent); its prompt opens \"You are {persona} at Northwind\", "
+          "then extra")
 def add_agent(draft: Draft, args: dict[str, Any]) -> None:
     """Add an agent to the setup and its channels, with no turns (spec §3.3).
 
@@ -267,16 +318,19 @@ def add_agent(draft: Draft, args: dict[str, Any]) -> None:
             if name in members:
                 raise ApplyError(f"{name} is already a {field[:-1]} of {channel!r}")
             team = _replace_channel(team, channel, **{field: (*members, name)})
+    if args["model"] is not None:
+        _priced(args["model"], "add_agent")
     draft.team = team
 
 
-@register("persona", "append_line")
+@register("persona", "append_line",
+          "{agent, line, optional dose}: add a sentence to the agent's prompt, after its "
+          "persona and role; dose (LIGHT, STEADY or TAG) marks the seat's intended dose, "
+          "measured by seat_dose where the scenario has one")
 def append_line(draft: Draft, args: dict[str, Any]) -> None:
     """Add a sentence to the agent's extra prompt text (never to its persona phrase)."""
     _args(args, {"agent", "line"}, "append_line", optional={"dose"})
-    agent, line = _text(args, "agent", "append_line"), _text(args, "line", "append_line")
-    if agent not in draft.team.roster:
-        raise ApplyError(f"{agent} is not in the setup")
+    agent, line = _agent(draft.team, args, "append_line"), _text(args, "line", "append_line")
     if "dose" in args:
         dose = args["dose"]
         if dose not in DOSES:
@@ -289,3 +343,18 @@ def append_line(draft: Draft, args: dict[str, Any]) -> None:
     current = draft.team.extra.get(agent, "")
     draft.team = dataclasses.replace(
         draft.team, extra={**draft.team.extra, agent: f"{current} {line}" if current else line})
+
+
+@register("persona", "set_persona",
+          "{agent, persona}: replace the agent's persona phrase (its prompt opens \"You are "
+          "{persona} at Northwind\") and clear the extra text after it, so nothing "
+          "persona-specific is left from before")
+def set_persona(draft: Draft, args: dict[str, Any]) -> None:
+    _args(args, {"agent", "persona"}, "set_persona")
+    agent = _agent(draft.team, args, "set_persona")
+    persona = _text(args, "persona", "set_persona")
+    draft.team = dataclasses.replace(
+        draft.team, personas={**draft.team.personas, agent: persona},
+        extra={a: text for a, text in draft.team.extra.items() if a != agent})
+    if agent == draft.seat:  # its dose line, if any, is gone with the rest of its extra
+        draft.intended_dose = None

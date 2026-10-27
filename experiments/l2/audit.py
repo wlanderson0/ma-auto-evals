@@ -26,13 +26,12 @@ up to one epoch (recorded in ``ledger.json``).
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import math
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +52,6 @@ OVERRUN = ("a launched epoch runs to completion, so spending can exceed the budg
 EPSILON = 1e-9
 """Dollars: spend within this of the limit counts as reaching it, so float rounding
 never leaves a sliver of budget that would let one more epoch start."""
-TEXT_OPS = {"append_line": "persona text", "add_agent": "a new agent's persona"}
-"""Ops that write setup text; L2's variants take those texts from the controls."""
 
 
 class Audit:
@@ -104,24 +101,6 @@ class Audit:
     @property
     def experiments_dir(self) -> Path:
         return self.out / "experiments"
-
-    def controls(self) -> dict[str, Variant]:
-        return {c.id: c for c in self.brief.controls or ()}
-
-    def control_of(self, variant: Variant, hint: str | None = None) -> Variant | None:
-        """The control ``variant`` is a copy of (with mutations added after the control's,
-        and the same inner spec, or the same as a baseline without the opening); ``hint``
-        names the one it claims. Without a hint, the longest matching control."""
-        def copies(control: Variant) -> bool:
-            n = len(control.mutations)
-            baseline = dataclasses.replace(control.inner, condition="baseline", opening=())
-            return (variant.base == control.base and variant.mutations[:n] == control.mutations
-                    and variant.inner in (control.inner, baseline))
-        controls = self.controls()
-        if hint is not None:
-            return controls[hint] if hint in controls and copies(controls[hint]) else None
-        found = [c for c in controls.values() if copies(c)]
-        return max(found, key=lambda c: len(c.mutations)) if found else None
 
     def experiments(self) -> list[Path]:
         """Experiment directories, in launch order."""
@@ -203,27 +182,13 @@ class Audit:
                 used[row["id"].casefold()] = exp.name
         return used
 
-    def check(self, variants: Sequence[Variant],
-              controls: Mapping[str, str] | None = None) -> list[tuple[Variant, Any, Problems]]:
-        """Each variant built and checked: milestone 1's validity checks, plus what
-        milestone 2 and the brief allow. ``controls``: the control each variant id claims
-        to start from (otherwise found by matching)."""
+    def check(self, variants: Sequence[Variant]) -> list[tuple[Variant, Any, Problems]]:
+        """Each variant built and checked: milestone 1's validity checks, plus unique ids,
+        the conditions L2 runs and the brief's base scenarios. (``allowed_changes`` limits
+        the mutations L2 writes, so the tools check it where they read L2's variants.)"""
         used, seen, checked = self.used_ids(), set(), []
-        allowed = self.brief.allowed_changes
         for variant in variants:
             extra = []
-            hint = (controls or {}).get(variant.id)
-            control = self.control_of(variant, hint)
-            if control is None:
-                extra.append(
-                    f"does not start from a control: it must be a copy of one of the brief's "
-                    f"controls {sorted(self.controls())}"
-                    + (f" (it names {hint!r})" if hint else "") + " with mutations added")
-            added = variant.mutations[len(control.mutations):] if control else ()
-            for mutation in added:
-                if mutation.op in TEXT_OPS:
-                    extra.append(f"{mutation.op} writes {TEXT_OPS[mutation.op]}; in milestone 2 "
-                                 "setup texts come only from the controls")
             if not VARIANT_ID.fullmatch(variant.id):
                 extra.append(f"id {variant.id!r} may only use letters, digits, '_' and '-'")
             elif variant.id.casefold() in seen:
@@ -239,10 +204,6 @@ class Audit:
                     variant.base not in self.brief.base_scenarios):
                 extra.append(f"base {variant.base!r} is not in the brief's base_scenarios "
                              f"{list(self.brief.base_scenarios)}")
-            if allowed is not None and (
-                    banned := sorted({m.axis for m in added} - set(allowed))):
-                extra.append(f"the brief's allowed_changes {list(allowed)} do not allow "
-                             f"{banned}")
             try:  # it must survive the per-launch brief that milestone 1 runs from
                 [again] = _variants([recorded(variant)], None, None)
                 if again != variant:
@@ -254,8 +215,8 @@ class Audit:
                 rejections=(*extra, *problems.rejections), warnings=problems.warnings)))
         return checked
 
-    def launch(self, variants: Sequence[Variant], epochs: int, confirm: bool = False,
-               controls: Mapping[str, str] | None = None) -> dict[str, Any]:
+    def launch(self, variants: Sequence[Variant], epochs: int,
+               confirm: bool = False) -> dict[str, Any]:
         """Check, gate and run one experiment (``experiments/exp-<n>``).
 
         ``status``: ``refused`` (audit ended, analysis only, hard stop, bad arguments),
@@ -269,7 +230,7 @@ class Audit:
         if refused:
             return self._finish(result, "refused", refused)
 
-        checked = self.check(variants, controls)
+        checked = self.check(variants)
         result["variants"] = [
             {"id": v.id, "status": "rejected" if p.rejected else
              ("warned" if p.warnings else "accepted"),
@@ -324,7 +285,7 @@ class Audit:
     def record_rejection(self, rows: Sequence[tuple[str, Sequence[str]]], epochs: Any,
                          confirm: bool) -> dict[str, Any]:
         """Record a launch the tools rejected before it became variants (e.g. a JSON
-        variant naming no control), as ``launch`` records its own rejections. ``rows``:
+        variant naming an unknown control), as ``launch`` records its own rejections. ``rows``:
         each proposed variant's name and rejections (none for one that passed)."""
         result: dict[str, Any] = {
             "ids": [name for name, _ in rows], "epochs": epochs, "confirm": confirm,
