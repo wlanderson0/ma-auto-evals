@@ -67,6 +67,12 @@ Launch = Callable[[Path, list[str], int, Path, bool], dict[str, str]]
 CostOf = Callable[[EvalLog], dict[str, Any]]
 REPO = Path(__file__).resolve().parents[2]
 """Where ``python -m experiments...`` must run from (the package is not installed)."""
+ATTEMPT_TIMEOUT, MAX_RETRIES, SAMPLE_RETRIES = 45, 4, 1
+"""A provider call that has not answered in ``ATTEMPT_TIMEOUT`` seconds is abandoned and
+retried, up to ``MAX_RETRIES`` times (Inspect sets no timeout by default, and in the
+first live run three samples hung on a call that never returned); a sample that errors
+anyway (e.g. a provider's 404) is run again ``SAMPLE_RETRIES`` time(s), recorded in the
+log's ``error_retries``."""
 
 
 # ------------------------------------------------------------------ building
@@ -124,7 +130,9 @@ def run_epoch(brief_path: Path, ids: Sequence[str], epoch: int, out: Path,
     logs = inspect_eval(
         tasks, model=models["target"], log_dir=str(out / "logs" / f"epoch-{epoch}"),
         display="none", max_tasks=len(tasks), epochs=1, fail_on_error=False,
-        score_on_error=True, max_tokens=MAX_TOKENS, model_roles=roles)
+        score_on_error=True, max_tokens=MAX_TOKENS, model_roles=roles,
+        attempt_timeout=ATTEMPT_TIMEOUT, max_retries=MAX_RETRIES,
+        retry_on_error=SAMPLE_RETRIES)
     paths = {names[log.eval.task]: relative(log.location, out) for log in logs}
     (out / f"epoch-{epoch}.json").write_text(json.dumps(paths, indent=1, sort_keys=True))
     return paths

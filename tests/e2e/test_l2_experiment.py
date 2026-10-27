@@ -246,3 +246,21 @@ def test_the_subprocess_entry_point_runs_an_epoch(tmp_path):
     assert runs[0].epochs_done == 1
     assert read_eval_log(str(resolve(runs[0].logs[0], out))).eval.metadata["l2"]["epoch"] == 1
     assert json.loads((out / "epoch-1.json").read_text()) == {"K1": runs[0].logs[0]}
+
+
+def test_live_epochs_time_out_stuck_calls_and_retry_errored_samples(tmp_path, monkeypatch):
+    """A call that never returns must not hang the epoch (it did in the first live run)."""
+    import experiments.l2.experiment as experiment
+
+    seen = {}
+    real = experiment.inspect_eval
+
+    def spy(tasks, **options):
+        seen.update(options)
+        return real(tasks, **options)
+
+    monkeypatch.setattr(experiment, "inspect_eval", spy)
+    run_experiment(subset(tmp_path, ["K1"]), 1, tmp_path / "out", mock=True, launch=Launcher())
+    assert seen["attempt_timeout"] == experiment.ATTEMPT_TIMEOUT
+    assert seen["max_retries"] == experiment.MAX_RETRIES
+    assert seen["retry_on_error"] == experiment.SAMPLE_RETRIES
