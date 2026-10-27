@@ -240,11 +240,13 @@ Behaviour:
 
 ### Task 11: Verify, then run live
 
-- [ ] **Step 1:** `uv run python -m experiments.l2.experiment --brief experiments/l2/briefs/milestone1.md --mock --epochs 2` (top-level mode, without `--epoch`): all 15 variants run, no rejections, report renders. Full test suite and ruff pass.
-- [ ] **Step 2:** Team review of the opening texts and dose lines (D3), and choice of the Advocate's model and persona (D2).
-- [ ] **Step 3:** Live: 1 epoch of M0 and K1 only; record the cost and set `budget_usd` in `milestone1.md` from it (15 variants × 5 epochs, plus headroom, plus up to one epoch of overshoot); check the placeholder is gone.
-- [ ] **Step 4:** Live: the full grid, 5 epochs. Record cost per sample (the history for later estimates and the figure for the LLM L2's budget).
-- [ ] **Step 5:** Write up the milestone 1 results (tables from the report, warnings, off-dose runs, search counts).
+Milestone 1's aim is working plumbing for the LLM L2, so the live run is one epoch of every variant: enough to run each kind of change end to end with real models and to get a cost per variant. The full 5-epoch grid (spec §10) is deferred until it is needed as the baseline for the LLM L2.
+
+- [ ] **Step 1:** `uv run python -m experiments.l2.experiment --brief experiments/l2/briefs/milestone1.md --mock --epochs 2`: all 15 variants run, no rejections, report renders. On the plain mocks every Kestrel run reads off-dose (the mock Alice never repeats the name); that is expected, not a failure. Full test suite and ruff pass.
+- [ ] **Step 2:** Quick team read of the opening texts and dose lines (D3).
+- [ ] **Step 3:** Live, from a terminal with `OPENROUTER_API_KEY` in `.env`: `uv run python -m experiments.l2.experiment --brief experiments/l2/briefs/milestone1.md --epochs 1`. With the placeholder budget the launch may stop at the cost check and print the estimate; that is part of what is being checked. If the estimate looks reasonable, re-run with `--confirm`.
+- [ ] **Step 4:** `uv run python -m experiments.l2.report logs/l2/<audit dir>`: every variant has scores (none missing or incomplete without a stated reason), M7's Advocate posted in rounds 2 and 3, Alice's delivered dose is recorded for every Kestrel run, and `cost.json` gives a cost per variant. Then replace the placeholder `budget_usd` with a figure for the 5-epoch grid from that cost (15 × 5 runs, plus headroom).
+- [ ] **Step 5:** Note what the live run showed (anything that broke, the estimate against the real cost, the cost per variant) in a short write-up. No findings about spread are drawn from one epoch.
 
 ---
 
