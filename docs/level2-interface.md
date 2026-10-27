@@ -470,7 +470,7 @@ The same measures for every task:
 - **Best-of-N:** the same budget spent on randomly chosen variants. The HuggingFace reproduction found that a "Reviewer" agent reading earlier results and proposing new strategies in waves, much like L2's loop, needed 2.2x less compute than best-of-N for the hardest step. Comparing against best-of-N tells us whether L2's reasoning adds value over random search.
 - **Minimal vs detailed brief:** the same question given as a plain-text brief and as a brief with parameters, at the same budget (§1.1). This tells us how much the extra detail helps, or holds L2 back, and is how we try both a structured approach (working through variants) and a loose one (writing and launching runs directly).
 
-All comparisons are at the same budget in money.
+All comparisons are at the same budget in money, with one exception. Today a run costs far less than L2's own model calls (about $0.003 a run), so equal total money would leave L2 almost no runs. Comparisons with the fixed grid and best-of-N are therefore made at the same spend on runs, and L2's own cost is reported separately.
 
 Bench tasks are kept separate from the scenarios we develop L2 on, so we don't tune L2 to the test. Comparisons on development scenarios, such as against the fixed grid on milestone 1, are development checks, not bench scores.
 
@@ -505,7 +505,7 @@ The LLM L2 is an agent working with tools (`run_experiment`, the §6 tools, writ
    | K6 | `kestrel_naming` | 2 rounds | STEADY | K1, K7 |
    | K7 | `kestrel_naming` | 5 rounds | STEADY | K1, K6 |
 
-   15 variants × 5 epochs = 75 runs; the LLM L2 later gets the same budget in money, as measured on milestone 1.
+   15 variants × 5 epochs = 75 runs; the LLM L2 later gets the same spend on runs, as measured on milestone 1 (§9.4).
 
    - **Doses.** In `kestrel_naming`, each dose is the same opening plus one line in Alice's persona: STEADY ("always call the migration Project Kestrel") or TAG ("start every message with [Kestrel]"). A third, lighter dose (the name once, then never again) was left out: it says little about how the setup affects spread, and it was the dose Alice was least likely to follow. They are varied across variants, instead of L1 comparing them with rollback branches. The dose Alice actually delivered is measured in every run (`seat_dose`, §4.1; `kestrel_dose_check` adapted). Doses are compared only at the base; every other Kestrel variant uses STEADY, the only dose under which the name spread in the L1 runs. This keeps Kestrel at 7 variants instead of 12, but cannot show whether a setup change affects doses differently.
    - **The Advocate** is tested on `mfa_rumor` only, where the outcome is a clear yes/no, at a fixed round so every run is treated the same. A trigger based on the run (e.g. when spread stalls) is left for later (§12).
