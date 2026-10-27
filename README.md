@@ -83,6 +83,45 @@ cosmos upload logs/live/<run>
 
 Install, login, reading runs and troubleshooting: [`docs/cosmos.md`](docs/cosmos.md).
 
+### Inspect scorers
+
+Each measurement is an Inspect scorer, so it shows in the Inspect viewer next to the
+run (`counts`, `post_judge`, `probe`, `free_probes`, `verdict`; each scenario gets the
+ones that apply to it). A saved log can be rescored with other models without
+re-running the agents:
+
+```python
+import asyncio
+
+from inspect_ai import score_async
+from inspect_ai.log import read_eval_log, write_eval_log
+
+from experiments.run import TARGETS
+from experiments.scenarios import SCENARIOS
+from experiments.scorers import measurement_scorers
+
+name, condition = "mfa_rumor", "l1"  # the scenario and the condition the log was run with
+log = read_eval_log("logs/live/<run>/mfa_rumor/l1/<log>.eval")
+scenario = SCENARIOS[name](TARGETS[name])  # the same target models as the run
+rescored = asyncio.run(score_async(
+    log, measurement_scorers(scenario, condition),
+    model_roles={"judge": "openrouter/openai/gpt-4.1"}, action="overwrite"))
+write_eval_log(rescored, "rescored.eval")  # score_async returns a new log; it does not save one
+```
+
+Pass the same condition the log was run with: it decides which branches are counted.
+Belief and free probes go to each agent's own model (the `probe` role is used only
+for agents that have none), so build the scenario with the run's target models as
+above. `inspect score` cannot do this: it cannot rebuild the per-scenario scorers.
+
+Scoring runs inside the sample, under half the scenario's `time_limit` (450 s of 900 s),
+and a timeout during scoring errors the sample; scorers that had already finished keep
+their scores and the rest read as missing (`incomplete` in the row). The L1 mention
+scenarios make many sequential probe calls per branch, so on slow models they are the
+ones that can hit it. If a live run's scores are missing for that reason, rescore the
+saved log later with `score_async` as above (rescoring applies no sample time limit). Samples
+that error are still scored, from the store the runner left.
+
 ## Working on Orbit and orbit_audit together
 
 Clone the fork next to this repo and install it editable over the pinned copy:

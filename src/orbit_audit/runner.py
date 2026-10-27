@@ -11,7 +11,8 @@ The baseline branch runs first. When a branch ends with a rollback, its child
 is queued; the audit ends when no branch is pending. The sample then adopts
 the state of its last completed branch (or, if none completed, its last
 branch), so Orbit's scorers score the final timeline, and the branch tree and
-budget are stored under ``orbit_audit:branches`` and ``orbit_audit:budget``.
+budget are stored under ``orbit_audit:branches`` and ``orbit_audit:budget``, and each
+branch's measurement record under ``orbit_audit:measurements``.
 Each node keeps its branch's final channel messages, so abandoned branches
 remain evidence.
 """
@@ -46,6 +47,7 @@ from orbit_audit.branches import (
 )
 from orbit_audit.controller import Approver, AuditController
 from orbit_audit.delivery import CommunicationWorld
+from orbit_audit.measurements import MEASUREMENTS_KEY, MeasurementRecorder
 from orbit_audit.policy import AuditPolicy
 from orbit_audit.scope import AuditScope
 from orbit_audit.timeline import register_timelines
@@ -98,6 +100,7 @@ def audit_solver(
         auditor = policy()
         budget = BudgetLedger(limits or AuditLimits())
         tree = BranchTree()
+        recorder = MeasurementRecorder()
         initial = _fresh_state(state)
         pending: list[Replay | None] = [None]
         completed: BranchOutcome | None = None
@@ -122,6 +125,8 @@ def audit_solver(
                 if on_controller is not None:
                     on_controller(controller)
                 outcome = await _run_branch(initial, inner, generate, controller, ids, node.id)
+                recorder.record(controller, replay.parent if replay else None,
+                                list(transcript().events))
                 tree.finish(node.id, outcome.status, reason=outcome.reason,
                             revisions=controller.revision, output=_completion(outcome.state),
                             messages=outcome.messages)
@@ -134,9 +139,9 @@ def audit_solver(
                                           fork_revision=k, interventions=rollback.interventions,
                                           reason=rollback.reason))
                 elif outcome.status is BranchStatus.ERROR:
-                    _adopt(state, outcome, tree, budget)
+                    _adopt(state, outcome, tree, budget, recorder)
                     raise outcome.error  # infrastructure failures fail loudly
-            _adopt(state, completed or outcome, tree, budget)
+            _adopt(state, completed or outcome, tree, budget, recorder)
         finally:  # also on error and on a sample limit: that is when the view is needed most
             register_timelines(list(transcript().events))
         return state
@@ -210,7 +215,7 @@ def _completion(state: TaskState) -> str | None:
 
 
 def _adopt(state: TaskState, outcome: BranchOutcome, tree: BranchTree,
-           budget: BudgetLedger) -> None:
+           budget: BudgetLedger, recorder: MeasurementRecorder) -> None:
     """Make the sample's state that of ``outcome``'s branch, plus audit records."""
     for key in list(state.store.keys()):
         state.store.delete(key)
@@ -222,3 +227,4 @@ def _adopt(state: TaskState, outcome: BranchOutcome, tree: BranchTree,
     state.metadata.update(outcome.state.metadata)
     state.store.set(BRANCHES_KEY, [node.model_dump(mode="json") for node in tree.nodes])
     state.store.set(BUDGET_KEY, budget.summary())
+    state.store.set(MEASUREMENTS_KEY, recorder.payload())

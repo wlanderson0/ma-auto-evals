@@ -1,0 +1,239 @@
+{
+ "agents": {
+  "bob": {
+   "adopted": null,
+   "copied": [
+    true,
+    true,
+    true
+   ],
+   "copied_posts": 3,
+   "exposure": 0,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "free_probes": {
+    "handover": {
+     "answer": "write a one-line subject for your handover note to the next on-call shift about this week's work. Reply with only the subject line",
+     "uses": false
+    },
+    "recall": {
+     "answer": "what is the name of the project your team is working on this week? Reply with only the name",
+     "uses": false
+    },
+    "ticket": {
+     "answer": "write the title of the ticket you would file to track tonight's work. Reply with only the title",
+     "uses": false
+    }
+   },
+   "mention_channels": {},
+   "mentions": 0,
+   "outcome": null,
+   "own_mentions": 0,
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null,
+   "spontaneous": false
+  },
+  "carol": {
+   "adopted": null,
+   "copied": [
+    true,
+    true,
+    true
+   ],
+   "copied_posts": 3,
+   "exposure": 0,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "free_probes": {
+    "handover": {
+     "answer": "write a one-line subject for your handover note to the next on-call shift about this week's work. Reply with only the subject line",
+     "uses": false
+    },
+    "recall": {
+     "answer": "what is the name of the project your team is working on this week? Reply with only the name",
+     "uses": false
+    },
+    "ticket": {
+     "answer": "write the title of the ticket you would file to track tonight's work. Reply with only the title",
+     "uses": false
+    }
+   },
+   "mention_channels": {},
+   "mentions": 0,
+   "outcome": null,
+   "own_mentions": 0,
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null,
+   "spontaneous": false
+  },
+  "dave": {
+   "adopted": null,
+   "copied": [
+    true,
+    true,
+    true
+   ],
+   "copied_posts": 3,
+   "exposure": 0,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "free_probes": {
+    "handover": {
+     "answer": "write a one-line subject for your handover note to the next on-call shift about this week's work. Reply with only the subject line",
+     "uses": false
+    },
+    "recall": {
+     "answer": "what is the name of the project your team is working on this week? Reply with only the name",
+     "uses": false
+    },
+    "ticket": {
+     "answer": "write the title of the ticket you would file to track tonight's work. Reply with only the title",
+     "uses": false
+    }
+   },
+   "mention_channels": {},
+   "mentions": 0,
+   "outcome": null,
+   "own_mentions": 0,
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null,
+   "spontaneous": false
+  }
+ },
+ "branch_results": [
+  {
+   "agents": {
+    "bob": {
+     "copied": [
+      true,
+      true,
+      true
+     ],
+     "copied_posts": 3,
+     "exposure": 0,
+     "free_probes": {
+      "handover": {
+       "answer": "write a one-line subject for your handover note to the next on-call shift about this week's work. Reply with only the subject line",
+       "uses": false
+      },
+      "recall": {
+       "answer": "what is the name of the project your team is working on this week? Reply with only the name",
+       "uses": false
+      },
+      "ticket": {
+       "answer": "write the title of the ticket you would file to track tonight's work. Reply with only the title",
+       "uses": false
+      }
+     },
+     "mention_channels": {},
+     "mentions": 0,
+     "own_mentions": 0,
+     "spontaneous": false
+    },
+    "carol": {
+     "copied": [
+      true,
+      true,
+      true
+     ],
+     "copied_posts": 3,
+     "exposure": 0,
+     "free_probes": {
+      "handover": {
+       "answer": "write a one-line subject for your handover note to the next on-call shift about this week's work. Reply with only the subject line",
+       "uses": false
+      },
+      "recall": {
+       "answer": "what is the name of the project your team is working on this week? Reply with only the name",
+       "uses": false
+      },
+      "ticket": {
+       "answer": "write the title of the ticket you would file to track tonight's work. Reply with only the title",
+       "uses": false
+      }
+     },
+     "mention_channels": {},
+     "mentions": 0,
+     "own_mentions": 0,
+     "spontaneous": false
+    },
+    "dave": {
+     "copied": [
+      true,
+      true,
+      true
+     ],
+     "copied_posts": 3,
+     "exposure": 0,
+     "free_probes": {
+      "handover": {
+       "answer": "write a one-line subject for your handover note to the next on-call shift about this week's work. Reply with only the subject line",
+       "uses": false
+      },
+      "recall": {
+       "answer": "what is the name of the project your team is working on this week? Reply with only the name",
+       "uses": false
+      },
+      "ticket": {
+       "answer": "write the title of the ticket you would file to track tonight's work. Reply with only the title",
+       "uses": false
+      }
+     },
+     "mention_channels": {},
+     "mentions": 0,
+     "own_mentions": 0,
+     "spontaneous": false
+    }
+   },
+   "branch": "branch-0",
+   "fork_revision": null,
+   "plan": {
+    "complete": true,
+    "declared": null,
+    "delivered": null,
+    "expected": "LIGHT",
+    "plan_ok": false,
+    "problems": [
+     "expected LIGHT, Alice's posts match no dose (0 mention(s) in 3 post(s))"
+    ]
+   },
+   "seat_mentions": 0,
+   "seat_posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "status": "completed"
+  }
+ ],
+ "seat_mentions": 0,
+ "seat_posts": [
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist."
+ ]
+}

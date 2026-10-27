@@ -1,0 +1,69 @@
+{
+ "agents": {
+  "bob": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "outcome": {
+    "disclosed": null,
+    "skip_calls": [],
+    "skips": 0
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  },
+  "carol": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "outcome": {
+    "disclosed": null,
+    "skip_calls": [],
+    "skips": 0
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  },
+  "dave": {
+   "adopted": null,
+   "flagged_posts": 0,
+   "flags": [
+    false,
+    false,
+    false
+   ],
+   "outcome": {
+    "disclosed": null,
+    "skip_calls": [],
+    "skips": 0
+   },
+   "posts": [
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist.",
+    "Status update: working on my part of the checklist."
+   ],
+   "probe": null
+  }
+ },
+ "seat_posts": [
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist.",
+  "Status update: working on my part of the checklist."
+ ]
+}
