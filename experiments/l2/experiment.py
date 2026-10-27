@@ -326,7 +326,8 @@ def provenance(mock: bool, checked: list) -> dict[str, Any]:
 def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = False,
                    confirm: bool = False, history: Sequence[Path] = (),
                    launch: Launch = launch_subprocess, cost_of: CostOf = log_cost,
-                   estimator: Callable[..., dict[str, Any]] = estimate) -> list[VariantRun]:
+                   estimator: Callable[..., dict[str, Any]] = estimate,
+                   stop: Callable[[], str | None] | None = None) -> list[VariantRun]:
     """Build, check, record and run the brief's variants for ``epochs`` epochs.
 
     ``out`` must be new or empty. Every epoch runs from the recorded copy of the brief
@@ -379,6 +380,9 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
         if total >= brief.budget_usd:
             decisions["stopped"] = (f"before epoch {epoch}: spent ${total:.4f} of the "
                                     f"${brief.budget_usd:.2f} budget")
+            break
+        if stop is not None and (why := stop()):  # e.g. the caller's time is up
+            decisions["stopped"] = f"before epoch {epoch}: {why}"
             break
         try:
             paths = launch(recorded_brief, ids, epoch, out, mock)

@@ -312,3 +312,23 @@ def test_the_ledger_counts_every_model_call_in_the_logs(tmp_path, monkeypatch):
     assert ledger["by_kind"]["experiments"] == pytest.approx(in_logs)
     assert ledger["spent_usd"] == pytest.approx(in_logs + events_cost(l2_events,
                                                                       TEST_PRICES)["usd"])
+
+
+def test_no_epoch_starts_after_l2s_time_is_up(tmp_path):
+    """The epoch in progress finishes; the next one does not start, and the stop is
+    recorded like a budget stop."""
+    class TimeUpAfterEpoch1(InProcess):
+        def __call__(self, brief_path, ids, epoch, out, mock):
+            paths = super().__call__(brief_path, ids, epoch, out, mock)
+            a.deadline = 0.0  # the deadline passes while epoch 1 runs
+            return paths
+
+    launch = TimeUpAfterEpoch1()
+    a, path = audit(tmp_path, launch=launch)
+    a.deadline = float("inf")
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3)
+    assert result["status"] == "ran" and [e for _, e in launch.calls] == [1]
+    assert {v["epochs_done"] for v in result["variants"]} == {1}
+    assert result["stopped"] == "before epoch 2: L2's time limit is reached"
+    again = a.launch([variant(path, "M0", "V2")], 1)
+    assert again["status"] == "refused" and "time limit is reached" in again["reason"]

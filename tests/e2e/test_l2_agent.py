@@ -154,3 +154,13 @@ def test_openrouter_tools_are_sent_without_strict_mode(tmp_path, monkeypatch):
         run_l2(Tools(audit), MODEL, SYSTEM_PROMPT)
     [model] = seen
     assert str(model) == MODEL and model.api.strict_tools is False
+
+
+def test_a_time_limit_sets_the_experiments_deadline(tmp_path):
+    import time
+
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
+    before = time.monotonic()
+    run_l2(Tools(audit, on_end=write_report), fake_model(FULL[-1:]), SYSTEM_PROMPT,
+           time_limit=150)
+    assert before + 150 <= audit.deadline <= time.monotonic() + 150

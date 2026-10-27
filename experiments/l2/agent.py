@@ -17,6 +17,7 @@ is complete however L2 stopped.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -228,6 +229,8 @@ def run_l2(tools: Tools, model: str | Model, prompt: str, *,
         # rounds), which OpenAI then rejects with a 400 before any call is made.
         model = get_model(model, strict_tools=False)
     tools.stop_reason = None
+    if time_limit is not None:  # experiments stop starting epochs when L2's time is up
+        tools.audit.deadline = time.monotonic() + time_limit
     [log] = inspect_eval(task, model=model, log_dir=str(tools.audit.out / "l2"),
                          display="none", fail_on_error=False)
     finalize(tools, log, prices)

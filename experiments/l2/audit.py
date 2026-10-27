@@ -78,6 +78,9 @@ class Audit:
         self.estimator = estimator
         self.l2: dict[str, Any] = {"usd": 0.0, "by_model": {}}
         self.ended = False
+        self.deadline: float | None = None
+        """``time.monotonic()`` after which no experiment or epoch starts (L2's time
+        limit); an epoch already running finishes."""
         self.notes: list[str] = []
         """Problems with the ledger itself (e.g. L2's log could not be priced)."""
 
@@ -302,7 +305,8 @@ class Audit:
                 m1.run_experiment(path, epochs, exp, mock=self.mock, confirm=confirm,
                                   history=history, launch=self.launch_epoch,
                                   cost_of=self.cost_of,
-                                  estimator=lambda *args, **kwargs: guess)
+                                  estimator=lambda *args, **kwargs: guess,
+                                  stop=self.time_up)
                 status, reason = "ran", None
             except Exception as error:  # the record keeps the finished epochs
                 status, reason = "failed", f"{type(error).__name__}: {error}"[:3000]
@@ -329,6 +333,11 @@ class Audit:
                           "rejections": list(found), "warnings": []} for name, found in rows]}
         return self._finish(result, "rejected", "a variant failed its checks, so nothing ran")
 
+    def time_up(self) -> str | None:
+        if self.deadline is None or time.monotonic() < self.deadline:
+            return None
+        return "L2's time limit is reached"
+
     def _refusal(self, variants: Sequence[Variant], epochs: int) -> str | None:
         if self.ended:
             return "the audit has ended"
@@ -336,6 +345,8 @@ class Audit:
             return "this is an analysis-only audit: run_experiment is off"
         if stopped := self.stopped:
             return f"{stopped}; no new experiment starts"
+        if why := self.time_up():
+            return f"{why}; no new experiment starts"
         if isinstance(epochs, bool) or not isinstance(epochs, int) or epochs < 1:
             return f"epochs must be a whole number >= 1, not {epochs!r}"
         if not variants:
