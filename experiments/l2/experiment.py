@@ -370,6 +370,9 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
             f"budget ${brief.budget_usd:.2f}; rerun with confirm=True to launch")
 
     state = _State(checked)
+    # On disk before anything is spent: a run killed mid-epoch still leaves the launch
+    # decision, the estimate and every variant's (empty) run record.
+    state.write(out, decisions, brief)
     ids = [v.id for v, _ in accepted]
     for epoch in range(1, epochs + 1) if decisions["launched"] else ():
         total = sum(state.spent.values())

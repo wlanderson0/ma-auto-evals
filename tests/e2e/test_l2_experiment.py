@@ -264,3 +264,17 @@ def test_live_epochs_time_out_stuck_calls_and_retry_errored_samples(tmp_path, mo
     assert seen["attempt_timeout"] == experiment.ATTEMPT_TIMEOUT
     assert seen["max_retries"] == experiment.MAX_RETRIES
     assert seen["retry_on_error"] == experiment.SAMPLE_RETRIES
+
+
+def test_the_launch_decision_is_on_disk_before_the_first_epoch(tmp_path):
+    out = tmp_path / "out"
+    seen = {}
+
+    def launch(brief, ids, epoch, out_dir, mock):
+        decisions = json.loads((out / "decisions.json").read_text())
+        seen.update(launched=decisions["launched"], runs=len(lines(out / "runs.jsonl")),
+                    cost=(out / "cost.json").exists())
+        return run_epoch(brief, ids, epoch, out_dir, mock)
+
+    run_experiment(subset(tmp_path, ["K1"]), 1, out, mock=True, launch=launch)
+    assert seen == {"launched": True, "runs": 1, "cost": True}
