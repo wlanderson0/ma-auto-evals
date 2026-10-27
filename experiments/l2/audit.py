@@ -378,11 +378,14 @@ def _json(path: Path) -> dict[str, Any]:
 
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
-    """``python -m experiments.l2.audit --brief <brief> [--mock] [--fake]
-    [--analysis-only <milestone 1 audit dir>]``."""
+    """``python -m experiments.l2.audit --brief <brief> [--mock] [--fake] [--model M]
+    [--analysis-only <milestone 1 audit dir>]``.
+
+    Without ``--fake``, L2 is an LLM (``--model``, default ``agent.MODEL``) and its own
+    calls are live (OpenRouter) even when the experiments run on mocks (``--mock``)."""
     import argparse
 
-    from experiments.l2.agent import run_l2
+    from experiments.l2 import agent
     from experiments.l2.audit_report import write_report
     from experiments.l2.fake import ANALYSIS, FULL, PROMPT, fake_model
     from experiments.l2.tools import Tools
@@ -394,24 +397,57 @@ def main(argv: Sequence[str] | None = None) -> None:
                         help="experiments run on the offline scripted mock models")
     parser.add_argument("--fake", action="store_true",
                         help="L2 is the scripted fake (experiments.l2.fake), not an LLM")
+    parser.add_argument("--model", default=None,
+                        help="L2's model (default: experiments.l2.agent.MODEL)")
+    parser.add_argument("--live", action="store_true",
+                        help="allow OpenRouter calls (an LLM L2, or experiments without "
+                             "--mock); without it, anything that would spend money stops")
     parser.add_argument("--analysis-only", type=Path, default=None, metavar="AUDIT",
                         help="read this milestone 1 audit; run_experiment is off")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
     args = parser.parse_args(argv)
-    if not args.fake:
-        raise SystemExit("the LLM L2 agent is step 5 of docs/level2-milestone2-mvp.md and is "
-                         "not built yet; use --fake")
-    if not args.mock and args.analysis_only is None:
+    if args.fake and args.model:
+        raise SystemExit("--fake and --model exclude each other")
+    if args.fake and not args.mock and args.analysis_only is None:
         raise SystemExit("--fake runs experiments live (OpenRouter spend) unless --mock is "
-                         "given; live runs wait for review (plan, step 6), so use --mock")
+                         "given; a scripted L2 has no use for live runs, so use --mock")
+    if not args.fake:
+        from experiments.l2.cost import UnknownPrice, price
+
+        try:
+            price(args.model or agent.MODEL)
+        except UnknownPrice as error:  # L2 could not count its own spend
+            raise SystemExit(str(error)) from error
+    live_l2 = not args.fake and not (args.model or "").startswith("mockllm/")
+    live_runs = not args.mock and args.analysis_only is None
+    if live_l2 or live_runs:
+        what = " and ".join(x for x, on in (("L2's own calls", live_l2),
+                                             ("the experiments", live_runs)) if on)
+        if not args.live:
+            raise SystemExit(f"{what} would call OpenRouter and spend money: add --live to "
+                             "allow it (budget: the brief's budget_usd)")
+        import os
+
+        from dotenv import load_dotenv
+
+        load_dotenv(m1.REPO / ".env")  # OPENROUTER_API_KEY
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            raise SystemExit(f"{what} need OPENROUTER_API_KEY (environment or .env)")
     out = args.out or Path(f"logs/l2-audit/{time.strftime('%Y%m%d-%H%M%S')}"
+                           + ("-analysis" if args.analysis_only else "")
                            + ("-mock" if args.mock else "") + ("-fake" if args.fake else ""))
     audit = Audit.create(args.brief, out, mock=args.mock, analysis=args.analysis_only,
                          history=args.history)
     tools = Tools(audit, on_end=write_report)
-    script = ANALYSIS if args.analysis_only else FULL
-    run_l2(tools, fake_model(script), PROMPT)
+    if args.fake:
+        script = ANALYSIS if args.analysis_only else FULL
+        agent.run_l2(tools, fake_model(script), PROMPT)
+    else:
+        model = args.model or agent.MODEL
+        print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls included); "
+              f"audit: {out}", flush=True)
+        agent.run_l2(tools, model, agent.SYSTEM_PROMPT)
     budget = audit.budget()
     print(f"spent ${budget['spent_usd']:.4f} of ${budget['budget_usd']:.2f}")
     print(f"report: {out / 'report.md'}")

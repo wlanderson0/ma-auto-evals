@@ -135,8 +135,6 @@ def test_the_cli_runs_the_fake_on_mocks(tmp_path, capsys):
     assert (out / "report.md").exists() and (out / "experiments" / "exp-1").exists()
     printed = capsys.readouterr().out
     assert "report:" in printed and "spent $0.0000 of $1.00" in printed
-    with pytest.raises(SystemExit, match="step 5"):
-        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "x"), "--mock"])
     with pytest.raises(SystemExit, match="use --mock"):  # no live spend before review
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "y"), "--fake"])
     assert not (tmp_path / "y").exists()

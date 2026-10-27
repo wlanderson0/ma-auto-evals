@@ -1,0 +1,132 @@
+"""The LLM L2 agent's prompt, first message and CLI wiring (plan step 5).
+
+Offline: the agent runs on the fake model, and the CLI's live path is checked with
+``run_l2`` replaced, so nothing here calls a provider.
+"""
+
+from __future__ import annotations
+
+import pytest
+from inspect_ai.log import read_eval_log, resolve_sample_attachments
+
+import experiments.l2.agent as agent
+from experiments.l2.agent import MODEL, SYSTEM_PROMPT, brief_message, run_l2
+from experiments.l2.audit import Audit, main
+from experiments.l2.audit_report import write_report
+from experiments.l2.cost import PRICES
+from experiments.l2.fake import FULL, fake_model
+from experiments.l2.tools import Tools
+from tests.support.l2_audit import MILESTONE2, brief
+
+ANALYSIS_BRIEF = MILESTONE2.parent / "milestone2-analysis.md"
+
+
+@pytest.mark.parametrize("guidance", [
+    "One change per comparison", "Per target", "same number on both sides",
+    "Findings vs leads", "fresh epochs of every variant", "Setups where the behaviour does not",
+    "auditor-as:<agent>", "Compared vs recorded", "compare post counts at the rounds",
+    "note_decision", "The search counts", "Where you departed from the reading guidance",
+    "only budget and end_audit work", "analysis only", "Same scorers",
+    "under new ids (e.g. V1b and C0b)", "elicit mode", "keep their control's rounds",
+    "spending can go over by up to one epoch"])
+def test_the_system_prompt_carries_the_reading_guidance(guidance):
+    assert guidance in " ".join(SYSTEM_PROMPT.split())  # line breaks do not matter
+
+
+def test_the_live_model_is_priced():
+    assert MODEL in PRICES
+
+
+def test_the_agent_sees_the_prompt_the_brief_and_the_controls(tmp_path):
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
+    tools = Tools(audit, on_end=write_report)
+    log = run_l2(tools, fake_model(FULL[-1:]), SYSTEM_PROMPT)
+    sample = resolve_sample_attachments(read_eval_log(log.location).samples[0])
+    first = next(e for e in sample.events if e.event == "model")
+    system = "\n".join(m.text for m in first.input if m.role == "system")
+    user = "\n".join(m.text for m in first.input if m.role == "user")
+    assert "# How to read results" in system
+    assert "Every variant starts from one of the controls" in user
+    assert "- M0 (base mfa_rumor, inner scripted)" in user
+    assert "- M6 (base mfa_rumor, inner scripted)" in user
+    assert "roster.add_agent(name=erin" in user and "activate_agent" in user
+    assert "measure (fixed by the brief): mfa_rumor: the private probe" in user
+    assert "base_scenarios (fixed by the brief): mfa_rumor" in user
+
+
+def test_an_analysis_only_brief_message_has_no_controls(tmp_path):
+    source = tmp_path / "m1"
+    source.mkdir()
+    (source / "runs.jsonl").write_text("")
+    audit = Audit.create(ANALYSIS_BRIEF, tmp_path / "audit", mock=True, analysis=source)
+    text = brief_message(Tools(audit))
+    assert "you cannot run experiments" in text and "# Controls" not in text
+    assert "what can and can't be concluded" in text
+
+
+def test_the_cli_runs_the_llm_agent_with_the_prompt(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(agent, "run_l2", lambda tools, model, prompt: calls.append(
+        (model, prompt)))
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
+              "--live"])
+    assert stop.value.code == 2
+    assert calls == [(MODEL, SYSTEM_PROMPT)]
+    assert f"L2 is {MODEL}" in capsys.readouterr().out
+    main_args = ["--brief", str(brief(tmp_path, 1.0)), "--mock"]
+    with pytest.raises(SystemExit, match="no price for 'openrouter/acme/x'"):
+        main([*main_args, "--out", str(tmp_path / "b"), "--model", "openrouter/acme/x"])
+    with pytest.raises(SystemExit, match="exclude each other"):
+        main([*main_args, "--out", str(tmp_path / "c"), "--fake", "--model", MODEL])
+    assert not (tmp_path / "b").exists() and not (tmp_path / "c").exists()
+
+
+@pytest.mark.parametrize("extra, what", [
+    (["--mock"], "L2's own calls would call OpenRouter"),
+    (["--fake", "--mock", "--model", "x"], None),
+    (["--model", "mockllm/model"], "the experiments would call OpenRouter"),
+    ([], "L2's own calls and the experiments would call OpenRouter")])
+def test_nothing_spends_money_without_live(tmp_path, monkeypatch, extra, what):
+    monkeypatch.setattr(agent, "run_l2", lambda *a: pytest.fail("ran"))
+    monkeypatch.setattr("experiments.l2.cost.PRICES", {**PRICES, "mockllm/model": (0, 0)})
+    out = tmp_path / "a"
+    with pytest.raises(SystemExit, match=what or "exclude each other"):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(out), *extra])
+    assert not out.exists()
+
+
+def test_live_needs_a_key_before_anything_is_made(tmp_path, monkeypatch):
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    with pytest.raises(SystemExit, match="need OPENROUTER_API_KEY"):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
+              "--live"])
+    assert not (tmp_path / "a").exists()
+
+
+def test_the_prompts_variant_example_runs(tmp_path):
+    """The JSON example the prompt gives is a valid launch, one change apart."""
+    from tests.support.l2_audit import InProcess
+
+    start = SYSTEM_PROMPT.index('   [{"id": "C0"')
+    example = SYSTEM_PROMPT[start:SYSTEM_PROMPT.index("}]}]", start) + 4]
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
+                         launch=InProcess())
+    tools = Tools(audit)
+    ok, text = tools.call("run_experiment", variants=example, epochs=1)
+    assert ok, text
+    ok, text = tools.call("compare", a="V1", b="C0", scorer="probe")
+    assert ok and "Checks: one change apart" in text
+
+
+def test_a_baseline_copy_of_its_control_is_one_change():
+    from experiments.l2.tools import _difference
+    inner = {"condition": "scripted", "opening": [["town", "hi"]], "brief": None,
+             "scope": None, "limits": None}
+    a = {"id": "B0", "base": "mfa_rumor", "mutations": [],
+         "inner": {**inner, "condition": "baseline", "opening": []}}
+    c = {"id": "C0", "base": "mfa_rumor", "mutations": [], "inner": inner}
+    assert _difference(a, c) == ["inner condition (baseline vs scripted)"]

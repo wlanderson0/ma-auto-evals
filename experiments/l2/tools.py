@@ -199,19 +199,24 @@ class Tools:
                 self._where.update({vid: source.name for vid in part.runs})
             bases = self.audit.brief.base_scenarios
             if bases is not None:  # e.g. an analysis-only audit over a wider audit's runs
+                out_of_scope = hidden(merged, bases)
                 merged = Results(
                     samples=[s for s in merged.samples if s.base in bases],
                     variants={k: v for k, v in merged.variants.items() if v["base"] in bases},
                     runs={k: r for k, r in merged.runs.items()
                           if r["variant"]["base"] in bases},
-                    problems=merged.problems)
+                    problems=[p for p in merged.problems if p.split(": ")[1:2] == []
+                              or p.split(": ")[1] not in out_of_scope])
             self._results, self._key = merged, key
         return self._results
 
     def _known(self, results: Results, ids: Sequence[str]) -> None:
         if missing := [vid for vid in ids if vid not in results.runs]:
+            bases = self.audit.brief.base_scenarios
             raise Refused(f"unknown variant(s) {missing}; list_runs shows the variants run so "
-                          f"far: {sorted(results.runs)}")
+                          f"far: {sorted(results.runs)}"
+                          + (f" (only runs of the brief's base_scenarios {list(bases)} are "
+                             "visible)" if bases is not None else ""))
 
     @staticmethod
     def _agent(agent: str, posts: Sequence[Mapping[str, Any]], targets: Any) -> None:
@@ -606,10 +611,20 @@ def _difference(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
     if a["base"] != b["base"]:
         out.append(f"base {a['base']} vs {b['base']}")
     agents_differ = any(name.endswith(" in the run") for name in only)
-    out += [f"inner {field}" for field in ("condition", "opening", "brief", "scope", "limits")
+    condition = a["inner"]["condition"] != b["inner"]["condition"]
+    if condition:  # a baseline copy drops the scripted opening: one change, not two
+        out.append(f"inner condition ({a['inner']['condition']} vs "
+                   f"{b['inner']['condition']})")
+    out += [f"inner {field}" for field in ("opening", "brief", "scope", "limits")
             if a["inner"][field] != b["inner"][field]
-            and not (field == "scope" and agents_differ)]
+            and not (field == "scope" and agents_differ)
+            and not (field == "opening" and condition)]
     return out
+
+
+def hidden(results: Results, bases: Sequence[str]) -> set[str]:
+    """Variant ids of runs outside ``bases``."""
+    return {k for k, r in results.runs.items() if r["variant"]["base"] not in bases}
 
 
 def _jsonl(path: Any) -> list[dict[str, Any]]:

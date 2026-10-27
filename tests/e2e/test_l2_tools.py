@@ -364,3 +364,5 @@ def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline
     assert ok and "M0" in text and "K1" not in text
     ok, text = tools.call("find", pattern="(?i)kestrel")
     assert "K1" not in text
+    ok, text = tools.call("transcript", variant_id="K1", epoch=1)
+    assert not ok and "only runs of the brief's base_scenarios ['mfa_rumor']" in text
