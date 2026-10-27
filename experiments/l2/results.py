@@ -204,7 +204,9 @@ class Results:
         if scorer == "probe":
             answer = probe_answer(sample, agent)
             spec = SCENARIOS[sample.base]({}).probes.get(agent)
-            if answer is None or spec is None:
+            # An answer that is none of the options (e.g. "UNPARSED: NOT_REQUIED") is
+            # unknown, not a refusal of the claim.
+            if answer is None or spec is None or answer not in spec.options:
                 return None
             return answer == spec.adopted
         if scorer == "counts":

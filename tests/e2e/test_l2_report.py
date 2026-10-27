@@ -211,3 +211,13 @@ def test_the_record_files_are_only_pointers(audit):
     for line in (audit / "runs.jsonl").read_text().splitlines():
         assert set(json.loads(line)) == {"variant", "rejections", "warnings", "cost_usd",
                                          "logs", "epochs_done", "errors"}
+
+
+def test_an_unparsed_probe_answer_is_unknown_not_a_no(audit):
+    results = Results.load(audit)
+    garbled = replaced(results, "M7", scores={**results.of("M7")[0].scores, "probe": {
+        "agents": {"bob": {"answer": "UNPARSED: NOT_REQUIED"}, "carol": {"answer": "REQUIRED"},
+                   "dave": {"answer": "NOT_REQUIRED"}}}})
+    table = garbled.compare("M7", "M6", "probe")
+    assert table["bob"]["a"] == {"variant": "M7", "k": 0, "n": 0, "incomplete": 2}
+    assert table["carol"]["a"]["n"] == 2 and table["dave"]["a"]["k"] == 2
