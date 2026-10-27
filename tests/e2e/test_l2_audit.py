@@ -318,3 +318,44 @@ def test_no_epoch_starts_after_l2s_time_is_up(tmp_path):
     assert result["stopped"] == "before epoch 2: L2's time limit is reached"
     again = a.launch([variant(path, "M0", "V2")], 1)
     assert again["status"] == "refused" and "time limit is reached" in again["reason"]
+
+
+def test_the_run_budget_stops_runs_but_not_the_audit(tmp_path):
+    """Spend on runs is capped like the budget (between epochs, then no new launch);
+    the hard stop is not reached, so the audit goes on."""
+    launch = InProcess()
+    path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.5")
+    a = Audit.create(path, tmp_path / "audit", mock=True, cost_of=fixed(0.1), launch=launch)
+    a.set_l2_spend({"usd": 0.3})  # L2's own calls do not count against the run budget
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 5)
+    # 0.2 per epoch: after epoch 2, 0.4 < 0.5, so epoch 3 runs; after it, 0.6 >= 0.5.
+    assert [e for _, e in launch.calls] == [1, 2, 3]
+    assert "before epoch 4" in result["stopped"]
+    budget = a.budget()
+    assert budget["run_budget_usd"] == 0.5 and budget["available_for_experiments_usd"] == 0
+    assert budget["stopped"] is None
+    again = a.launch([variant(path, "M0", "V2")], 1)
+    assert again["status"] == "refused" and "the run budget is spent" in again["reason"]
+    assert len(launch.calls) == 3
+
+
+def test_what_is_left_of_the_run_budget_caps_what_a_launch_gets(tmp_path):
+    path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.5")
+    a = Audit.create(path, tmp_path / "audit", mock=True, cost_of=fixed(0.1),
+                     launch=InProcess())
+    assert a.budget()["available_for_experiments_usd"] == pytest.approx(0.5)
+    a.launch([variant(path, "M0", "C0")], 1)
+    assert a.budget()["available_for_experiments_usd"] == pytest.approx(0.4)
+    a.launch([variant(path, "M0", "C1")], 1)
+    assert parse_brief(a.out / "experiments" / "exp-2" / "brief.md").budget_usd == \
+        pytest.approx(0.4)
+
+
+def test_an_estimate_over_what_is_left_of_the_run_budget_needs_confirmation(tmp_path):
+    path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.2")
+    a = Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess(),
+                     estimator=estimate_of(0.3))
+    result = a.launch([variant(path, "M0", "C0")], 1)
+    assert result["status"] == "needs_confirmation"
+    assert result["available_usd"] == pytest.approx(0.2)
+    assert "(what is left of the run budget)" in result["reason"]

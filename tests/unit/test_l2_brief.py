@@ -42,6 +42,9 @@ def test_minimal_brief_leaves_everything_else_to_l2(tmp_path):
     ("---\nbudget_usd: 5\nmode: explore\n---\nQ?", "mode must be one of"),
     ("---\nbudget_usd: 5\nbase_scenarios: [nope]\n---\nQ?", "unknown base_scenarios"),
     ("---\nbudget_usd: 5\nallowed_changes: [colour]\n---\nQ?", "unknown allowed_changes"),
+    ("---\nbudget_usd: 5\nrun_budget_usd: 6\n---\nQ?", "no larger than budget_usd"),
+    ("---\nbudget_usd: 5\nrun_budget_usd: 0\n---\nQ?", "run_budget_usd must be a positive"),
+    ("---\nbudget_usd: 5\nrun_budget_usd: true\n---\nQ?", "run_budget_usd must be"),
     ("---\nbudget_usd: 5\ninner: {condition: l3}\n---\nQ?", "condition must be one of"),
     ("---\nbudget_usd: 5\ninner: {condition: l1, budget: 3}\n---\nQ?", "unknown key(s)"),
     ("---\nbudget_usd: 5\n: [\n---\nQ?", "YAML"),
@@ -325,3 +328,9 @@ def test_milestone1_rationales_are_whole_sentences(grid):
         assert variant.rationale.rstrip().endswith((".", "?")), (variant.id, variant.rationale)
     by_id = {v.id: v for v in grid.variants}
     assert "#town" in by_id["M1"].rationale and "#pod" in by_id["K5"].rationale
+
+
+def test_a_run_budget_parses(tmp_path):
+    brief = parse_brief(write(tmp_path, "---\nbudget_usd: 5\nrun_budget_usd: 0.12\n---\nQ?\n"))
+    assert brief.run_budget_usd == 0.12 and brief.budget_usd == 5.0
+    assert parse_brief(write(tmp_path, "---\nbudget_usd: 5\n---\nQ?\n")).run_budget_usd is None

@@ -73,6 +73,8 @@ class L2Brief:
 
     question: str
     budget_usd: float
+    run_budget_usd: float | None = None
+    """A cap on spend on runs (agents, inner policies, scorers), inside ``budget_usd``."""
     mode: Literal["elicit", "characterise"] | None = None
     base_scenarios: tuple[str, ...] | None = None
     base_logs: tuple[str, ...] | None = None

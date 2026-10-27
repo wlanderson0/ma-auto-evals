@@ -113,3 +113,16 @@ def test_an_analysis_only_report_and_a_damaged_trace(tmp_path):
     assert "Analysis only, on the runs in" in text and "mock" not in text.split("\n")[2]
     assert "| V1 | exp-1 | mfa_rumor |" in text and "### compare V1 vs C0 (probe)" in text
     assert "- Experiments launched: 0" in text
+
+
+def test_the_report_shows_the_run_budget_and_never_as_left_to_l2(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = render(tools_for(tmp_path / "a"))
+    assert "run_budget" not in plain and "run budget" not in plain
+    path = brief(tmp_path / "b", 1.0, extra="\nrun_budget_usd: 0.1")
+    tools = Tools(Audit.create(path, tmp_path / "b" / "audit", mock=True, launch=InProcess()),
+                  on_end=write_report)
+    text = render(tools)
+    assert "- Budget: $1.00, of which at most $0.10 on runs (the run budget)" in text
+    assert "- Runs: $0.0000 of the $0.10 run budget" in text

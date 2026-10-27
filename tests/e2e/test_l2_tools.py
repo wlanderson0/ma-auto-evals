@@ -507,3 +507,20 @@ def test_without_a_measure_in_the_brief_a_scorer_must_be_named(tmp_path):
     ok, text = tools.call("compare", a="V1", b="C0")
     assert not ok and "the brief fixes no measure: name a scorer" in text
     assert tools.call("compare", a="V1", b="C0", scorer="probe")[0]
+
+
+def test_after_the_run_budget_the_query_tools_still_work(tmp_path):
+    from tests.support.l2_audit import fixed
+
+    path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.1")
+    tools = Tools(Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess(),
+                               cost_of=fixed(0.1)))
+    ok, text = tools.call("run_experiment", variants=[C0], epochs=3)
+    assert ok and "| C0 | accepted | 1 |" in text and "before epoch 2" in text, text
+    ok, text = tools.call("run_experiment", variants=[V1], epochs=1)
+    assert not ok and "the run budget is spent" in text
+    for name, args in [("list_runs", {}), ("scores", {"variant_ids": ["C0"]}),
+                       ("find", {"pattern": "MFA"}), ("run_python", {"code": "print(1)"})]:
+        assert tools.call(name, **args)[0], name
+    ok, text = tools.call("budget")
+    assert ok and "Run budget: $0.1000 of $0.10 spent on runs." in text

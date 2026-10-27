@@ -384,7 +384,7 @@ Conclusions report how many variants, scorers and comparisons were tried before 
 
 ## 7. Budget
 
-An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It covers every model call made on the audit's behalf. There are no separate count limits (variants, samples, L2 calls, scorer calls), and the brief cannot add them: the money budget covers them all. Each sample still obeys its own `AuditLimits`, which L2 sets per variant (§4).
+An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It covers every model call made on the audit's behalf. The brief can also cap spend on runs inside it (`run_budget_usd`, §2), enforced in the same way but stopping only runs: once it is reached, no new experiment or epoch starts, and the query tools still work. There are no separate count limits (variants, samples, L2 calls, scorer calls), and the brief cannot add them: the money budget covers them all. Each sample still obeys its own `AuditLimits`, which L2 sets per variant (§4).
 
 **Ledger.** Every model call is logged against the budget, whoever makes it: agents, inner auditors, L2 itself, scorers and judges, interviews, realism checks. Each entry records the model, tokens, cost, what the call was for, and which experiment and run it belongs to. Cost comes from the provider when it reports it (OpenRouter can report cost per call), otherwise from a price table times tokens; today's logs record tokens but not cost. The per-sample `BudgetLedger` gains a cost field; the audit ledger adds those up across samples, plus L2's own calls.
 

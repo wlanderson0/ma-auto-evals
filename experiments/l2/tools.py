@@ -361,6 +361,9 @@ class Tools:
         return (f"Budget: spent ${b['spent_usd']:.4f} of ${b['budget_usd']:.2f}; remaining "
                 f"${b['remaining_usd']:.4f} (reserve ${b['reserve_usd']:.4f} held back, "
                 f"${b['available_for_experiments_usd']:.4f} available for experiments)."
+                + (f" Run budget: ${b['by_kind']['experiments']:.4f} of "
+                   f"${b['run_budget_usd']:.2f} spent on runs." if b["run_budget_usd"]
+                   is not None else "")
                 + (f" STOPPED: {b['stopped']}." if b["stopped"] else ""))
 
     def variant_rows(self) -> list[dict[str, Any]]:

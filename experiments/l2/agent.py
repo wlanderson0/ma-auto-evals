@@ -155,6 +155,11 @@ def brief_message(tools: Tools) -> str:
                      + "; ".join(brief.hypotheses))
     lines.append(f"- budget: ${brief.budget_usd:.2f} for everything, your own calls "
                  f"included; {audit.reserve:.0%} is held back for your final calls")
+    if brief.run_budget_usd is not None:
+        lines.append(f"- run budget: at most ${brief.run_budget_usd:.2f} of it on runs "
+                     "(your own calls are not counted in it); once it is reached no new "
+                     "experiment or epoch starts (an epoch already running finishes), but "
+                     "the query tools still work")
     if audit.analysis is not None:
         lines += ["", "This audit is analysis only: you cannot run experiments. Read the "
                   "runs already made with the query tools."]

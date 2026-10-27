@@ -118,8 +118,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             value = value.condition
         out.append(f"- Fixed by the brief: `{name}` = {_plain(value)}")
     open_ = [name for name, value in fixed.items() if value is None]
-    out += [f"- Budget: ${brief.budget_usd:.2f}", f"- Left to L2: {', '.join(open_) or 'none'}",
-            ""]
+    out += [f"- Budget: ${brief.budget_usd:.2f}"
+            + (f", of which at most ${brief.run_budget_usd:.2f} on runs (the run budget)"
+               if brief.run_budget_usd is not None else ""),
+            f"- Left to L2: {', '.join(open_) or 'none'}", ""]
 
     out += ["## Conclusions (L2's own words, quoted)", ""]
     if tools.conclusions is not None:
@@ -233,6 +235,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"${b['remaining_usd']:.4f}; reserve ${b['reserve_usd']:.4f}",
             f"- By kind: experiments ${b['by_kind']['experiments']:.4f}, L2's own calls "
             f"${b['by_kind']['l2']:.4f}"]
+    if b["run_budget_usd"] is not None:
+        out.append(f"- Runs: ${b['by_kind']['experiments']:.4f} of the "
+                   f"${b['run_budget_usd']:.2f} run budget (a launched epoch runs to completion, "
+                   "so runs can go over it by up to one epoch)")
     out += [f"- {name}: ${usd:.4f}" for name, usd in b["by_experiment"].items()]
     out += [f"- L2 on {model}: ${row.get('usd', 0):.4f} ({row.get('calls', '?')} calls, "
             f"{row.get('input_tokens', '?')} input / {row.get('output_tokens', '?')} output "

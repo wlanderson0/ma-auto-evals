@@ -94,6 +94,7 @@ def test_a_minimal_brief_is_accepted_and_shown_the_setup_and_every_change(tmp_pa
     text = brief_message(tools)
     assert describe_scenario("mfa_rumor", mock=True) in text
     assert "## kestrel_naming" not in text and "# Controls" not in text
+    assert "run budget" not in text
     assert '"opening": [[channel, text], ...]' in text
     for (axis, op), help in HELP.items():
         assert f"- {axis}/{op} {help}" in text
@@ -207,3 +208,9 @@ def test_a_time_limit_sets_the_experiments_deadline(tmp_path):
     run_l2(Tools(audit, on_end=write_report), fake_model(FULL[-1:]), SYSTEM_PROMPT,
            time_limit=150)
     assert before + 150 <= audit.deadline <= time.monotonic() + 150
+
+
+def test_the_first_message_shows_the_run_budget(tmp_path):
+    path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.12")
+    text = brief_message(Tools(Audit.create(path, tmp_path / "audit", mock=True)))
+    assert "- run budget: at most $0.12 of it on runs" in text

@@ -37,7 +37,7 @@ from orbit_audit.branches import AuditLimits
 from orbit_audit.scope import AuditScope
 
 HEADER = re.compile(r"\A---[ \t]*\n(.*?)^---[ \t]*(?:\n|\Z)", re.S | re.M)
-BRIEF_KEYS = {"budget_usd", "mode", "base_scenarios", "base_logs", "measure",
+BRIEF_KEYS = {"budget_usd", "run_budget_usd", "mode", "base_scenarios", "base_logs", "measure",
               "allowed_changes", "variants", "controls", "hypotheses", "inner"}
 VARIANT_KEYS = {"id", "base", "mutations", "inner", "rationale"}
 MUTATION_KEYS = {"axis", "op", "args", "at"}
@@ -95,6 +95,11 @@ def parse_brief(path: str | Path) -> L2Brief:
     if (isinstance(budget, bool) or not isinstance(budget, int | float)
             or not math.isfinite(budget) or budget <= 0):
         raise BriefError(f"{path}: budget_usd must be a positive number, got {budget!r}")
+    runs = header.get("run_budget_usd")
+    if runs is not None and (isinstance(runs, bool) or not isinstance(runs, int | float)
+                             or not math.isfinite(runs) or not 0 < runs <= budget):
+        raise BriefError(f"{path}: run_budget_usd must be a positive number no larger than "
+                         f"budget_usd ({budget}), got {runs!r}")
     question = body.strip()
     if not question:
         raise BriefError(f"{path}: the question (the text after the header) is empty")
@@ -124,7 +129,8 @@ def parse_brief(path: str | Path) -> L2Brief:
                                         & {c.id.casefold() for c in controls})):
             raise BriefError(f"{path}: ids {both} name both a variant and a control")
     return L2Brief(
-        question=question, budget_usd=float(budget), mode=mode, base_scenarios=bases,
+        question=question, budget_usd=float(budget),
+        run_budget_usd=None if runs is None else float(runs), mode=mode, base_scenarios=bases,
         base_logs=_strings(header, "base_logs"), measure=measure, allowed_changes=allowed,
         variants=variants, controls=controls, hypotheses=_strings(header, "hypotheses"),
         inner=inner)

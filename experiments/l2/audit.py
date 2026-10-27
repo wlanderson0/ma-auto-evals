@@ -22,6 +22,11 @@ experiments when it launched as its budget; L2 makes no calls while an experimen
 runs, so milestone 1's between-epoch check stops it exactly at the audit-wide
 limit. A launched epoch runs to completion, so spending can exceed the budget by
 up to one epoch (recorded in ``ledger.json``).
+
+**Run budget.** A brief's ``run_budget_usd`` caps spend on runs inside the budget
+(spec §9.4). It stops runs the same way: what is available for experiments is capped
+by what is left of it, so the between-epoch check stops at it, and once it is spent
+no new experiment starts. The query tools still work, since only runs are capped.
 """
 
 from __future__ import annotations
@@ -141,17 +146,24 @@ class Audit:
         self.write_ledger()
 
     def budget(self) -> dict[str, Any]:
-        """Spent, remaining (budget − ledger total) and the reserve, by kind (spec §7)."""
+        """Spent, remaining (budget − ledger total) and the reserve, by kind (spec §7).
+        With a run budget, what is available for experiments is also capped by what is
+        left of it."""
         experiments = self.experiment_spend()
-        spent = sum(experiments.values()) + self.l2["usd"]
+        runs = sum(experiments.values())
+        spent = runs + self.l2["usd"]
         total = self.brief.budget_usd
         reserve = self.reserve * total
         remaining = total - spent
+        available = remaining - reserve
+        cap = self.brief.run_budget_usd
+        if cap is not None:
+            available = min(available, cap - runs)
         return {
             "budget_usd": total, "spent_usd": spent, "remaining_usd": remaining,
             "reserve_usd": reserve,
-            "available_for_experiments_usd": (0.0 if remaining - reserve <= EPSILON
-                                              else remaining - reserve),
+            "available_for_experiments_usd": 0.0 if available <= EPSILON else available,
+            "run_budget_usd": cap, "run_budget_left_usd": None if cap is None else cap - runs,
             "by_kind": {"experiments": sum(experiments.values()), "l2": self.l2["usd"]},
             "by_experiment": experiments, "l2_by_model": self.l2["by_model"],
             "stopped": self.stop_reason(spent, reserve, total)}
@@ -243,13 +255,18 @@ class Audit:
         accepted = [(v, b) for v, b, _ in checked]
         guess = self.estimator(accepted, epochs, [*self.history, *self.experiments()],
                                self.cost_of, self.mock)
-        available = self.budget()["available_for_experiments_usd"]
+        b = self.budget()
+        available = b["available_for_experiments_usd"]
         result.update(estimate=guess, available_usd=available)
         if guess["usd"] > available and not confirm:
             per_epoch = guess["usd"] / epochs
+            capped = (b["run_budget_left_usd"] is not None
+                      and b["run_budget_left_usd"] <= b["remaining_usd"] - b["reserve_usd"])
             return self._finish(result, "needs_confirmation", (
                 f"the estimate ${guess['usd']:.4f} ({', '.join(guess['basis'])}) exceeds the "
-                f"${available:.4f} available for experiments; launch again with "
+                f"${available:.4f} available for experiments"
+                + (" (what is left of the run budget)" if capped else "")
+                + "; launch again with "
                 "confirm=True to run it anyway, or shrink it (fewer variants or epochs)."
                 + (f" Even one epoch (estimated ${per_epoch:.4f}) exceeds it, and a started "
                    "epoch always finishes, so a confirmed launch would overrun the budget by "
@@ -306,6 +323,11 @@ class Audit:
             return "this is an analysis-only audit: run_experiment is off"
         if stopped := self.stopped:
             return f"{stopped}; no new experiment starts"
+        b = self.budget()
+        if b["run_budget_left_usd"] is not None and b["run_budget_left_usd"] <= EPSILON:
+            return (f"the run budget is spent (${b['by_kind']['experiments']:.4f} of "
+                    f"${b['run_budget_usd']:.2f} on runs); no new experiment starts, but the "
+                    "query tools still work")
         if why := self.time_up():
             return f"{why}; no new experiment starts"
         if isinstance(epochs, bool) or not isinstance(epochs, int) or epochs < 1:
@@ -341,7 +363,8 @@ class Audit:
         return "---\n" + head + "---\n" + (
             f"Experiment {n} of the L2 audit {self.out.name}. budget_usd is what was "
             f"available for experiments at launch (the audit's budget less its spend and "
-            f"reserve).\n\nThe audit's question:\n\n{self.brief.question}\n")
+            f"reserve, or what was left of its run budget if that was less).\n\n"
+            f"The audit's question:\n\n{self.brief.question}\n")
 
 
 def _json(path: Path) -> dict[str, Any]:
