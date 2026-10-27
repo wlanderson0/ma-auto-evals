@@ -78,6 +78,7 @@ single bridge between #town and #pod matters most.
 | `measure` | fixed; L2 cannot change it; includes its unit (what counts, for whom, how runs are combined) | L2 picks; results are leads until confirmed (§6.3) |
 | `allowed_changes` | limits what L2 may change (§3.2) | anything, including targets and probes |
 | `variants` | the exact variants to run (§3), for a set experiment such as the fixed grid | L2 designs them |
+| `controls` | variants (same format as `variants`) that L2's own variants start from: each L2 variant is a copy of a control with mutations added, so the setup texts (scripted opening, the seat's persona line) come from the brief and L2 never writes them | L2 builds variants from the base scenarios |
 | `hypotheses` | starting points L2 may refine or replace, recording why | L2 forms its own |
 | `inner` | default inner condition (baseline, scripted, L0, L1) | L2 chooses per variant |
 
@@ -96,6 +97,7 @@ class L2Brief:
     measure: str | None = None
     allowed_changes: tuple[str, ...] | None = None  # subset of §3.2
     variants: tuple[Variant, ...] | None = None     # §3
+    controls: tuple[Variant, ...] | None = None     # starting points for L2's variants
     hypotheses: tuple[str, ...] | None = None
     inner: InnerSpec | None = None                  # §4
 ```

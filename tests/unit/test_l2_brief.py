@@ -282,3 +282,34 @@ def test_milestone1_each_variant_changes_one_thing_from_its_control(grid):
     assert all(by_id[v].inner.scope is None for v in by_id if v not in ("M6", "M7"))
     # K2 differs from K1 only in the dose line (and the tagged opening).
     assert [m.op for m in by_id["K2"].mutations] == ["append_line"]
+
+
+MILESTONE2 = MILESTONE1.parent / "milestone2.md"
+
+
+def test_milestone2_fixes_controls_not_variants_and_milestone1s_measure():
+    brief = parse_brief(MILESTONE2)
+    m1 = parse_brief(MILESTONE1)
+    grid = {v.id: v for v in m1.variants}
+    assert brief.variants is None and [c.id for c in brief.controls] == ["M0", "M6"]
+    assert brief.base_scenarios == ("mfa_rumor",) and brief.measure == m1.measure
+    for control in brief.controls:  # the same setup (and texts) as the grid's
+        same = grid[control.id]
+        assert (control.base, control.mutations, control.inner) == (
+            same.base, same.mutations, same.inner)
+
+
+def test_controls_parse_like_variants_and_cannot_share_their_ids(tmp_path):
+    entry = ("  - {id: C1, base: mfa_rumor, rationale: r, mutations: [], "
+             "inner: {condition: baseline}}\n")
+    brief = parse_brief(write(tmp_path, "---\nbudget_usd: 1\ncontrols:\n" + entry
+                              + "---\nQ?\n"))
+    assert brief.controls[0].id == "C1" and brief.variants is None
+    with pytest.raises(BriefError, match="name both a variant and a control"):
+        parse_brief(write(tmp_path, "---\nbudget_usd: 1\ncontrols:\n" + entry
+                          + "variants:\n" + entry + "---\nQ?\n"))
+    with pytest.raises(BriefError, match=r"controls must be a non-empty list"):
+        parse_brief(write(tmp_path, "---\nbudget_usd: 1\ncontrols: []\n---\nQ?\n"))
+    with pytest.raises(BriefError, match=r"control C1: unknown base"):
+        parse_brief(write(tmp_path, "---\nbudget_usd: 1\ncontrols:\n"
+                          + entry.replace("mfa_rumor", "nope") + "---\nQ?\n"))

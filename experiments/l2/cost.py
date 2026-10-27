@@ -20,7 +20,7 @@ are free.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from inspect_ai.log import EvalLog, EvalSample
@@ -99,8 +99,17 @@ def sample_cost(sample: EvalSample,
     events = [e for e in sample.events or [] if e.event == "model"]
     if not events:
         return usage_table(sample.model_usage or {}, prices)
+    return events_cost(events, prices)
+
+
+def events_cost(events: Iterable[Any],
+                prices: Mapping[str, tuple[float, float]] = PRICES) -> dict[str, Any]:
+    """``sample_cost`` for model events directly, e.g. a running sample's own
+    (``inspect_ai.log.transcript().events``); events of other kinds are ignored."""
     by_model: dict[str, dict[str, Any]] = {}
     for event in events:
+        if getattr(event, "event", None) != "model":
+            continue
         usage = event.output.usage if event.output is not None else None
         reported = reported_cost(event)
         usd = reported if reported is not None else (

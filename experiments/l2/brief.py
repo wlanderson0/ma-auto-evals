@@ -38,7 +38,7 @@ from orbit_audit.scope import AuditScope
 
 HEADER = re.compile(r"\A---[ \t]*\n(.*?)^---[ \t]*(?:\n|\Z)", re.S | re.M)
 BRIEF_KEYS = {"budget_usd", "mode", "base_scenarios", "base_logs", "measure",
-              "allowed_changes", "variants", "hypotheses", "inner"}
+              "allowed_changes", "variants", "controls", "hypotheses", "inner"}
 VARIANT_KEYS = {"id", "base", "mutations", "inner", "rationale"}
 MUTATION_KEYS = {"axis", "op", "args", "at"}
 INNER_KEYS = {"condition", "brief", "opening", "scope", "limits"}
@@ -117,10 +117,17 @@ def parse_brief(path: str | Path) -> L2Brief:
     variants = None
     if "variants" in header and header["variants"] is not None:
         variants = _variants(header["variants"], default, bases)
+    controls = None
+    if "controls" in header and header["controls"] is not None:
+        controls = _variants(header["controls"], default, bases, kind="controls")
+        if variants and (both := sorted({v.id.casefold() for v in variants}
+                                        & {c.id.casefold() for c in controls})):
+            raise BriefError(f"{path}: ids {both} name both a variant and a control")
     return L2Brief(
         question=question, budget_usd=float(budget), mode=mode, base_scenarios=bases,
         base_logs=_strings(header, "base_logs"), measure=measure, allowed_changes=allowed,
-        variants=variants, hypotheses=_strings(header, "hypotheses"), inner=inner)
+        variants=variants, controls=controls, hypotheses=_strings(header, "hypotheses"),
+        inner=inner)
 
 
 def _known(data: Mapping[str, Any], keys: set[str], where: str) -> None:
@@ -137,13 +144,15 @@ def _strings(data: Mapping[str, Any], key: str) -> tuple[str, ...] | None:
     return tuple(value)
 
 
-def _variants(data: Any, default: Any, bases: tuple[str, ...] | None) -> tuple[Variant, ...]:
+def _variants(data: Any, default: Any, bases: tuple[str, ...] | None,
+              kind: str = "variants") -> tuple[Variant, ...]:
+    """The brief's ``variants`` (or ``controls``, which have the same format)."""
     if not isinstance(data, list) or not data:
-        raise BriefError("variants must be a non-empty list (leave it out to let L2 design "
-                         "them)")
+        raise BriefError(f"{kind} must be a non-empty list (leave it out to let L2 design "
+                         "them)" if kind == "variants" else f"{kind} must be a non-empty list")
     variants, seen = [], set()
     for i, entry in enumerate(data):
-        where = f"variants[{i}]"
+        where = f"{kind}[{i}]"
         if not isinstance(entry, Mapping):
             raise BriefError(f"{where} must be a mapping")
         _known(entry, VARIANT_KEYS, where)
@@ -151,7 +160,7 @@ def _variants(data: Any, default: Any, bases: tuple[str, ...] | None) -> tuple[V
             if not isinstance(entry.get(key), str) or not entry[key].strip():
                 raise BriefError(f"{where}: {key} is required text")
         vid = entry["id"]
-        where = f"variant {vid}"
+        where = f"{kind[:-1]} {vid}"
         if not VARIANT_ID.fullmatch(vid):
             raise BriefError(f"{where}: id may only use letters, digits, '_' and '-'")
         if vid.casefold() in seen:  # case-insensitive: ids name log folders

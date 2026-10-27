@@ -79,6 +79,9 @@ class L2Brief:
     measure: str | None = None
     allowed_changes: tuple[str, ...] | None = None
     variants: tuple[Variant, ...] | None = None
+    controls: tuple[Variant, ...] | None = None
+    """Variants an L2-designed variant starts from (a copy plus added mutations); they
+    carry the setup texts (opening, persona lines), so L2 never writes them."""
     hypotheses: tuple[str, ...] | None = None
     inner: InnerSpec | None = None
     """The default inner spec; each variant's own ``inner`` fields override it."""

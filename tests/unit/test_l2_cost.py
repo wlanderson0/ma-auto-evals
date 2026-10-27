@@ -10,7 +10,15 @@ from inspect_ai.model import ModelOutput, ModelUsage, get_model
 
 from experiments.l2.apply import apply
 from experiments.l2.brief import parse_brief
-from experiments.l2.cost import PRICES, UnknownPrice, log_cost, price, sample_cost, usage_cost
+from experiments.l2.cost import (
+    PRICES,
+    UnknownPrice,
+    events_cost,
+    log_cost,
+    price,
+    sample_cost,
+    usage_cost,
+)
 from experiments.run import AUDITOR, JUDGE, TARGETS, _mock_models, run_condition
 from experiments.scenarios import SCENARIOS
 
@@ -117,3 +125,11 @@ def test_a_calls_reported_cost_is_used_and_the_table_covers_the_rest():
     assert row["usd"] == pytest.approx(0.002 + table)
     assert (row["input_tokens"], row["output_tokens"]) == (2000, 200)
     assert cost["usd"] == pytest.approx(row["usd"])
+
+
+def test_events_cost_prices_a_running_samples_events_like_its_log(stored_log):
+    """What L2's ledger uses on its own transcript: model events only, same figures."""
+    [sample] = stored_log.samples
+    assert len({e.event for e in sample.events}) > 1  # other kinds are skipped
+    assert events_cost(sample.events, TEST_PRICES) == sample_cost(sample, TEST_PRICES)
+    assert events_cost([], TEST_PRICES) == {"usd": 0, "by_model": {}}
