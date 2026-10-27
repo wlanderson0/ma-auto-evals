@@ -308,7 +308,7 @@ If the estimate exceeds the remaining budget, the launch result says so, and the
 
 So that running out of budget doesn't leave some variants with more epochs than others, samples run one epoch at a time across all variants: epoch 1 of every variant, then epoch 2, and so on.
 
-**Dry-run.** For a scenario L2 wrote, `run_experiment` first runs one sample with the generic mock models (§3.5), at no cost. If that fails, the variant is rejected with the error (§3.4).
+**Dry-run.** A scenario L2 writes is dry-run once, when it is written: one sample with the generic mock models (§3.5), at no cost. If that fails, L2 gets the error and the scenario can't be used until a new version passes (§3.4).
 
 Each `VariantRun` holds the variant, validity problems and warnings, cost spent, and **log paths** — not measured values. Measurements are read back from the eval logs (§6), where the scorers put them since #22; `results.json` is not relied on.
 
