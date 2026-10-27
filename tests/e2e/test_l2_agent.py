@@ -119,7 +119,7 @@ def test_the_prompts_variant_example_runs(tmp_path):
     ok, text = tools.call("run_experiment", variants=example, epochs=1)
     assert ok, text
     ok, text = tools.call("compare", a="V1", b="C0", scorer="probe")
-    assert ok and "Checks: one change apart" in text
+    assert ok and "differ in" not in text and "wrong baseline" not in text
 
 
 def test_a_baseline_copy_of_its_control_is_one_change():

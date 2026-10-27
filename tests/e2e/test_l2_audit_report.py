@@ -51,7 +51,9 @@ def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_pa
     assert "- Scorers read: 1 (probe)" in text
     assert "- Comparisons tried: 1 distinct (2 successful calls)" in text
     assert "- Transcripts read: 1; searches: 1" in text
-    assert "## Departures from the reading guidance (automatic checks)\n\nNone found." in text
+    assert ("- compare V1 vs C0 (probe): Note: for no target can the difference be told "
+            "apart from chance") in text
+    assert "differ in" not in text and "wrong baseline" not in text
     assert "- exp-1: $0.0000" in text and "remaining $1.0000" in text
     assert "`launches.jsonl`" in text and "`report.md`" in text
     assert "Fixed by the brief: `mode` = characterise" in text and "Left to L2:" in text

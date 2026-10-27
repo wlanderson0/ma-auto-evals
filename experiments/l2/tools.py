@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -44,6 +45,8 @@ from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import read_sample
 
+ALPHA = 0.05
+"""Below this Fisher exact p-value, compare calls a difference told apart from chance."""
 TRACE_CHARS = 4000
 """Results longer than this are cut in ``trace.jsonl`` (the full text went to L2)."""
 POST_CHARS = 600
@@ -449,11 +452,12 @@ class Tools:
         rows = []
         for agent, row in compared.items():
             diff = "n/a" if row["difference"] is None else f"{row['difference']:+.2f}"
-            rows.append([agent, _rate(row["a"]), _rate(row["b"]), diff])
+            rows.append([agent, _rate(row["a"]), _rate(row["b"]), diff, _chance(row)])
         lines = [f"{a} vs {b} on {scorer}" + (f" up to round {rounds}" if rounds is not None
                                                else "")
                  + ": per target, k of n runs showing the behaviour", "",
-                 table(["target", a, b, f"difference ({a} − {b})"], rows), ""]
+                 table(["target", a, b, f"difference ({a} − {b})",
+                        f"told apart from chance? (Fisher exact, p < {ALPHA})"], rows), ""]
         lines += self.departures(a, b, scorer, rounds) or [
             "Checks: one change apart, same experiment, equal epochs."]
         return "\n".join(lines)
@@ -465,6 +469,13 @@ class Tools:
         ra = results.runs[a]["variant"]
         rb = results.runs[b]["variant"]
         changes = _difference(ra, rb)
+        rows = results.compare(a, b, scorer, rounds=rounds)
+        ps = [p for row in rows.values() if (p := _p_value(row)) is not None]
+        if not ps or min(ps) >= ALPHA:
+            notes.append("Note: for no target can the difference be told apart from chance "
+                         + (f"(smallest p = {min(ps):.2f})" if ps else "(no complete runs)")
+                         + "; this comparison cannot support a finding, only a lead at most.")
+        notes += _baseline(a, b, ra, rb, results)
         if len(changes) != 1:
             notes.append(f"Note: {a} and {b} differ in {len(changes)} settings "
                          f"({'; '.join(changes) or 'none'}); the guidance is one change per "
@@ -640,6 +651,59 @@ def _jsonl(path: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def fisher_p(k1: int, n1: int, k2: int, n2: int) -> float:
+    """Two-sided Fisher exact test on k1 of n1 vs k2 of n2: the chance of a split at
+    least as uneven as this one if both sides behaved the same."""
+    total, hits = n1 + n2, k1 + k2
+
+    def prob(x: int) -> float:
+        return math.comb(n1, x) * math.comb(n2, hits - x) / math.comb(total, hits)
+
+    observed = prob(k1)
+    low, high = max(0, hits - n2), min(n1, hits)
+    return min(1.0, sum(q for x in range(low, high + 1)
+                        if (q := prob(x)) <= observed * (1 + 1e-9)))
+
+
+def _p_value(row: dict[str, Any]) -> float | None:
+    a, b = row["a"], row["b"]
+    if not a["n"] or not b["n"]:
+        return None
+    return fisher_p(a["k"], a["n"], b["k"], b["n"])
+
+
+def _chance(row: dict[str, Any]) -> str:
+    p = _p_value(row)
+    if p is None:
+        return "n/a (no complete runs on one side)"
+    return f"yes (p = {p:.3f})" if p < ALPHA else f"no: could be chance (p = {p:.2f})"
+
+
+def _baseline(a: str, b: str, ra: Mapping[str, Any], rb: Mapping[str, Any],
+              results: Results) -> list[str]:
+    """An agent activated mid-run on one side needs, as its baseline, the same setup with
+    that agent present but never scheduled (spec §3.3), not a setup without it."""
+    notes = []
+    for side, other, rs, ro in ((a, b, ra, rb), (b, a, rb, ra)):
+        added = {m["args"].get("name") for m in ro["mutations"] if m["op"] == "add_agent"}
+        for m in rs["mutations"]:
+            agent = m["args"].get("agent")
+            if m["op"] != "activate_agent" or agent in added:
+                continue
+            idle = [m2 for m2 in rs["mutations"] if m2 is not m]
+            fits = sorted(vid for vid, run in results.runs.items()
+                          if run["variant"]["mutations"] == idle
+                          and run["variant"]["inner"] == rs["inner"])
+            notes.append(
+                f"Note: wrong baseline: {side} activates {agent} mid-run, but {other} does "
+                f"not have {agent} in its setup at all. Compare with the same setup where "
+                f"{agent} is present but never scheduled"
+                + (f" (run so far: {', '.join(fits)})" if fits else
+                   " (e.g. a copy of the control that has the idle agent, such as M6)")
+                + ", so the activation is the only difference.")
+    return notes
+
+
 def _rate(side: dict[str, Any]) -> str:
     return f"{side['k']}/{side['n']}" + (f" (+{side['incomplete']} unknown)"
                                          if side["incomplete"] else "")
@@ -740,8 +804,9 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
     def compare() -> Tool:
         async def execute(a: str, b: str, scorer: str, rounds: int | None = None) -> str:
             """Compare two variants per target: k of n runs showing the behaviour on each
-            side, and the difference in rates. Notes where the comparison departs from the
-            reading guidance (more than one change, different experiments, unequal epochs).
+            side, the difference in rates, and whether it can be told apart from chance.
+            Notes where the comparison departs from the reading guidance (more than one
+            change, a wrong baseline, different experiments, unequal epochs).
 
             Args:
                 a: A variant id.

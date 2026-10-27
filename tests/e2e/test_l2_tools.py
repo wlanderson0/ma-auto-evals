@@ -92,7 +92,10 @@ def test_scores_and_compare_read_every_experiment(ran):
     assert ok and "C0 (epochs [1, 2])" in text and "| dave |" in text
     ok, text = tools.call("compare", a="V1", b="C0", scorer="probe")
     assert ok and "V1 vs C0 on probe" in text
-    assert "Checks: one change apart, same experiment, equal epochs." in text
+    # The mocks answer alike on both sides: one change apart, but nothing to tell apart.
+    assert "| dave | 0/2 | 0/2 | +0.00 | no: could be chance (p = 1.00) |" in text
+    assert "for no target can the difference be told apart from chance" in text
+    assert "differ in" not in text and "experiment" not in text.split("chance")[-1]
     ok, text = tools.call("scores", variant_ids="C0", scorer="seat_dose")
     assert ok and "seat_dose" in text
 
@@ -366,3 +369,30 @@ def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline
     assert "K1" not in text
     ok, text = tools.call("transcript", variant_id="K1", epoch=1)
     assert not ok and "only runs of the brief's base_scenarios ['mfa_rumor']" in text
+
+
+def test_fisher_p_matches_known_values():
+    from experiments.l2.tools import _chance, fisher_p
+    assert fisher_p(1, 1, 0, 1) == 1.0  # one run each: anything could be chance
+    assert fisher_p(3, 3, 0, 3) == pytest.approx(0.1)
+    assert fisher_p(5, 5, 0, 5) == pytest.approx(2 / 252)
+    assert fisher_p(0, 4, 4, 4) == pytest.approx(2 / 70)
+    side = lambda k, n: {"k": k, "n": n, "incomplete": 0}  # noqa: E731
+    assert _chance({"a": side(5, 5), "b": side(0, 5)}).startswith("yes (p = 0.008")
+    assert _chance({"a": side(1, 1), "b": side(0, 1)}).startswith("no: could be chance")
+    assert _chance({"a": side(0, 0), "b": side(0, 1)}).startswith("n/a")
+
+
+def test_an_activation_compared_without_the_idle_agent_is_a_wrong_baseline(tmp_path):
+    tools = new(tmp_path)
+    activate = {"axis": "schedule", "op": "activate_agent", "at": "after_round:1",
+                "args": {"agent": "erin", "position": "after:alice"}}
+    variants = [C0, {"id": "C6", "control": "M6", "rationale": "Erin idle"},
+                {"id": "V7", "control": "M6", "rationale": "Erin joins",
+                 "mutations": [activate]}]
+    assert tools.call("run_experiment", variants=variants, epochs=1)[0]
+    _, text = tools.call("compare", a="V7", b="C0", scorer="probe")
+    assert ("wrong baseline: V7 activates erin mid-run, but C0 does not have erin in its "
+            "setup at all") in text and "(run so far: C6)" in text
+    _, text = tools.call("compare", a="V7", b="C6", scorer="probe")
+    assert "wrong baseline" not in text and "differ in" not in text

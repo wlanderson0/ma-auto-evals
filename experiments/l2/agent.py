@@ -78,7 +78,8 @@ your reason, before your first experiment.
   distances from the seat, so an average hides where spread stops.
 - Epochs. The same number on both sides of a comparison. With n of 2 or 3 almost nothing
   is significant: prefer fewer variants with more epochs, and say how uncertain a
-  difference is (a 1 of 3 vs 2 of 3 difference is noise).
+  difference is (a 1 of 3 vs 2 of 3 difference is noise). compare says, per target,
+  whether a difference can be told apart from chance; one that cannot is never a finding.
 - Same scorers. Read every run in a comparison with the same scorer.
 - Findings vs leads. A result on the brief's measure, from a comparison you planned, is a
   finding. A result on another measure, or a pattern you noticed only after looking at
