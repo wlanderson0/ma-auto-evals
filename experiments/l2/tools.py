@@ -41,6 +41,7 @@ from experiments.l2.brief import BRIEF_KEYS, BriefError, _mutation
 from experiments.l2.cost import PRICES, events_cost
 from experiments.l2.experiment import variant_from
 from experiments.l2.model import Variant
+from experiments.l2.report import SCORER as MEASURE_SCORER
 from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import read_sample
@@ -159,6 +160,12 @@ class Tools:
             if stopped and name not in FREE:
                 raise Refused(f"refused: {stopped}. Only budget and end_audit run now: "
                               "call end_audit with your conclusions.")
+            if name in ("scores", "compare") and args.get("scorer") is None:
+                # The brief's measure, so L2 never has to name it (and the trace and
+                # report record which scorer was read).
+                args = {**args, "scorer": self.measure_scorer(
+                    [args["a"], args["b"]] if name == "compare"
+                    else _ids(args.get("variant_ids", [])))}
             ok, text = True, getattr(self, name)(**args)
         except Refused as error:
             ok, text = False, str(error)
@@ -395,10 +402,24 @@ class Tools:
                     raise Refused(f"{scorer} is not measured on {results.base(vid)} (it has "
                                   "no mention pattern); use probe or post_judge")
 
+    def measure_scorer(self, ids: Sequence[str]) -> str:
+        """The scorer that reads the brief's fixed measure on these variants' scenario."""
+        if self.audit.brief.measure is None:
+            raise Refused("the brief fixes no measure: name a scorer "
+                          f"({', '.join(SCORERS)})")
+        results = self.results()
+        self._known(results, ids)
+        found = {MEASURE_SCORER.get(results.base(vid)) for vid in ids}
+        if len(found) != 1 or None in found:
+            raise Refused(f"no single scorer reads the brief's measure on {list(ids)}: name "
+                          f"one ({', '.join(SCORERS)})")
+        return found.pop()
+
     def scores(self, variant_ids: Sequence[str] | str, scorer: str) -> str:
         ids = _ids(variant_ids)
         if scorer not in SCORERS:
-            raise Refused(f"unknown scorer {scorer!r}; scorers: {list(SCORERS)}")
+            raise Refused(f"unknown scorer {scorer!r}; scorers: {list(SCORERS)} (or leave "
+                          "scorer out to read the brief's measure)")
         results = self.results()
         self._known(results, ids)
         self._measured(results, ids, scorer)
@@ -434,7 +455,8 @@ class Tools:
 
     def compare(self, a: str, b: str, scorer: str, rounds: int | None = None) -> str:
         if scorer not in ("probe", "counts"):
-            raise Refused(f"compare reads 'probe' or 'counts', not {scorer!r}")
+            raise Refused(f"compare reads 'probe' or 'counts', not {scorer!r} (or leave "
+                          "scorer out to read the brief's measure)")
         results = self.results()
         self._known(results, [a, b])
         if results.base(a) != results.base(b):
@@ -788,21 +810,23 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
     @tool
     def scores() -> Tool:
-        async def execute(variant_ids: list[str], scorer: str) -> str:
+        async def execute(variant_ids: list[str], scorer: str | None = None) -> str:
             """One scorer's values per target and epoch for some variants.
 
             Args:
                 variant_ids: The variants to show.
-                scorer: probe (each target's private answer), counts (uses of the
-                    scenario's mention in a target's own words), post_judge, round_counts,
-                    or seat_dose (whether the seat delivered its intended dose).
+                scorer: Leave out to read the brief's measure. Otherwise: probe (each
+                    target's private answer), counts (uses of the scenario's mention in a
+                    target's own words), post_judge, round_counts, or seat_dose (whether
+                    the seat delivered its intended dose).
             """
             return await call("scores", variant_ids=variant_ids, scorer=scorer)
         return execute
 
     @tool
     def compare() -> Tool:
-        async def execute(a: str, b: str, scorer: str, rounds: int | None = None) -> str:
+        async def execute(a: str, b: str, scorer: str | None = None,
+                          rounds: int | None = None) -> str:
             """Compare two variants per target: k of n runs showing the behaviour on each
             side, the difference in rates, and whether it can be told apart from chance.
             Notes where the comparison departs from the reading guidance (more than one
@@ -811,7 +835,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             Args:
                 a: A variant id.
                 b: The variant id it is compared with (usually its control).
-                scorer: probe or counts.
+                scorer: Leave out to read the brief's measure; otherwise probe or counts.
                 rounds: counts only: compare post counts up to this round.
             """
             return await call("compare", a=a, b=b, scorer=scorer, rounds=rounds)

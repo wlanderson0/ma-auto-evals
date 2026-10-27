@@ -149,7 +149,7 @@ def test_query_errors_go_back_to_l2(ran):
             ("transcript", {"variant_id": "C0", "epoch": 9}, "has no epoch 9"),
             ("transcript", {"variant_id": "C0", "epoch": 1, "max_posts": 0}, "max_posts"),
             ("compare", {"a": "V1", "b": "C0", "scorer": "post_judge"}, "probe' or 'counts"),
-            ("scores", {"variant_ids": ["C0"]}, "TypeError"),
+            ("scores", {"scorer": "probe"}, "TypeError"),
             ("nope", {}, "unknown tool")]:
         ok, text = tools.call(name, **args)
         assert not ok and message in text, (name, text)
@@ -396,3 +396,30 @@ def test_an_activation_compared_without_the_idle_agent_is_a_wrong_baseline(tmp_p
             "setup at all") in text and "(run so far: C6)" in text
     _, text = tools.call("compare", a="V7", b="C6", scorer="probe")
     assert "wrong baseline" not in text and "differ in" not in text
+
+
+def test_scores_and_compare_read_the_briefs_measure_by_default(ran):
+    """L2 never has to name the measure (live runs asked for 'mfa_rumor')."""
+    tools, _ = ran
+    ok, text = tools.call("compare", a="V1", b="C0")
+    assert ok and text.startswith("V1 vs C0 on probe")
+    ok, text = tools.call("scores", variant_ids=["C0"], scorer=None)
+    assert ok and text.startswith("probe per target")
+    traced = lines(tools.audit.out / "trace.jsonl")[-2:]
+    assert [r["args"]["scorer"] for r in traced] == ["probe", "probe"]  # recorded resolved
+    ok, text = tools.call("compare", a="V1", b="C0", scorer="mfa_rumor")
+    assert not ok and "leave scorer out to read the brief's measure" in text
+
+
+def test_without_a_measure_in_the_brief_a_scorer_must_be_named(tmp_path):
+    import re
+    path = brief(tmp_path, 1.0)
+    text = re.sub(r"^measure: >\n(?:  .*\n)+", "", path.read_text(), flags=re.M)
+    path.write_text(text)
+    audit = Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess())
+    tools = Tools(audit)
+    assert audit.brief.measure is None
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=1)[0]
+    ok, text = tools.call("compare", a="V1", b="C0")
+    assert not ok and "the brief fixes no measure: name a scorer" in text
+    assert tools.call("compare", a="V1", b="C0", scorer="probe")[0]

@@ -61,7 +61,8 @@ epoch (repeat) to the next.
      "mutations": [{"axis": "topology", "op": "add_reader",
                     "args": {"agent": "dave", "channel": "town"}}]}]
 3. Run it with run_experiment. It reports what each variant cost and what is left.
-4. Read the results: list_runs, scores, compare, transcript, find.
+4. Read the results: list_runs, scores, compare, transcript, find. scores and compare
+   read the brief's measure unless you name another scorer.
 5. Decide: refine the hypothesis, confirm, or conclude. To confirm a result, launch the
    same variants again together with a fresh copy of their control, all under new ids
    (e.g. V1b and C0b) in one new experiment, and compare those with each other.
