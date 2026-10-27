@@ -94,3 +94,26 @@ def test_every_model_a_live_grid_run_uses_has_a_price():
                 if m.op == "add_agent"}
     for model in agents | advocate | {JUDGE, AUDITOR}:
         assert price(model) == PRICES[model]
+
+
+def test_a_calls_reported_cost_is_used_and_the_table_covers_the_rest():
+    from types import SimpleNamespace
+
+    def event(model, cost=None, tokens=(1000, 100)):
+        usage = ModelUsage(input_tokens=tokens[0], output_tokens=tokens[1],
+                           total_tokens=sum(tokens))
+        call = None if cost is None else SimpleNamespace(response={"usage": {"cost": cost}})
+        return SimpleNamespace(event="model", model=model, output=SimpleNamespace(usage=usage),
+                               call=call)
+
+    llama = "openrouter/meta-llama/llama-3.3-70b-instruct"
+    sample = SimpleNamespace(events=[event(llama, 0.002), event(llama), SimpleNamespace(
+        event="info")], model_usage={})
+    cost = sample_cost(sample)
+    table = usage_cost(llama, ModelUsage(input_tokens=1000, output_tokens=100,
+                                         total_tokens=1100))
+    row = cost["by_model"][llama]
+    assert (row["calls"], row["reported_calls"]) == (2, 1)
+    assert row["usd"] == pytest.approx(0.002 + table)
+    assert (row["input_tokens"], row["output_tokens"]) == (2000, 200)
+    assert cost["usd"] == pytest.approx(row["usd"])

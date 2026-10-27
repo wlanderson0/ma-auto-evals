@@ -1,17 +1,17 @@
-"""Cost from a price table times tokens (spec ``docs/level2-interface.md`` §7).
+"""Cost per call: the provider's own figure, else a price table times tokens (spec §7).
 
-Inspect 0.3.263's OpenRouter provider does not fill in ``ModelUsage.total_cost``,
-so cost is computed from each sample's per-model token usage. A sample's
-``model_usage`` covers every call made in it: the agents, the scripted or LLM
-auditor, and the scorers' judge and probe calls (checked on a mock log in
-``tests/unit/test_l2_cost.py``).
+Each model call in a sample is a model event, the agents', the scripted or LLM
+auditor's and the scorers' judge and probe calls alike (checked on a mock log in
+``tests/unit/test_l2_cost.py``). OpenRouter reports what a call cost in the
+response it logs (``event.call.response["usage"]["cost"]``); a call with that figure
+is charged it. Inspect 0.3.263's OpenRouter provider does not fill in
+``ModelUsage.total_cost``, so every other call is charged from the price table.
 
-The budget is enforced from these numbers, so they err high. OpenRouter routes
-each model to one of several providers at different prices: the table holds, per
-model, the dearer of OpenRouter's listed rate and the rate of the provider live
-runs were actually routed to (read from the providers' reported costs in
-``logs/live``). Inspect's ``input_tokens`` leaves out cached input
-(``input_tokens_cache_read`` / ``_write``), which is charged here at the full input
+OpenRouter routes each model to one of several providers at different prices, and
+the budget is enforced from these numbers, so the table errs high: per model, the
+dearest of OpenRouter's listed rate and the providers live runs were routed to (from
+their reported costs in ``logs/live`` and ``logs/l2``). Inspect's ``input_tokens``
+leaves out cached input (``input_tokens_cache_read`` / ``_write``), charged at the full input
 rate. A usage that carries its own ``total_cost`` is charged that instead (Inspect
 0.3.263's OpenRouter provider never fills it in). A model missing from the table
 raises ``UnknownPrice`` rather than counting as free; offline mocks (``mockllm/``)
@@ -26,7 +26,7 @@ from typing import Any
 from inspect_ai.log import EvalLog, EvalSample
 from inspect_ai.model import ModelUsage
 
-PRICES_CHECKED = "2026-10-26"
+PRICES_CHECKED = "2026-10-27"
 """When ``PRICES`` was read from openrouter.ai's model pages and the live logs."""
 PRICES: dict[str, tuple[float, float]] = {
     # model: (USD per 1M input tokens, USD per 1M output tokens)
@@ -34,8 +34,9 @@ PRICES: dict[str, tuple[float, float]] = {
     "openrouter/openai/gpt-4o-mini": (0.15, 0.60),  # Bob, the Advocate
     # Carol. Listed 0.075 / 0.20; live runs went mostly to Venice at these rates.
     "openrouter/mistralai/mistral-small-3.2-24b-instruct": (0.09375, 0.25),
-    # Dave. Listed 0.10 / 0.32; live runs went to Novita at these rates.
-    "openrouter/meta-llama/llama-3.3-70b-instruct": (0.135, 0.40),
+    # Dave. Listed 0.10 / 0.32 and Novita 0.135 / 0.40, but the first L2 live run also
+    # went to CoreWeave, the dearest seen, at about this rate.
+    "openrouter/meta-llama/llama-3.3-70b-instruct": (0.71, 0.71),
     "openrouter/openai/gpt-4.1-mini": (0.40, 1.60),  # the judge (and L1/L0 auditor)
 }
 FREE_PREFIXES = ("mockllm/",)
@@ -80,10 +81,40 @@ def usage_table(usage: Mapping[str, ModelUsage],
     return {"usd": sum(m["usd"] for m in by_model.values()), "by_model": by_model}
 
 
+def reported_cost(event: Any) -> float | None:
+    """What the provider said a model call cost, from the response Inspect logged."""
+    call = getattr(event, "call", None)
+    response = getattr(call, "response", None) or {}
+    cost = (response.get("usage") or {}).get("cost") if isinstance(response, dict) else None
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return None
+    return float(cost)
+
+
 def sample_cost(sample: EvalSample,
                 prices: Mapping[str, tuple[float, float]] = PRICES) -> dict[str, Any]:
-    """``{"usd", "by_model": {model: {input_tokens, output_tokens, usd}}}`` for one sample."""
-    return usage_table(sample.model_usage or {}, prices)
+    """``{"usd", "by_model": {model: {input_tokens, output_tokens, usd, calls,
+    reported_calls}}}`` for one sample: each call at its reported cost, else at the
+    table's. A sample read without its events is priced from its usage alone."""
+    events = [e for e in sample.events or [] if e.event == "model"]
+    if not events:
+        return usage_table(sample.model_usage or {}, prices)
+    by_model: dict[str, dict[str, Any]] = {}
+    for event in events:
+        usage = event.output.usage if event.output is not None else None
+        reported = reported_cost(event)
+        usd = reported if reported is not None else (
+            usage_cost(event.model, usage, prices) if usage is not None else 0.0)
+        row = by_model.setdefault(event.model, {"input_tokens": 0, "output_tokens": 0,
+                                                "usd": 0.0, "calls": 0, "reported_calls": 0})
+        if usage is not None:
+            row["input_tokens"] += input_tokens(usage)
+            row["output_tokens"] += usage.output_tokens
+        row["usd"] += usd
+        row["calls"] += 1
+        row["reported_calls"] += reported is not None
+    return {"usd": sum(m["usd"] for m in by_model.values()),
+            "by_model": dict(sorted(by_model.items()))}
 
 
 def log_cost(log: EvalLog, prices: Mapping[str, tuple[float, float]] = PRICES) -> dict[str, Any]:
@@ -95,8 +126,8 @@ def log_cost(log: EvalLog, prices: Mapping[str, tuple[float, float]] = PRICES) -
     totals: dict[str, dict[str, Any]] = {}
     for entry in samples:
         for model, row in entry["by_model"].items():
-            total = totals.setdefault(model, {"input_tokens": 0, "output_tokens": 0, "usd": 0.0})
-            for key in total:
-                total[key] += row[key]
+            total = totals.setdefault(model, {key: 0 for key in row})
+            for key in row:
+                total[key] = total.get(key, 0) + row[key]
     return {"usd": sum(s["usd"] for s in samples), "by_model": dict(sorted(totals.items())),
             "samples": samples}
