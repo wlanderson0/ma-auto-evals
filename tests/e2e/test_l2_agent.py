@@ -66,15 +66,15 @@ def test_an_analysis_only_brief_message_has_no_controls(tmp_path):
 
 def test_the_cli_runs_the_llm_agent_with_the_prompt(tmp_path, monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(agent, "run_l2", lambda tools, model, prompt: calls.append(
-        (model, prompt)))
+    monkeypatch.setattr(agent, "run_l2", lambda tools, model, prompt, time_limit: calls.append(
+        (model, prompt, time_limit)))
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
-              "--live"])
+              "--live", "--time-limit", "150"])
     assert stop.value.code == 2
-    assert calls == [(MODEL, SYSTEM_PROMPT)]
+    assert calls == [(MODEL, SYSTEM_PROMPT, 150)]
     assert f"L2 is {MODEL}" in capsys.readouterr().out
     main_args = ["--brief", str(brief(tmp_path, 1.0)), "--mock"]
     with pytest.raises(SystemExit, match="no price for 'openrouter/acme/x'"):
@@ -130,3 +130,27 @@ def test_a_baseline_copy_of_its_control_is_one_change():
          "inner": {**inner, "condition": "baseline", "opening": []}}
     c = {"id": "C0", "base": "mfa_rumor", "mutations": [], "inner": inner}
     assert _difference(a, c) == ["inner condition (baseline vs scripted)"]
+
+
+def test_a_time_limit_ends_l2_cleanly_with_a_record(tmp_path):
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
+    tools = Tools(audit, on_end=write_report)
+    log = run_l2(tools, fake_model(FULL[-1:]), SYSTEM_PROMPT, time_limit=150)
+    assert read_eval_log(log.location).eval.config.time_limit in (150, None)
+    assert (audit.out / "report.md").exists()
+
+
+def test_openrouter_tools_are_sent_without_strict_mode(tmp_path, monkeypatch):
+    """Strict mode requires every tool parameter; OpenAI rejected L2's optional ones."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    seen = []
+
+    def fake_eval(task, model, **kwargs):
+        seen.append(model)
+        raise RuntimeError("stop before any call")
+    monkeypatch.setattr(agent, "inspect_eval", fake_eval)
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
+    with pytest.raises(RuntimeError, match="stop before"):
+        run_l2(Tools(audit), MODEL, SYSTEM_PROMPT)
+    [model] = seen
+    assert str(model) == MODEL and model.api.strict_tools is False

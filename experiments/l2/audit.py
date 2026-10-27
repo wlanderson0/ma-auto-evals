@@ -399,6 +399,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                         help="L2 is the scripted fake (experiments.l2.fake), not an LLM")
     parser.add_argument("--model", default=None,
                         help="L2's model (default: experiments.l2.agent.MODEL)")
+    parser.add_argument("--time-limit", type=int, default=None, metavar="SECONDS",
+                        help="end L2 cleanly after this much wall-clock time (the record "
+                             "is still written)")
     parser.add_argument("--live", action="store_true",
                         help="allow OpenRouter calls (an LLM L2, or experiments without "
                              "--mock); without it, anything that would spend money stops")
@@ -447,7 +450,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         model = args.model or agent.MODEL
         print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls included); "
               f"audit: {out}", flush=True)
-        agent.run_l2(tools, model, agent.SYSTEM_PROMPT)
+        agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
     budget = audit.budget()
     print(f"spent ${budget['spent_usd']:.4f} of ${budget['budget_usd']:.2f}")
     print(f"report: {out / 'report.md'}")

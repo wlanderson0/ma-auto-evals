@@ -25,7 +25,7 @@ from inspect_ai import eval as inspect_eval
 from inspect_ai.agent import AgentState, AgentSubmit, react
 from inspect_ai.dataset import Sample
 from inspect_ai.log import EvalLog, read_eval_log
-from inspect_ai.model import Model
+from inspect_ai.model import Model, get_model
 from inspect_ai.tool import ToolDef
 
 from experiments.l2.audit import EPSILON, TEXT_OPS
@@ -176,7 +176,8 @@ def _plain(mutation: Any) -> dict[str, Any]:
 
 
 def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, float]] = PRICES,
-            token_limit: int | None = None, message_limit: int | None = None) -> Task:
+            token_limit: int | None = None, message_limit: int | None = None,
+            time_limit: int | None = None) -> Task:
     audit = tools.audit
 
     def spend() -> dict[str, Any]:
@@ -204,12 +205,13 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
                   on_continue=on_continue)
     return Task(dataset=[Sample(input=brief_message(tools), id="l2")], solver=agent,
                 token_limit=token_limit, message_limit=message_limit or MESSAGE_LIMIT,
+                time_limit=time_limit,
                 metadata={"l2_audit": str(audit.out)}, name="l2-audit")
 
 
 def run_l2(tools: Tools, model: str | Model, prompt: str, *,
            prices: Mapping[str, tuple[float, float]] = PRICES,
-           token_limit: int | None = None) -> EvalLog:
+           token_limit: int | None = None, time_limit: int | None = None) -> EvalLog:
     """Run L2 over ``tools.audit`` to the end, then ``finalize``. Without a
     ``token_limit``, the backstop is the budget's worth of the model's tokens."""
     if token_limit is None:
@@ -217,7 +219,13 @@ def run_l2(tools: Tools, model: str | Model, prompt: str, *,
             token_limit = token_backstop(tools.audit.brief.budget_usd, str(model), prices)
         except UnknownPrice:
             token_limit = None  # the ledger then stops L2 at its first tool call
-    task = l2_task(tools, prompt, prices=prices, token_limit=token_limit)
+    task = l2_task(tools, prompt, prices=prices, token_limit=token_limit,
+                   time_limit=time_limit)
+    if isinstance(model, str) and model.startswith("openrouter/"):
+        # Inspect sends OpenAI-compatible tool schemas in strict mode, where every
+        # parameter must be required; L2's tools have optional ones (e.g. compare's
+        # rounds), which OpenAI then rejects with a 400 before any call is made.
+        model = get_model(model, strict_tools=False)
     tools.stop_reason = None
     [log] = inspect_eval(task, model=model, log_dir=str(tools.audit.out / "l2"),
                          display="none", fail_on_error=False)
