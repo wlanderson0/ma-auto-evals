@@ -72,6 +72,7 @@ single bridge between #town and #pod matters most.
 | Parameter | If set | If not set |
 |---|---|---|
 | `budget_usd` | required (§7) | — |
+| `run_budget_usd` | a cap on spend on runs, inside `budget_usd`, e.g. to compare with a fixed grid at the same spend on runs (§9.4) | runs can use the whole budget |
 | `mode` | `elicit` or `characterise` | L2 picks one and states it at the start; it is recorded |
 | `base_scenarios` | L2 starts from these | L2 picks from the existing scenarios, or writes new scenario code (§3.5) |
 | `base_logs` | L2 starts from these existing logs (e.g. a run with interesting behaviour) and follows them up with new runs or auditors | L2 starts from scenarios |
@@ -91,6 +92,7 @@ The parsed form is a dataclass with every field but the question and the budget 
 class L2Brief:
     question: str                                # the plain-text body
     budget_usd: float                            # §7
+    run_budget_usd: float | None = None          # cap on spend on runs (§9.4)
     mode: Literal["elicit", "characterise"] | None = None
     base_scenarios: tuple[str, ...] | None = None   # keys of experiments.scenarios.SCENARIOS
     base_logs: tuple[str, ...] | None = None        # paths to existing eval logs to follow up
