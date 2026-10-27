@@ -573,7 +573,8 @@ class Tools:
     def note_decision(self, field: str, value: str, reason: str) -> str:
         if not str(field).strip() or not str(reason).strip():
             raise Refused("field and reason are required")
-        if field in BRIEF_KEYS and getattr(self.audit.brief, field, None) is not None:
+        if field in BRIEF_KEYS - {"hypotheses"} and getattr(self.audit.brief, field,
+                                                             None) is not None:
             fixed = _short(str(getattr(self.audit.brief, field)), 200)
             raise Refused(f"the brief fixes {field} ({fixed}); L2 cannot change it")
         row = {"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "field": field, "value": value,
@@ -912,9 +913,10 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             """End the audit with your conclusions; this writes the report and stops you.
 
             Args:
-                conclusions: What can and cannot be concluded and the evidence for it, the
-                    search counts (variants, scorers and comparisons tried), and where you
-                    departed from the reading guidance.
+                conclusions: What can and cannot be concluded and the evidence for it, your
+                    mode and the measures you chose yourself, the search counts (variants,
+                    scorers and comparisons tried), and where you departed from the reading
+                    guidance.
             """
             return await call("end_audit", conclusions=conclusions)
         return execute

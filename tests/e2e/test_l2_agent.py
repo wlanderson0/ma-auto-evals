@@ -25,12 +25,37 @@ ANALYSIS_BRIEF = MILESTONE2.parent / "milestone2-analysis.md"
     "One change per comparison", "Per target", "same number on both sides",
     "Findings vs leads", "fresh epochs of every variant", "Setups where the behaviour does not",
     "auditor-as:<agent>", "Compared vs recorded", "compare post counts at the rounds",
-    "note_decision", "The search counts", "Where you departed from the reading guidance",
-    "only budget and end_audit work", "analysis only", "Same scorers",
-    "under new ids (e.g. V1b and C0b)", "elicit mode", "keep their control's rounds",
-    "spending can go over by up to one epoch"])
+    "state yours with note_decision", "The search counts",
+    "Where you departed from the reading guidance", "The measures you chose yourself",
+    "only budget and end_audit work", "analysis only", "Same scorers", "elicit mode",
+    "The seat's push", "spending can go over by up to one epoch",
+    "What the brief fixes, you must use", "If the brief does not fix the mode",
+    "is a lead until fresh epochs confirm it", "Record your other choices",
+    "a claim about why something happened", "unless they are the change you are testing",
+    "Runs are noisy", "starting points you may refine or replace"])
 def test_the_system_prompt_carries_the_reading_guidance(guidance):
     assert guidance in " ".join(SYSTEM_PROMPT.split())  # line breaks do not matter
+
+
+def test_the_system_prompt_gives_principles_not_the_control_procedure():
+    """Briefs need not have controls; how to write a variant is in the tool's description."""
+    text = " ".join(SYSTEM_PROMPT.split())
+    for recipe in ("copy of one of the brief's controls", "fresh copy of their control",
+                   "V1b", '"id"'):
+        assert recipe not in text, recipe
+
+
+def test_the_run_experiment_description_carries_the_variant_format(tmp_path):
+    from inspect_ai.tool import ToolDef
+
+    from experiments.l2.tools import inspect_tools
+
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
+    [run] = [ToolDef(t) for t in inspect_tools(Tools(audit))
+             if ToolDef(t).name == "run_experiment"]
+    text = run.parameters.properties["variants"].description
+    for part in ('"base"', '"mutations"', '"inner"', '"opening"', '"rationale"', '"control"'):
+        assert part in text, part
 
 
 def test_the_live_model_is_priced():
@@ -138,21 +163,6 @@ def test_live_needs_a_key_before_anything_is_made(tmp_path, monkeypatch):
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
               "--live"])
     assert not (tmp_path / "a").exists()
-
-
-def test_the_prompts_variant_example_runs(tmp_path):
-    """The JSON example the prompt gives is a valid launch, one change apart."""
-    from tests.support.l2_audit import InProcess
-
-    start = SYSTEM_PROMPT.index('   [{"id": "C0"')
-    example = SYSTEM_PROMPT[start:SYSTEM_PROMPT.index("}]}]", start) + 4]
-    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
-                         launch=InProcess())
-    tools = Tools(audit)
-    ok, text = tools.call("run_experiment", variants=example, epochs=1)
-    assert ok, text
-    ok, text = tools.call("compare", a="V1", b="C0", scorer="probe")
-    assert ok and "differ in" not in text and "wrong baseline" not in text
 
 
 def test_a_baseline_copy_of_its_control_is_one_change():

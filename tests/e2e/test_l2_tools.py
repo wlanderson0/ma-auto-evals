@@ -241,6 +241,14 @@ def test_note_decision_records_choices_but_not_on_what_the_brief_fixes(tmp_path)
     assert (row["field"], row["value"], row["reason"]) == ("epochs", "3", "noise at n=2")
 
 
+def test_the_briefs_hypotheses_can_be_replaced_and_the_change_recorded(tmp_path):
+    path = brief(tmp_path, 1.0, extra="\nhypotheses: [the bridge matters]")
+    tools = Tools(Audit.create(path, tmp_path / "audit", mock=True))
+    ok, text = tools.call("note_decision", field="hypotheses", value="Carol matters",
+                          reason="r")
+    assert ok, text
+
+
 def test_after_the_hard_stop_only_budget_and_end_audit_run(tmp_path):
     ended = []
     tools = new(tmp_path)
