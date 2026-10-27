@@ -335,3 +335,32 @@ def test_an_unreadable_spend_refuses_everything_but_end_audit(tmp_path):
     with pytest.raises(ToolError, match="cannot be read"):
         anyio.run(lambda: made["budget"]())
     assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping"))
+
+
+def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline_module):
+    """Over a wider milestone 1 audit (here M0 and K1), an MFA-only brief's tools read
+    the MFA runs only."""
+    from experiments.l2.experiment import run_experiment
+    from tests.support.l2_audit import MILESTONE2
+
+    grid = MILESTONE2.parent / "milestone1.md"
+    text = grid.read_text()
+    head, body = text.split("\nvariants:\n", 1)
+    keep, rest = [], body.split("\n  - id: ")
+    for chunk in rest[1:]:
+        if chunk.split("\n", 1)[0] in ("M0", "K1"):
+            keep.append(chunk.split("\n---\n")[0])
+    small = tmp_path / "grid.md"
+    small.write_text(head + "\nvariants:\n" + "".join("  - id: " + c + "\n" for c in keep)
+                     + "---\nA two-variant grid.\n")
+    m1 = tmp_path / "m1"
+    run_experiment(small, 1, m1, mock=True, launch=InProcess())
+    assert {row["variant"]["id"] for row in lines(m1 / "runs.jsonl")} == {"M0", "K1"}
+    analysis = MILESTONE2.parent / "milestone2-analysis.md"
+    audit = Audit.create(analysis, tmp_path / "audit", mock=True, analysis=m1)
+    tools = Tools(audit)
+    assert sorted(tools.results().runs) == ["M0"]
+    ok, text = tools.call("list_runs")
+    assert ok and "M0" in text and "K1" not in text
+    ok, text = tools.call("find", pattern="(?i)kestrel")
+    assert "K1" not in text

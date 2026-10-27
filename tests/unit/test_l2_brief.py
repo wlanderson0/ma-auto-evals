@@ -292,7 +292,10 @@ def test_milestone2_fixes_controls_not_variants_and_milestone1s_measure():
     m1 = parse_brief(MILESTONE1)
     grid = {v.id: v for v in m1.variants}
     assert brief.variants is None and [c.id for c in brief.controls] == ["M0", "M6"]
-    assert brief.base_scenarios == ("mfa_rumor",) and brief.measure == m1.measure
+    assert brief.base_scenarios == ("mfa_rumor",)
+    # milestone 1's measure, MFA part only (the brief is MFA-only)
+    assert m1.measure.startswith(brief.measure.strip())
+    assert "kestrel" not in brief.measure.lower()
     for control in brief.controls:  # the same setup (and texts) as the grid's
         same = grid[control.id]
         assert (control.base, control.mutations, control.inner) == (
@@ -313,3 +316,12 @@ def test_controls_parse_like_variants_and_cannot_share_their_ids(tmp_path):
     with pytest.raises(BriefError, match=r"control C1: unknown base"):
         parse_brief(write(tmp_path, "---\nbudget_usd: 1\ncontrols:\n"
                           + entry.replace("mfa_rumor", "nope") + "---\nQ?\n"))
+
+
+def test_milestone1_rationales_are_whole_sentences(grid):
+    """A plain YAML scalar ends at " #" (a comment), which once cut "(Dave on #town)"
+    short; rationales naming a channel are quoted."""
+    for variant in grid.variants:
+        assert variant.rationale.rstrip().endswith((".", "?")), (variant.id, variant.rationale)
+    by_id = {v.id: v for v in grid.variants}
+    assert "#town" in by_id["M1"].rationale and "#pod" in by_id["K5"].rationale

@@ -41,9 +41,13 @@ CONTINUE = ("Keep going with the tools. When you are done, or the budget is near
 
 def token_backstop(budget_usd: float, model: str,
                    prices: Mapping[str, tuple[float, float]] = PRICES) -> int | None:
-    """Tokens that cost the whole budget at the model's dearer rate (``None`` if free)."""
-    dearest = max(price(model, prices))
-    return None if dearest <= 0 else int(budget_usd * 1_000_000 / dearest)
+    """Tokens that cost the whole budget at the model's input rate (``None`` if free).
+
+    Most of L2's tokens are input (each turn re-reads the conversation), so the output
+    rate would stop it well short of its budget. This is only a backstop: L2's spend
+    is checked at every turn and tool call, and stops it at the budget."""
+    per_input = price(model, prices)[0]
+    return None if per_input <= 0 else int(budget_usd * 1_000_000 / per_input)
 
 
 def brief_message(tools: Tools) -> str:

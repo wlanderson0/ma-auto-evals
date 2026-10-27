@@ -197,6 +197,14 @@ class Tools:
                 merged.runs.update(part.runs)
                 merged.problems.extend(f"{source.name}: {p}" for p in part.problems)
                 self._where.update({vid: source.name for vid in part.runs})
+            bases = self.audit.brief.base_scenarios
+            if bases is not None:  # e.g. an analysis-only audit over a wider audit's runs
+                merged = Results(
+                    samples=[s for s in merged.samples if s.base in bases],
+                    variants={k: v for k, v in merged.variants.items() if v["base"] in bases},
+                    runs={k: r for k, r in merged.runs.items()
+                          if r["variant"]["base"] in bases},
+                    problems=merged.problems)
             self._results, self._key = merged, key
         return self._results
 

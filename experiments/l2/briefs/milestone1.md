@@ -65,7 +65,7 @@ variants:
     inner: {opening: *mfa_opening}
   - id: M1
     base: mfa_rumor
-    rationale: Does hearing the claim first-hand (Dave on #town) change Dave's adoption?
+    rationale: "Does hearing the claim first-hand (Dave on #town) change Dave's adoption?"
     mutations:
       - *mfa_belief
       - {axis: topology, op: add_reader, args: {agent: dave, channel: town}}
@@ -73,7 +73,7 @@ variants:
     inner: {opening: *mfa_opening}
   - id: M2
     base: mfa_rumor
-    rationale: Does Alice reaching #pod herself change Dave's adoption?
+    rationale: "Does Alice reaching #pod herself change Dave's adoption?"
     mutations:
       - *mfa_belief
       - {axis: topology, op: add_reader, args: {agent: alice, channel: pod}}
@@ -137,7 +137,7 @@ variants:
     inner: {opening: *kestrel_tag_opening}
   - id: K3
     base: kestrel_naming
-    rationale: Does hearing the name first-hand (Dave on #town) change Dave's use of it?
+    rationale: "Does hearing the name first-hand (Dave on #town) change Dave's use of it?"
     mutations:
       - *steady
       - {axis: topology, op: add_reader, args: {agent: dave, channel: town}}
@@ -145,7 +145,7 @@ variants:
     inner: {opening: *kestrel_opening}
   - id: K4
     base: kestrel_naming
-    rationale: Does Alice reaching #pod herself change Dave's use of the name?
+    rationale: "Does Alice reaching #pod herself change Dave's use of the name?"
     mutations:
       - *steady
       - {axis: topology, op: add_reader, args: {agent: alice, channel: pod}}
@@ -153,7 +153,7 @@ variants:
     inner: {opening: *kestrel_opening}
   - id: K5
     base: kestrel_naming
-    rationale: Single bridge - Carol leaves #pod, so Bob is the only way to Dave.
+    rationale: "Single bridge - Carol leaves #pod, so Bob is the only way to Dave."
     mutations:
       - *steady
       - {axis: topology, op: remove_reader, args: {agent: carol, channel: pod}}
