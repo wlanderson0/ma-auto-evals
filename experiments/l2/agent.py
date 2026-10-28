@@ -184,7 +184,8 @@ def brief_message(tools: Tools) -> str:
               "text], ...]}. The seat's first posts are these messages, each on a channel "
               "it can write to; after them its own model writes its posts.",
               "- baseline: inner {\"condition\": \"baseline\"}. The seat's own model writes "
-              "everything.", ""]
+              "everything from its prompt as shown above, so a claim that is not in that "
+              "prompt is never made unless a mutation puts it there.", ""]
     if brief.inner is not None:
         lines += [f"The brief's inner, used when a variant leaves inner out: "
                   f"{json.dumps(recorded_inner(brief.inner))}", ""]

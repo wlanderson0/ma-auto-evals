@@ -38,6 +38,7 @@ PRICES: dict[str, tuple[float, float]] = {
     # went to CoreWeave, the dearest seen, at about this rate.
     "openrouter/meta-llama/llama-3.3-70b-instruct": (0.71, 0.71),
     "openrouter/openai/gpt-4.1-mini": (0.40, 1.60),  # the judge (and L1/L0 auditor)
+    "openrouter/openai/gpt-4.1": (2.00, 8.00),  # a stronger L2 (listed rate, 2026-10-28)
 }
 FREE_PREFIXES = ("mockllm/",)
 """Offline mock models: no provider, no cost."""

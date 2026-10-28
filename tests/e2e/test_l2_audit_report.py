@@ -126,3 +126,10 @@ def test_the_report_shows_the_run_budget_and_never_as_left_to_l2(tmp_path):
     text = render(tools)
     assert "- Budget: $1.00, of which at most $0.10 on runs (the run budget)" in text
     assert "- Runs: $0.0000 of the $0.10 run budget" in text
+
+
+def test_conclusions_without_any_comparison_are_flagged(tmp_path):
+    tools = tools_for(tmp_path)
+    assert tools.call("end_audit", conclusions="The Advocate strongly amplifies spread.")[0]
+    text = (tools.audit.out / "report.md").read_text()
+    assert "- No comparison was made (compare was never called)" in text

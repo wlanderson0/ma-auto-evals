@@ -96,6 +96,7 @@ def test_a_minimal_brief_is_accepted_and_shown_the_setup_and_every_change(tmp_pa
     assert "## kestrel_naming" not in text and "# Controls" not in text
     assert "run budget" not in text
     assert '"opening": [[channel, text], ...]' in text
+    assert "a claim that is not in that prompt is never made" in text
     for (axis, op), help in HELP.items():
         assert f"- {axis}/{op} {help}" in text
     ok, result = tools.call("run_experiment", epochs=1, variants=[{

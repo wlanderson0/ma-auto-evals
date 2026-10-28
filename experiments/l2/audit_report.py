@@ -203,6 +203,9 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
 
     out += ["## Departures from the reading guidance (automatic checks)", ""]
     notes = []
+    if tools.conclusions is not None and not compares:
+        notes.append("- No comparison was made (compare was never called), so no claim that "
+                     "a change made a difference rests on one.")
     for args in compares:
         try:
             found = tools.departures(args["a"], args["b"], args["scorer"], args["rounds"])

@@ -829,7 +829,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
             Args:
                 variant_ids: The variants to show.
-                scorer: Leave out to read the brief's measure. Otherwise: probe (each
+                scorer: Leave out to read the brief's measure, if the brief fixes one
+                    (the first message says). Otherwise: probe (each
                     target's private answer), counts (uses of the scenario's mention in a
                     target's own words), post_judge, round_counts, or seat_dose (whether
                     the seat delivered its intended dose).
