@@ -1,5 +1,5 @@
 ---
-budget_usd: 5
+budget_usd: 1
 base_scenarios: [mfa_rumor_c]
 allowed_changes: [models, schedule]
 ---

@@ -98,7 +98,8 @@ def test_no_op_on_the_null_tasks_allowed_axes_changes_channel_membership():
                                         ("bench-null.md", "mfa_rumor_c")])
 def test_the_bench_briefs_are_minimal_and_name_their_scenario(name, base):
     brief = parse_brief(BRIEFS / name)
-    assert brief.base_scenarios == (base,) and brief.budget_usd == 5
+    assert brief.base_scenarios == (base,)
+    assert brief.budget_usd == (1 if base == "mfa_rumor_c" else 5)
     assert brief.mode is brief.measure is brief.controls is brief.variants is None
     assert brief.inner is brief.run_budget_usd is brief.hypotheses is None
     assert brief.allowed_changes == (("models", "schedule") if base == "mfa_rumor_c" else None)
