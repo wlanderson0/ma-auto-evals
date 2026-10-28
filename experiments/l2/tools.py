@@ -802,7 +802,10 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     why you propose it}. inner is {"condition": "scripted", "opening":
                     [[channel, text], ...]} (the seat's first posts, then its own model)
                     or {"condition": "baseline"} (the seat's own model throughout); left
-                    out, it is the brief's inner, if it sets one. A variant may name one
+                    out, it is the brief's inner, if it sets one. A variant with a
+                    schedule/activate_agent needs "scope": {"ops": ["replace_generation",
+                    "amend_pending"], "agents": null} in its inner (give the variant it is
+                    compared with the same scope). A variant may name one
                     of the brief's controls instead of a base: {"id", "control",
                     "mutations", "rationale", optional "inner"} is that control's base,
                     mutations and inner with these mutations added (an inner given

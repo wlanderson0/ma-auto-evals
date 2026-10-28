@@ -165,7 +165,11 @@ def brief_message(tools: Tools) -> str:
                   "runs already made with the query tools."]
         return "\n".join(lines)
     lines += ["", "# The setup", "",
-              "The scenarios you can start from, as they run before any change:", ""]
+              "The scenarios you can start from, as they run before any change. In each, the "
+              "behaviour measured is started by the seat acting for an auditor, and no "
+              "auditor is part of the setup: the seat's prompt below does not contain it. So "
+              "it only happens in a variant whose scripted opening or seat persona line puts "
+              "it there.", ""]
     for name in brief.base_scenarios or tuple(SCENARIOS):
         lines += [describe_scenario(name, audit.mock), ""]
     if brief.controls:

@@ -82,10 +82,11 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
                           "condition has none yet")
     if built.activations and condition in MID_RUN_CONDITIONS and scope is not None and not (
             scope.allows_op("amend_pending") and scope.agents is None):
-        rejections.append("the inner scope must allow amend_pending with agents: null (an "
-                          "amendment affects every agent in the pending schedule), e.g. "
-                          "{ops: [replace_generation, amend_pending], agents: null}, as the "
-                          "variant it is compared with should have too")
+        rejections.append("an activation's inner scope must allow amend_pending with "
+                          "agents: null (an amendment affects every agent in the pending "
+                          "schedule): set inner.scope to {\"ops\": [\"replace_generation\", "
+                          "\"amend_pending\"], \"agents\": null}, and give the variant it is "
+                          "compared with the same scope")
     if len(activated) > 1:
         # Two at one pause would share a schedule revision (Orbit refuses the second);
         # at different rounds, the first makes later rounds longer, so the second's

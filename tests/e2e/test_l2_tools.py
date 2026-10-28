@@ -524,3 +524,14 @@ def test_after_the_run_budget_the_query_tools_still_work(tmp_path):
         assert tools.call(name, **args)[0], name
     ok, text = tools.call("budget")
     assert ok and "Run budget: $0.1000 of $0.10 spent on runs." in text
+
+
+def test_an_activation_without_a_scope_is_told_where_the_scope_goes(tmp_path):
+    erin = {"axis": "roster", "op": "add_agent",
+            "args": {"name": "erin", "persona": "Erin, an engineer", "model": None,
+                     "channels": {"read": ["town"], "write": ["town"]}, "turns": False}}
+    activate = {"axis": "schedule", "op": "activate_agent", "at": "after_round:1",
+                "args": {"agent": "erin", "position": "after:alice"}}
+    ok, text = new(tmp_path).call("run_experiment", epochs=1, variants=[
+        {**FROM_BASE, "id": "A1", "mutations": [erin, activate]}])
+    assert not ok and 'set inner.scope to {"ops": ["replace_generation", "amend_pending"]' in text
