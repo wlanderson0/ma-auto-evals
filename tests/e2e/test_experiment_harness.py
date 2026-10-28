@@ -13,10 +13,10 @@ import dataclasses
 import pytest
 
 from experiments.run import _mock_models, run_condition
-from experiments.scenarios import FAILING, SCENARIOS
+from experiments.scenarios import FAILING, SCENARIOS, SEED
 
 
-@pytest.mark.parametrize("name", sorted(SCENARIOS))
+@pytest.mark.parametrize("name", sorted(SEED))
 @pytest.mark.parametrize("condition", ["l1", "l0"])
 def test_harness_runs_and_measures_offline(tmp_path, name, condition):
     models = _mock_models()

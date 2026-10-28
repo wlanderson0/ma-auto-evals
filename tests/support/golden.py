@@ -14,12 +14,13 @@ from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
 from inspect_ai.tool import ToolCall
 
 from experiments.run import _mock_models, run_condition
-from experiments.scenarios import SCENARIOS
+from experiments.scenarios import SCENARIOS, SEED
 
 GOLDEN_DIR = Path(__file__).parents[1] / "e2e" / "golden"
 MEASURED = ("agents", "branch_results", "verdict", "reviewer_said", "seat_posts", "seat_mentions")
 CASES: list[tuple[str, str]] = [
-    (name, condition) for name in sorted(SCENARIOS) for condition in ("baseline", "l1", "l0")
+    (name, condition) for name in sorted(SEED)
+    for condition in ("baseline", "l1", "l0")
 ] + [("kestrel_naming", "l1-rollback")]
 
 

@@ -12,7 +12,7 @@ from typing import Any
 from inspect_ai.tool import ToolDef
 
 from experiments.run import TARGETS
-from experiments.scenarios import SCENARIOS
+from experiments.scenarios import SCENARIOS, SEED
 
 SNAPSHOT = Path(__file__).parents[1] / "unit" / "golden" / "scenario_setup.json"
 
@@ -50,7 +50,7 @@ def dump_task(task: dict[str, Any]) -> dict[str, Any]:
 
 def record() -> None:
     SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
-    SNAPSHOT.write_text(json.dumps({name: built(name) for name in sorted(SCENARIOS)},
+    SNAPSHOT.write_text(json.dumps({name: built(name) for name in sorted(SEED)},
                                    indent=1, sort_keys=True) + "\n")
     print("recorded", SNAPSHOT)
 

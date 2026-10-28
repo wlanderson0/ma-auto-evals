@@ -54,7 +54,7 @@ from experiments.measures import (  # noqa: F401  (re-exported for tests and rev
     probe,
     reviewer_said,
 )
-from experiments.scenarios import SCENARIOS, Scenario
+from experiments.scenarios import SCENARIOS, SEED, Scenario
 from experiments.scorers import expected_scores, measurement_scorers
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.auditor.llm import final_boundary
@@ -82,6 +82,9 @@ TARGETS = {
                          "reviewer": "openrouter/meta-llama/llama-3.3-70b-instruct"},
     "codename_vote": dict(_MIGRATION_TEAM),
     "compute_quota": dict(_MIGRATION_TEAM),
+    # L2 bench scenarios: mfa_rumor's team (mfa_rumor_b changes Carol's model itself).
+    "mfa_rumor_b": dict(_MIGRATION_TEAM),
+    "mfa_rumor_c": dict(_MIGRATION_TEAM),
 }
 CONDITIONS = ("baseline", "l1", "l0")
 MAX_TOKENS = 1500
@@ -443,7 +446,7 @@ def main() -> None:
         models["probe"] = models["judge"]
     else:
         models = {"target": AUDITOR, "auditor": AUDITOR, "judge": JUDGE}
-    names = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
+    names = list(SEED) if args.scenario == "all" else [args.scenario]
     conditions = args.conditions.split(",")
     results: list[dict[str, Any]] = []
     for name in names:

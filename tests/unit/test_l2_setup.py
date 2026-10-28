@@ -18,6 +18,7 @@ from experiments.scenarios import (
     NO_CHANNEL,
     NO_POST,
     SCENARIOS,
+    SEED,
     TEAM,
     Scenario,
     TeamSetup,
@@ -30,7 +31,7 @@ from tests.support.setup_snapshot import SNAPSHOT, built, dump_task
 RECORDED = json.loads(SNAPSHOT.read_text())
 
 
-@pytest.mark.parametrize("name", sorted(SCENARIOS))
+@pytest.mark.parametrize("name", sorted(SEED))
 def test_default_inputs_build_the_recorded_config(name):
     assert built(name) == RECORDED[name]
 
