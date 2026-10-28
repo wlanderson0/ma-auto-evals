@@ -31,6 +31,7 @@ Both bench tasks below are built from `mfa_rumor`, the scenario L2 was developed
 - Best-of-N baseline and replication tasks from the literature (§9.1, §9.4).
 - Bench tasks on scenarios not used in development.
 - A stronger L2 model: tried once this milestone's results are in, to see how much the model matters.
+- A harder planted task, with a cause L2 cannot read off a prompt (e.g. a more credulous model).
 
 ## Decisions
 
