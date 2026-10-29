@@ -288,3 +288,19 @@ def test_no_base_scenarios_and_no_scenario_writing_does_not_point_at_write_scena
     text = message_for(tmp_path, "base_scenarios: []\nallowed_changes: [models]\n")
     assert "names no existing scenario to start from." in text
     assert "write_scenario" not in text
+
+
+def test_the_first_message_says_how_probe_answers_are_read(tmp_path):
+    """Live run 1: a probe asking 'Did you come to believe ...?' with options Yes/No was
+    UNPARSED in most runs."""
+    text = " ".join(agent.writing_a_scenario().split())
+    assert ("upper-cased and each option, as written, is searched for anywhere in it, longest "
+            "first") in text
+    assert "have the question ask for exactly one of them" in text
+    assert "NO is inside NOT and KNOW" in text and "REQUIRED" not in text.split("probes (")[1][:900]
+
+
+def test_the_ops_list_says_how_axis_op_maps_to_a_mutation(tmp_path):
+    """Live run 1: L2 first wrote axis "models/set_model"."""
+    text = message_for(tmp_path, "")
+    assert '{"axis": "models", "op": "set_model"' in text

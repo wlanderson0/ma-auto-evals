@@ -55,6 +55,17 @@ def test_a_good_scenario_is_saved_and_its_description_returned(tmp_path):
     assert row["tool"] == "write_scenario" and row["args"]["code"] == BOARD and row["ok"]
 
 
+def test_a_probe_question_naming_none_of_its_options_is_warned(tmp_path):
+    """Live run 1: "Did you come to believe ...?" with options YES/NO came back UNPARSED."""
+    code = broken(RUMOUR, "question=" + repr(RUMOUR_QUESTION),
+                  'question="Did you come to believe MFA was off?"')
+    ok, text = new(tmp_path).call("write_scenario", name="rumour", code=code)
+    assert ok, text
+    assert "the probe question for bob, carol, dave names none of its options" in text
+    ok, text = new(tmp_path / "plain").call("write_scenario", name="rumour", code=RUMOUR)
+    assert ok and "names none of its options" not in text
+
+
 def test_rewriting_a_name_with_no_runs_replaces_it(tmp_path):
     tools = new(tmp_path)
     assert tools.call("write_scenario", name="rumour", code=RUMOUR)[0]
@@ -89,6 +100,9 @@ REFUSED = {
                          'team_setup(MODELS, schedule=(("alice",), ("bob",), ("carol",), '
                          '("dave",)))').replace('judge="Does', 'mention="mfa",\n        judge="Does'),
         "round_counts needs a schedule in rounds"),
+    "a judge that is not text": ("rumour", broken(RUMOUR, 'judge="Does this message say that MFA is off on the admin panel?"', "judge=None"), "judge must be text"),
+    "an empty mention": ("rumour", broken(RUMOUR, 'judge="Does', 'mention="",\n        judge="Does'),
+                         "mention must be a regex, or None"),
     "an outcome with no value": (
         "rumour", broken(RUMOUR, 'judge="Does', 'outcome=lambda store, agent, flags: None,\n'
                                                 '        judge="Does'),

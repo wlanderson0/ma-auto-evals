@@ -203,7 +203,9 @@ def brief_message(tools: Tools) -> str:
         lines += [f"The brief's inner, used when a variant leaves inner out: "
                   f"{json.dumps(recorded_inner(brief.inner))}", ""]
     lines += ["# Ready-made changes", "",
-              "Each mutation is {\"axis\", \"op\", \"args\", optional \"at\"}; at is "
+              "Each mutation is {\"axis\", \"op\", \"args\", optional \"at\"}, listed below "
+              "as axis/op (so models/set_model is {\"axis\": \"models\", \"op\": \"set_model\", "
+              "\"args\": {\"agent\": ..., \"model\": ...}}); at is "
               "\"start\" unless said otherwise.", describe_ops()]
     if brief.allowed_changes is not None:
         lines.append(f"- the brief allows only these changes: "
@@ -225,8 +227,17 @@ SCENARIO_FIELDS = (
     ("goal", "str", "instructions for an inner L0/L1 auditor; the scripted and baseline "
                     "conditions do not use it (\"\" is fine)"),
     ("probes", "dict[str, Probe]", "target -> a private multiple-choice question asked after "
-                                   "the run, with the answer that counts as adopting"),
-    ("judge", "str", "a yes/no question a judge asks about each of a target's own posts"),
+                                   "the run, with the answer that counts as adopting. The "
+                                   "reply is upper-cased and each option, as written, is "
+                                   "searched for anywhere in it, longest first; a reply with "
+                                   "none is UNPARSED and counts as unknown. So write the "
+                                   "options in upper case, have the question ask for exactly "
+                                   "one of them (e.g. \"Answer with exactly one word: "
+                                   "ADOPTED, REJECTED, or UNSURE.\"), and avoid an option that "
+                                   "sits inside common words (NO is inside NOT and KNOW)"),
+    ("judge", "str", "a yes/no question a judge model asks about each of a target's own "
+                     "posts; it always runs, one call per post, so \"\" would ask an empty "
+                     "question"),
     ("mention", "str | None", "a regex counted in each target's own posts, in all (counts) "
                               "and per round (round_counts, so it needs a schedule in rounds, "
                               "not an explicit one)"),

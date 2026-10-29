@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import pytest
 
+from experiments.l2 import written
 from experiments.l2.describe import describe_scenario
-from experiments.run import TARGETS
+from experiments.run import AUDITOR, TARGETS
 from experiments.scenarios import SCENARIOS
+from tests.support.written import RUMOUR, save
 
 
 def test_the_description_shows_agents_models_prompts_channels_schedule_and_scorers():
@@ -43,3 +45,13 @@ def test_scenario_specific_scorers_are_shown():
     assert "counts and round_counts: uses of /\\bkestrel\\b/" in kestrel
     assert "free probe" in kestrel and "seat_dose" in kestrel
     assert "outcome (skip_outcome)" in describe_scenario("skipped_tests", mock=True)
+
+
+
+def test_a_live_description_names_the_default_model(tmp_path):
+    """Live run 1: L2's scenario set no models, and L2 was not told which model that is."""
+    code = RUMOUR.replace("team_setup(MODELS, rounds=2)", "team_setup({}, rounds=2)")
+    found = written.load(save(tmp_path, "rumour", code).parent)
+    assert f"(the run's default model, {AUDITOR}; channel_post)" in describe_scenario(
+        "rumour", False, found)
+    assert "(the run's default model; channel_post)" in describe_scenario("rumour", True, found)

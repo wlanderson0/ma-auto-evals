@@ -7,7 +7,7 @@ writes them, the schedule, the seat, the targets and the scorers.
 from __future__ import annotations
 
 from experiments.l2 import written as written_
-from experiments.l2.experiment import base_scenario
+from experiments.l2.experiment import base_scenario, models_for
 from experiments.scenarios import Scenario
 from experiments.scorers import DOSE_BASES
 
@@ -29,7 +29,8 @@ def describe_scenario(name: str, mock: bool,
     lines.append("- Agents (model; tools; system prompt):")
     for spec in task["setup"].agents:
         tools = ", ".join(["channel_post", *(str(t) for t in spec.tools)])
-        model = spec.model or "the run's default model"
+        model = spec.model or ("the run's default model" if mock
+                               else f"the run's default model, {models_for(False)['target']}")
         lines.append(f"  - {spec.name} ({model}; {tools}): {spec.system_prompt}")
     lines += ["- Scorers (all run after the agents have finished):", *scorers(scenario)]
     return "\n".join(lines)

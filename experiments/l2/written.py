@@ -290,6 +290,13 @@ def check(path: Path, name: str) -> str:
         raise CheckFailed("the Scenario has no team: build its task with team_setup and "
                           "build_team and pass team=<the TeamSetup>, so ready-made changes "
                           "apply to it")
+    if not isinstance(scenario.judge, str):
+        raise CheckFailed("judge must be text: the yes/no question a judge asks about each "
+                          f"of a target's posts (it always runs), not {scenario.judge!r}")
+    if scenario.mention is not None and not (isinstance(scenario.mention, str)
+                                             and scenario.mention.strip()):
+        raise CheckFailed(f"mention must be a regex, or None to count no mention, not "
+                          f"{scenario.mention!r}")
     if not same_task(scenario.task, build_team(name, scenario.team)):
         raise CheckFailed(f"the Scenario's task is not build_team({name!r}, team): runs "
                           "rebuild the task from team, so build it from the same TeamSetup")
@@ -309,7 +316,13 @@ def check(path: Path, name: str) -> str:
         if missing:
             raise CheckFailed("the dry-run on the generic mocks failed:\n"
                               + "\n".join(f"- {reason}" for reason in missing))
+    unnamed = sorted({agent for agent, probe in built.probes.items()
+                      if not any(option in probe.question.upper() for option in probe.options)})
     warnings = [f"Warning: {w}" for w in problems.warnings]
+    if unnamed:
+        warnings.append(f"Warning: the probe question for {', '.join(unnamed)} names none of "
+                        "its options; a reply that names none is UNPARSED (unknown), so ask "
+                        "for exactly one of them")
     return "\n".join([*warnings, *([""] if warnings else []),
                       describe_scenario(name, mock=False, written=found)])
 
