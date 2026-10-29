@@ -294,9 +294,9 @@ def test_the_first_message_says_how_probe_answers_are_read(tmp_path):
     """Live run 1: a probe asking 'Did you come to believe ...?' with options Yes/No was
     UNPARSED in most runs."""
     text = " ".join(agent.writing_a_scenario().split())
-    assert "searching the upper-cased reply for each option as written" in text
+    assert "the upper-cased reply is searched for each option as written" in text
+    assert 'followed by "Answer with exactly one word: <the options>."' in text
     assert "Open-ended questions go in free_probes instead" in text
-    assert "exactly one" not in text.split("probes (")[1][:600]  # a fact, not a rule
 
 
 def test_the_ops_list_says_how_axis_op_maps_to_a_mutation(tmp_path):

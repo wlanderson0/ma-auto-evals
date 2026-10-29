@@ -316,12 +316,7 @@ def check(path: Path, name: str) -> str:
         if missing:
             raise CheckFailed("the dry-run on the generic mocks failed:\n"
                               + "\n".join(f"- {reason}" for reason in missing))
-    unnamed = sorted({agent for agent, probe in built.probes.items()
-                      if not any(option in probe.question.upper() for option in probe.options)})
     warnings = [f"Warning: {w}" for w in problems.warnings]
-    if unnamed:
-        warnings.append(f"Warning: the probe question for {', '.join(unnamed)} names none of "
-                        "its options; a reply that names none of them is UNPARSED (unknown)")
     return "\n".join([*warnings, *([""] if warnings else []),
                       describe_scenario(name, mock=False, written=found)])
 

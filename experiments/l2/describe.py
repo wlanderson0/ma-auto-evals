@@ -56,7 +56,7 @@ def scorers(scenario: Scenario) -> list[str]:
     lines = []
     questions: dict[str, list[str]] = {}
     for agent, probe in scenario.probes.items():
-        text = (f"{probe.question} (options {', '.join(probe.options)}; {probe.adopted} "
+        text = (f"{probe.asked} (options {', '.join(probe.options)}; {probe.adopted} "
                 "counts as adopting)")
         questions.setdefault(text, []).append(agent)
     lines += [f"  - probe, asked privately of {', '.join(agents)}: {text}"

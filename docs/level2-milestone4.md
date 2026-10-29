@@ -110,6 +110,8 @@ Test-first, mock models only for steps 1–4; `uv run pytest` passes after every
 5. **Task.** The rebuild brief, the rubric section and the spec updates. Then **stop for review** before any OpenRouter spend.
 6. **Run** (after approval): the rebuild task once with gpt-4.1, $1. Read the record; fix what the run shows is a tool problem, as in milestone 3.
 
+   After the first three live runs (scored in `docs/level2-bench-rubric.md`): L2 built the setup correctly each time but wrote a probe that never asked for one of its options, so most answers were UNPARSED, and stating how probes are scored did not change that. So a probe now asks its own answer format (`Probe.asked`: the question, then "Answer with exactly one word: <options>."); the seed probes' questions lost that sentence, so their agents are asked exactly what they were; the `write_scenario` warning for a question naming none of its options is gone, since that can no longer happen. The report's automatic checks flag a probe read where most answers are unknown.
+
 ## Open questions
 
 - How much should a person review an L2-written scenario before its results are trusted (§12)?

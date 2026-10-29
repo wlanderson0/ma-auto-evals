@@ -250,7 +250,7 @@ def probe_scorer(scenario: Scenario) -> Scorer:
                 answer = None
                 if context is not None:
                     answer, why = await attempt(probe(
-                        agent_model(scenario, agent), context, spec.question, spec.options))
+                        agent_model(scenario, agent), context, spec.asked, spec.options))
                 agents[agent] = {"answer": answer, "why": why}
             return Score(value={a: v["answer"] or "" for a, v in agents.items()},
                          metadata={"final": view.final, "agents": agents})
