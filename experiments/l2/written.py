@@ -321,8 +321,7 @@ def check(path: Path, name: str) -> str:
     warnings = [f"Warning: {w}" for w in problems.warnings]
     if unnamed:
         warnings.append(f"Warning: the probe question for {', '.join(unnamed)} names none of "
-                        "its options; a reply that names none is UNPARSED (unknown), so ask "
-                        "for exactly one of them")
+                        "its options; a reply that names none of them is UNPARSED (unknown)")
     return "\n".join([*warnings, *([""] if warnings else []),
                       describe_scenario(name, mock=False, written=found)])
 
