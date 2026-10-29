@@ -76,7 +76,7 @@ def test_the_ledger_counts_every_call_in_every_log(full):
 def test_the_analysis_only_fake_reads_an_existing_audit(full, tmp_path):
     source = full[0].audit.experiments()[0]
     # ANALYSIS's calls, on this audit's variants (ANALYSIS names milestone 1's).
-    script = [("list_runs", {}), ("compare", {"a": "V1", "b": "C0", "scorer": "probe"}),
+    script = [("list_runs", {}), ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "probe"}),
               ("find", {"pattern": "(?i)mfa", "agent": "dave"}), ANALYSIS[-1]]
     audit = Audit.create(brief(tmp_path, 0.5), tmp_path / "audit", mock=True,
                          analysis=source)

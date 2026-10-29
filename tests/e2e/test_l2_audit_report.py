@@ -26,8 +26,8 @@ def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_pa
     tools.call("note_decision", field="epochs", value="2", reason="pipeline test")
     assert not tools.call("run_experiment", variants=[{**V1, "control": "Z"}], epochs=1)[0]
     assert tools.call("run_experiment", variants=json.dumps([C0, V1]), epochs=2)[0]
-    tools.call("compare", a="V1", b="C0", scorer="probe")
-    tools.call("compare", a="C0", b="V1", scorer="probe", rounds=None)  # the same one
+    tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
+    tools.call("scores", variant_ids=["C0"], against="V1", scorer="probe", rounds=None)  # the same one
     tools.call("scores", variant_ids=["C0", "V1"], scorer="probe")
     tools.call("scores", variant_ids=["V1", "C0"], scorer="probe")  # the same table
     tools.call("transcript", variant_id="V1", epoch=1)
@@ -78,7 +78,7 @@ def test_departures_are_flagged_in_comparisons_and_score_tables(tmp_path):
     tools = tools_for(tmp_path)
     tools.call("run_experiment", variants=[C0], epochs=1)
     tools.call("run_experiment", variants=[V1], epochs=2)
-    tools.call("compare", a="V1", b="C0", scorer="probe")
+    tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
     tools.call("scores", variant_ids=["C0", "V1"], scorer="post_judge")
     tools.call("end_audit", conclusions="done")
     text = (tools.audit.out / "report.md").read_text()
@@ -105,7 +105,7 @@ def test_an_analysis_only_report_and_a_damaged_trace(tmp_path):
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
                          analysis=source.audit.experiments()[0])
     tools = Tools(audit, on_end=write_report)
-    tools.call("compare", a="V1", b="C0", scorer="probe")
+    tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
     with (audit.out / "trace.jsonl").open("a") as file:
         file.write('{"seq": 2, "tool": "fi')  # cut by a crash
     assert tools.call("end_audit", conclusions="Little can be concluded.")[0]
@@ -132,4 +132,4 @@ def test_conclusions_without_any_comparison_are_flagged(tmp_path):
     tools = tools_for(tmp_path)
     assert tools.call("end_audit", conclusions="The Advocate strongly amplifies spread.")[0]
     text = (tools.audit.out / "report.md").read_text()
-    assert "- No comparison was made (compare was never called)" in text
+    assert "- No comparison was made (scores was never called with against)" in text

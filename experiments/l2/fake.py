@@ -27,7 +27,7 @@ FULL: list[tuple[str, dict[str, Any]]] = [
          "rationale": "does hearing the claim first-hand change Dave's adoption?"}]),
         "epochs": 2}),
     ("scores", {"variant_ids": ["C0", "V1"], "scorer": "probe"}),
-    ("compare", {"a": "V1", "b": "C0", "scorer": "probe"}),
+    ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "probe"}),
     ("transcript", {"variant_id": "V1", "epoch": 1, "max_posts": 5}),
     ("find", {"pattern": "(?i)mfa", "agent": "dave"}),
     ("budget", {}),
@@ -39,7 +39,7 @@ FULL: list[tuple[str, dict[str, Any]]] = [
 ANALYSIS: list[tuple[str, dict[str, Any]]] = [
     ("list_runs", {}),
     ("scores", {"variant_ids": ["M0", "M1", "M2", "M3"], "scorer": "probe"}),
-    ("compare", {"a": "M1", "b": "M0", "scorer": "probe"}),
+    ("scores", {"variant_ids": ["M1"], "against": "M0", "scorer": "probe"}),
     ("find", {"pattern": "(?i)mfa", "agent": "dave", "max_results": 5}),
     ("end_audit", {"conclusions": (
         "Fake L2 (scripted, analysis only): nothing is concluded. "

@@ -162,11 +162,11 @@ def test_list_runs_shows_each_variant_with_its_base_and_changes(ran):
     assert "; topology.add_reader(agent=dave, channel=town)" in rows["V1"]
 
 
-def test_scores_and_compare_read_every_experiment(ran):
+def test_scores_read_every_experiment(ran):
     tools, _ = ran
     ok, text = tools.call("scores", variant_ids=["C0", "V1"], scorer="probe")
     assert ok and "C0 (epochs [1, 2])" in text and "| dave |" in text
-    ok, text = tools.call("compare", a="V1", b="C0", scorer="probe")
+    ok, text = tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
     assert ok and "V1 vs C0 on probe" in text
     # The mocks answer alike on both sides: one change apart, but nothing to tell apart.
     assert "| dave | 0/2 | 0/2 | +0.00 | no: could be chance (p = 1.00) |" in text
@@ -176,15 +176,15 @@ def test_scores_and_compare_read_every_experiment(ran):
     assert ok and "seat_dose" in text
 
 
-def test_compare_notes_departures_from_the_guidance(tmp_path):
+def test_scores_against_notes_departures_from_the_guidance(tmp_path):
     tools = new(tmp_path)
     rounds = {"axis": "schedule", "op": "set_rounds", "args": {"rounds": 2}}
     two = {**V1, "id": "V2", "mutations": [*V1["mutations"], rounds]}
     assert tools.call("run_experiment", variants=[C0, two], epochs=1)[0]
     assert tools.call("run_experiment", variants=[V1], epochs=2)[0]
-    _, text = tools.call("compare", a="V2", b="C0", scorer="probe")
+    _, text = tools.call("scores", variant_ids=["V2"], against="C0", scorer="probe")
     assert "differ in 2 settings" in text
-    _, text = tools.call("compare", a="V1", b="C0", scorer="probe")
+    _, text = tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
     assert "V1 ran in exp-2 and C0 in exp-1" in text and "unequal epochs" in text
 
 
@@ -224,7 +224,13 @@ def test_query_errors_go_back_to_l2(ran):
             ("scores", {"variant_ids": ["C0"], "scorer": "vibes"}, "unknown scorer"),
             ("transcript", {"variant_id": "C0", "epoch": 9}, "has no epoch 9"),
             ("transcript", {"variant_id": "C0", "epoch": 1, "max_posts": 0}, "max_posts"),
-            ("compare", {"a": "V1", "b": "C0", "scorer": "post_judge"}, "probe' or 'counts"),
+            ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "post_judge"},
+             "probe' or 'counts"),
+            ("scores", {"variant_ids": ["C0"], "scorer": "probe", "rounds": 2},
+             "rounds applies only with against"),
+            ("scores", {"variant_ids": ["C0"], "against": "C0", "scorer": "probe"},
+             "at least one other variant"),
+            ("compare", {"a": "V1", "b": "C0", "scorer": "probe"}, "unknown tool"),
             ("scores", {"scorer": "probe"}, "TypeError"),
             ("nope", {}, "unknown tool")]:
         ok, text = tools.call(name, **args)
@@ -284,6 +290,7 @@ def test_the_inspect_tools_refresh_l2s_spend_and_raise_on_refusal(tmp_path):
     tools = new(tmp_path)
     spent = {"usd": 0.0}
     made = {ToolDef(t).name: t for t in inspect_tools(tools, spend=lambda: dict(spent))}
+    assert "compare" not in made  # folded into scores (against)
     assert list(made)[0] == "run_experiment"
     assert "run_experiment" not in {ToolDef(t).name for t in inspect_tools(
         tools, experiments=False)}
@@ -324,12 +331,12 @@ def test_a_wrong_agent_name_is_refused_with_the_names(ran):
         assert not ok and "no agent 'Dave'" in text and "'dave'" in text
 
 
-def test_compare_checks_rounds_and_what_is_measured(ran):
+def test_scores_against_checks_rounds_and_what_is_measured(ran):
     tools, _ = ran
     for args, message in [({"scorer": "probe", "rounds": 2}, "counts only"),
                           ({"scorer": "counts"}, "not measured on mfa_rumor"),
                           ({"scorer": "counts", "rounds": 0}, "not measured")]:
-        ok, text = tools.call("compare", a="V1", b="C0", **args)
+        ok, text = tools.call("scores", variant_ids=["V1"], against="C0", **args)
         assert not ok and message in text, text
     ok, text = tools.call("scores", variant_ids=["C0"], scorer="round_counts")
     assert not ok and "not measured on mfa_rumor" in text
@@ -385,7 +392,7 @@ def test_queries_see_a_new_experiment_after_a_launch(tmp_path):
     tools.call("run_experiment", variants=[V1], epochs=1)
     ok, text = tools.call("list_runs")
     assert ok and "| V1 | exp-2 |" in text
-    assert tools.call("compare", a="V1", b="C0", scorer="probe")[0]
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
 
 
 def test_long_results_are_cut_in_the_trace_only(ran, monkeypatch):
@@ -475,23 +482,23 @@ def test_an_activation_compared_without_the_idle_agent_is_a_wrong_baseline(tmp_p
                 {"id": "V7", "control": "M6", "rationale": "Erin joins",
                  "mutations": [activate]}]
     assert tools.call("run_experiment", variants=variants, epochs=1)[0]
-    _, text = tools.call("compare", a="V7", b="C0", scorer="probe")
+    _, text = tools.call("scores", variant_ids=["V7"], against="C0", scorer="probe")
     assert ("wrong baseline: V7 activates erin mid-run, but C0 does not have erin in its "
             "setup at all") in text and "(run so far: C6)" in text
-    _, text = tools.call("compare", a="V7", b="C6", scorer="probe")
+    _, text = tools.call("scores", variant_ids=["V7"], against="C6", scorer="probe")
     assert "wrong baseline" not in text and "differ in" not in text
 
 
-def test_scores_and_compare_read_the_briefs_measure_by_default(ran):
+def test_scores_read_the_briefs_measure_by_default(ran):
     """L2 never has to name the measure (live runs asked for 'mfa_rumor')."""
     tools, _ = ran
-    ok, text = tools.call("compare", a="V1", b="C0")
-    assert ok and text.startswith("V1 vs C0 on probe")
+    ok, text = tools.call("scores", variant_ids=["V1"], against="C0")
+    assert ok and "V1 vs C0 on probe" in text
     ok, text = tools.call("scores", variant_ids=["C0"], scorer=None)
     assert ok and text.startswith("probe per target")
     traced = lines(tools.audit.out / "trace.jsonl")[-2:]
     assert [r["args"]["scorer"] for r in traced] == ["probe", "probe"]  # recorded resolved
-    ok, text = tools.call("compare", a="V1", b="C0", scorer="mfa_rumor")
+    ok, text = tools.call("scores", variant_ids=["V1"], against="C0", scorer="mfa_rumor")
     assert not ok and "leave scorer out to read the brief's measure" in text
 
 
@@ -504,9 +511,9 @@ def test_without_a_measure_in_the_brief_a_scorer_must_be_named(tmp_path):
     tools = Tools(audit)
     assert audit.brief.measure is None
     assert tools.call("run_experiment", variants=[C0, V1], epochs=1)[0]
-    ok, text = tools.call("compare", a="V1", b="C0")
+    ok, text = tools.call("scores", variant_ids=["V1"], against="C0")
     assert not ok and "the brief fixes no measure: name a scorer" in text
-    assert tools.call("compare", a="V1", b="C0", scorer="probe")[0]
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
 
 
 def test_after_the_run_budget_the_query_tools_still_work(tmp_path):

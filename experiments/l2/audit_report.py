@@ -44,26 +44,35 @@ def _plain(value: Any) -> Any:
 
 
 def comparisons(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Distinct successful ``compare`` calls, first-call order; a and b swapped, or
-    ``rounds`` left out, is the same comparison."""
+    """Distinct comparisons from successful ``scores`` calls with ``against`` (each
+    variant against it), first-call order; a and b swapped, or ``rounds`` left out, is
+    the same comparison."""
     seen, out = set(), []
     for row in trace:
-        if row.get("tool") != "compare" or not row.get("ok"):
+        if not row.get("ok"):
             continue
-        args = {"a": row["args"]["a"], "b": row["args"]["b"], "scorer": row["args"]["scorer"],
-                "rounds": row["args"].get("rounds")}
-        key = (frozenset((args["a"], args["b"])), args["scorer"], args["rounds"])
-        if key not in seen:
-            seen.add(key)
-            out.append(args)
+        if row.get("tool") == "scores" and row["args"].get("against"):
+            pairs = [(a, row["args"]["against"]) for a in _ids(row["args"]["variant_ids"])
+                     if a != row["args"]["against"]]
+        elif row.get("tool") == "compare":  # audits from before scores had against
+            pairs = [(row["args"]["a"], row["args"]["b"])]
+        else:
+            continue
+        for a, b in pairs:
+            args = {"a": a, "b": b, "scorer": row["args"]["scorer"],
+                    "rounds": row["args"].get("rounds")}
+            key = (frozenset((a, b)), args["scorer"], args["rounds"])
+            if key not in seen:
+                seen.add(key)
+                out.append(args)
     return out
 
 
 def score_tables(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen, out = set(), []
     for row in trace:
-        if row.get("tool") != "scores" or not row.get("ok"):
-            continue
+        if row.get("tool") != "scores" or not row.get("ok") or row["args"].get("against"):
+            continue  # a scores call with against is shown as its comparisons
         ids = _ids(row["args"]["variant_ids"])
         key = (tuple(sorted(ids)), row["args"]["scorer"])
         if key not in seen:
@@ -170,7 +179,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
 
     compares, scores = comparisons(trace), score_tables(trace)
     out += ["## Tables the conclusions rest on", "",
-            "Every distinct comparison and score table L2 asked for, read again from the logs.",
+            "Every distinct comparison and score table L2 asked for, read again from the logs "
+            "(a scores call with against is shown as its comparisons).",
             ""]
     for args in compares:
         rounds = f", up to round {args['rounds']}" if args["rounds"] is not None else ""
@@ -186,7 +196,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     outcomes = Counter(p["outcome"] for p in proposed)
     scorers = sorted({a["scorer"] for a in compares + scores})
     calls = Counter(row.get("tool") for row in trace)
-    ok_compares = sum(row.get("tool") == "compare" and bool(row.get("ok")) for row in trace)
+    ok_compares = sum(bool(row.get("ok")) and (row.get("tool") == "compare" or (
+        row.get("tool") == "scores" and bool(row["args"].get("against")))) for row in trace)
     failed = sum(not row.get("ok") for row in trace)
     with_epochs = sum(1 for r in launched if r.get("spent_usd") or any(
         v["epochs"] for v in variants if v["experiment"] == r["experiment"]))
@@ -204,8 +215,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += ["## Departures from the reading guidance (automatic checks)", ""]
     notes = []
     if tools.conclusions is not None and not compares:
-        notes.append("- No comparison was made (compare was never called), so no claim that "
-                     "a change made a difference rests on one.")
+        notes.append("- No comparison was made (scores was never called with against), "
+                     "so no claim that a change made a difference rests on one.")
     for args in compares:
         try:
             found = tools.departures(args["a"], args["b"], args["scorer"], args["rounds"])

@@ -70,13 +70,13 @@ Your report is checked against this guidance. You may depart from them, but your
 conclusions must say where and why.
 - One change per comparison. A claim that a change made a difference rests on two
   variants that differ in exactly that setting, run in the same experiment with the same
-  number of epochs. compare notes when this does not hold.
+  number of epochs. scores with against notes when this does not hold.
 - Per target. Report each target separately (k of n runs): an average hides where an
   effect stops.
 - Epochs. The same number on both sides of a comparison. With few epochs almost nothing
   can be told apart from chance: prefer fewer variants with more epochs, and say how
-  uncertain each difference is. A difference compare cannot tell apart from chance is
-  never a finding.
+  uncertain each difference is. A difference that scores with against cannot tell apart
+  from chance is never a finding.
 - Same scorers. Read every run in a comparison with the same scorer.
 - Findings vs leads. A result on the brief's measure, from a comparison you planned, is a
   finding. A result on a measure you chose (one you compute with run_python included),
@@ -254,7 +254,7 @@ def run_l2(tools: Tools, model: str | Model, prompt: str, *,
                    time_limit=time_limit)
     if isinstance(model, str) and model.startswith("openrouter/"):
         # Inspect sends OpenAI-compatible tool schemas in strict mode, where every
-        # parameter must be required; L2's tools have optional ones (e.g. compare's
+        # parameter must be required; L2's tools have optional ones (e.g. scores'
         # rounds), which OpenAI then rejects with a 400 before any call is made.
         model = get_model(model, strict_tools=False)
     tools.stop_reason = None
