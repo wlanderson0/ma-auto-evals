@@ -302,7 +302,11 @@ def check(path: Path, name: str) -> str:
     if rejections:
         raise CheckFailed("\n".join(f"- {reason}" for reason in rejections))
     with tempfile.TemporaryDirectory() as logs:
-        if missing := unscored(dry_run(built, Path(logs)), built):
+        try:
+            missing = unscored(dry_run(built, Path(logs)), built)
+        except Exception as error:  # e.g. a scorer that cannot be built for this setup
+            missing = [f"{type(error).__name__}: {error}"]
+        if missing:
             raise CheckFailed("the dry-run on the generic mocks failed:\n"
                               + "\n".join(f"- {reason}" for reason in missing))
     warnings = [f"Warning: {w}" for w in problems.warnings]

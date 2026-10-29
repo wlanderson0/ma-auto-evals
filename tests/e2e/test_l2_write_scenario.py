@@ -84,6 +84,11 @@ REFUSED = {
         "rumour", broken(RUMOUR, 'task=build_team("rumour", team)',
                          'task=build_team("rumour", team_setup(MODELS, rounds=3))'),
         "task is not build_team('rumour', team)"),
+    "a scorer that cannot be built (mention needs rounds)": (
+        "rumour", broken(RUMOUR, 'team_setup(MODELS, rounds=2)',
+                         'team_setup(MODELS, schedule=(("alice",), ("bob",), ("carol",), '
+                         '("dave",)))').replace('judge="Does', 'mention="mfa",\n        judge="Does'),
+        "round_counts needs a schedule in rounds"),
     "an outcome with no value": (
         "rumour", broken(RUMOUR, 'judge="Does', 'outcome=lambda store, agent, flags: None,\n'
                                                 '        judge="Does'),

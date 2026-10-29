@@ -216,3 +216,75 @@ def test_the_first_message_shows_the_run_budget(tmp_path):
     path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.12")
     text = brief_message(Tools(Audit.create(path, tmp_path / "audit", mock=True)))
     assert "- run budget: at most $0.12 of it on runs" in text
+
+
+# ------------------------------------------- writing scenarios (milestone 4, step 4)
+def message_for(tmp_path, header, **options):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "brief.md"
+    path.write_text(f"---\nbudget_usd: 1\n{header}---\nBuild it.\n")
+    return brief_message(Tools(Audit.create(path, tmp_path / "audit", mock=True, **options)))
+
+
+@pytest.mark.parametrize("part", [
+    "# Writing a scenario", "make(models: dict) -> Scenario",
+    "def team_setup(models: dict[str, str], *", "def build_team(name: str, team: TeamSetup)",
+    "class Probe:", "CHANNELS = (", "PERSONAS = {", "class Quota(StoreModel):",
+    "def transfer_quota(agent: str) -> Tool:", "def quota_outcome(store: Store,",
+    "def compute_quota(models: dict[str, str]) -> Scenario:", "from orbit import ChannelConfig",
+    "- team (TeamSetup):", "- outcome (", "- free_probes (", "- mention (", "- judge (",
+    "- probes (", "- goal (", "- task (", "- targets (", "- seat (", "- property (", "- name (",
+    "sets its agents' models itself", "scripted inner, not from the scenario"])
+def test_the_first_message_shows_how_to_write_a_scenario(tmp_path, part):
+    assert part in message_for(tmp_path, "base_scenarios: []\n")
+
+
+def test_the_first_message_names_the_priced_models_and_the_preamble(tmp_path):
+    from experiments.scenarios import SCENARIOS
+
+    text = message_for(tmp_path, "")
+    assert all(model in text for model in PRICES)
+    preamble = text.split("opens with the Northwind preamble build_team writes: \"")[1]
+    preamble = preamble.split('"')[0]
+    alice = SCENARIOS["mfa_rumor"]({}).task["setup"].agents[0]
+    assert alice.system_prompt.startswith(preamble.replace(
+        "{persona}", "Alice, a platform engineer who owns the migration runbook"))
+
+
+def test_writing_a_scenario_is_not_shown_when_it_is_not_allowed(tmp_path):
+    assert "# Writing a scenario" in message_for(tmp_path / "a", "allowed_changes: [scenario]\n")
+    assert "# Writing a scenario" not in message_for(tmp_path / "b",
+                                                     "allowed_changes: [models, targets]\n")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "runs.jsonl").write_text("")
+    assert "# Writing a scenario" not in message_for(tmp_path / "c", "", analysis=source)
+
+
+def test_with_no_base_scenarios_the_first_message_says_to_write_one(tmp_path):
+    text = message_for(tmp_path, "base_scenarios: []\n")
+    assert "- base_scenarios (fixed by the brief): none" in text
+    assert "names no existing scenario" in text and "## mfa_rumor" not in text
+    assert "In each, the behaviour measured is started by the seat" not in text
+
+
+def test_the_facts_about_build_team_hold():
+    """dave is the output agent, and rounds are rounds of alice, bob, carol, dave."""
+    from experiments.scenarios import build_team, team_setup
+
+    task = build_team("x", team_setup({}, rounds=2))
+    assert task["execution"].output_agent == "dave"
+    assert [list(s.agents) for s in task["execution"].plan.steps] == [
+        [a] for a in ("alice", "bob", "carol", "dave")] * 2
+    assert "makes dave's final reply the run's output" in agent.writing_a_scenario()
+
+
+def test_constants_are_shown_with_their_docstrings():
+    text = agent.writing_a_scenario()
+    assert 'Noun phrases: each prompt opens "You are {persona} at Northwind."' in text
+
+
+def test_no_base_scenarios_and_no_scenario_writing_does_not_point_at_write_scenario(tmp_path):
+    text = message_for(tmp_path, "base_scenarios: []\nallowed_changes: [models]\n")
+    assert "names no existing scenario to start from." in text
+    assert "write_scenario" not in text
