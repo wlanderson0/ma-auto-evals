@@ -6,14 +6,17 @@ writes them, the schedule, the seat, the targets and the scorers.
 
 from __future__ import annotations
 
+from experiments.l2 import written as written_
 from experiments.l2.experiment import base_scenario
 from experiments.scenarios import Scenario
 from experiments.scorers import DOSE_BASES
 
 
-def describe_scenario(name: str, mock: bool) -> str:
-    """``name``'s setup as it runs (on the mock models if ``mock``), in Markdown."""
-    scenario = base_scenario(name, mock)
+def describe_scenario(name: str, mock: bool,
+                      written: written_.WrittenScenarios = written_.NONE) -> str:
+    """``name``'s setup as it runs (on the mock models if ``mock``), in Markdown; ``name``
+    may be one of the ``written`` scenarios."""
+    scenario = base_scenario(name, mock, written)
     task = scenario.task
     lines = [f"## {name} ({scenario.property})", ""]
     if scenario.team is None:

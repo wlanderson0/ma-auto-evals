@@ -44,9 +44,9 @@ class InProcess:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], int]] = []
 
-    def __call__(self, brief_path, ids, epoch, out, mock):
+    def __call__(self, brief_path, ids, epoch, out, mock, scenarios=None):
         self.calls.append((list(ids), epoch))
-        return run_epoch(brief_path, ids, epoch, out, mock)
+        return run_epoch(brief_path, ids, epoch, out, mock, scenarios)
 
 
 def fixed(usd: float):
@@ -56,7 +56,7 @@ def fixed(usd: float):
 
 def estimate_of(usd: float):
     """An estimator that always says ``usd``."""
-    def estimator(accepted, epochs, history, cost_of, mock=False):
+    def estimator(accepted, epochs, history, cost_of, mock=False, written=None):
         return {"usd": usd, "basis": ["a test figure"], "epochs": epochs,
                 "per_variant": {v.id: usd / len(accepted) for v, _ in accepted}}
     return estimator

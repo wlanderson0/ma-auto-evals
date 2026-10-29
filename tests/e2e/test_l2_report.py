@@ -69,7 +69,7 @@ def audit(tmp_path_factory, offline_module) -> Path:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(experiment, "models_for", mock_models)
         run_experiment(brief, 2, folder / "out", mock=True,
-                       launch=lambda b, ids, e, out, mock: run_epoch(b, ids, e, out, mock))
+                       launch=lambda b, ids, e, out, mock, s: run_epoch(b, ids, e, out, mock, s))
     return folder / "out"
 
 

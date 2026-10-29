@@ -8,6 +8,10 @@ Each variant's ``inner`` is merged over the brief's ``inner`` field by field, so
 a grid can set ``condition`` once and give each variant its own ``opening``.
 Top-level keys starting with ``x-`` are ignored, so shared texts can be defined
 once as YAML anchors and referenced by every variant that uses them.
+
+Scenario names are checked against the seed scenarios and the ``written`` ones
+(``experiments.l2.written``) passed in; a written scenario is always an allowed base,
+whatever ``base_scenarios`` says.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from typing import Any
 
 import yaml  # PyYAML
 
+from experiments.l2 import written as written_
 from experiments.l2.model import (
     AXES,
     CONDITIONS,
@@ -72,7 +77,8 @@ def _no_duplicates(loader: _StrictLoader, node: yaml.MappingNode, deep: bool = F
 _StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
 
 
-def parse_brief(path: str | Path) -> L2Brief:
+def parse_brief(path: str | Path,
+                written: written_.WrittenScenarios = written_.NONE) -> L2Brief:
     text = Path(path).read_text(encoding="utf-8-sig")
     match = HEADER.match(text)
     if match is None and re.match(r"---[ \t]*\n", text):
@@ -107,9 +113,10 @@ def parse_brief(path: str | Path) -> L2Brief:
     if mode is not None and mode not in MODES:
         raise BriefError(f"{path}: mode must be one of {list(MODES)}, got {mode!r}")
     bases = _strings(header, "base_scenarios")
-    if bases is not None and (unknown := sorted(set(bases) - set(SCENARIOS))):
+    if bases is not None and (unknown := sorted(b for b in bases
+                                                if not written_.known(b, written))):
         raise BriefError(f"{path}: unknown base_scenarios {unknown} "
-                         f"(known: {sorted(SCENARIOS)})")
+                         f"(known: {sorted({*SCENARIOS, *written})})")
     allowed = _strings(header, "allowed_changes")
     if allowed is not None and (unknown := sorted(set(allowed) - set(AXES) - set(MEASURED))):
         raise BriefError(f"{path}: unknown allowed_changes {unknown} "
@@ -121,10 +128,11 @@ def parse_brief(path: str | Path) -> L2Brief:
     inner = _inner(default, None, "inner") if default is not None else None
     variants = None
     if "variants" in header and header["variants"] is not None:
-        variants = _variants(header["variants"], default, bases)
+        variants = _variants(header["variants"], default, bases, written=written)
     controls = None
     if "controls" in header and header["controls"] is not None:
-        controls = _variants(header["controls"], default, bases, kind="controls")
+        controls = _variants(header["controls"], default, bases, kind="controls",
+                             written=written)
         if variants and (both := sorted({v.id.casefold() for v in variants}
                                         & {c.id.casefold() for c in controls})):
             raise BriefError(f"{path}: ids {both} name both a variant and a control")
@@ -151,7 +159,8 @@ def _strings(data: Mapping[str, Any], key: str) -> tuple[str, ...] | None:
 
 
 def _variants(data: Any, default: Any, bases: tuple[str, ...] | None,
-              kind: str = "variants") -> tuple[Variant, ...]:
+              kind: str = "variants",
+              written: written_.WrittenScenarios = written_.NONE) -> tuple[Variant, ...]:
     """The brief's ``variants`` (or ``controls``, which have the same format)."""
     if not isinstance(data, list) or not data:
         raise BriefError(f"{kind} must be a non-empty list (leave it out to let L2 design "
@@ -173,9 +182,10 @@ def _variants(data: Any, default: Any, bases: tuple[str, ...] | None,
             raise BriefError(f"{where}: duplicate id")
         seen.add(vid.casefold())
         base = entry["base"]
-        if base not in SCENARIOS:
-            raise BriefError(f"{where}: unknown base {base!r} (known: {sorted(SCENARIOS)})")
-        if bases is not None and base not in bases:
+        if not written_.known(base, written):
+            raise BriefError(f"{where}: unknown base {base!r} "
+                             f"(known: {sorted({*SCENARIOS, *written})})")
+        if bases is not None and base not in bases and base not in written:
             raise BriefError(f"{where}: base {base!r} is not in base_scenarios {list(bases)}")
         if default is None and entry.get("inner") is None:
             raise BriefError(f"{where}: no inner spec (none in the variant or the brief)")

@@ -25,7 +25,8 @@ from typing import Any
 
 from inspect_ai.log import read_eval_log
 
-from experiments.scenarios import SCENARIOS
+from experiments.l2 import written as written_
+from experiments.scenarios import Scenario
 
 INCOMPLETE = "incomplete"
 
@@ -115,9 +116,12 @@ class Results:
     """Variant id -> its ``runs.jsonl`` record (cost, logs, errors)."""
     problems: list[str] = field(default_factory=list)
     """What is wrong with the logs themselves (missing, not one sample, repeated epochs)."""
+    written: written_.WrittenScenarios = written_.NONE
+    """The written scenarios the variants may be built on (``experiments.l2.written``)."""
 
     @classmethod
-    def load(cls, audit: str | Path) -> Results:
+    def load(cls, audit: str | Path,
+             written: written_.WrittenScenarios = written_.NONE) -> Results:
         audit = Path(audit)
         variants = {row["id"]: row for row in _jsonl(audit / "variants.jsonl")}
         runs = {row["variant"]["id"]: row for row in _jsonl(audit / "runs.jsonl")}
@@ -132,7 +136,8 @@ class Results:
                 if len(found) != 1:
                     problems.append(f"{vid}: log {path} holds {len(found)} samples, not 1")
                 samples.extend(found)
-        results = cls(samples=samples, variants=variants, runs=runs, problems=problems)
+        results = cls(samples=samples, variants=variants, runs=runs, problems=problems,
+                      written=written)
         for vid in {s.variant_id for s in samples}:
             epochs = results.epochs(vid)
             if len(epochs) != len(set(epochs)):
@@ -153,7 +158,7 @@ class Results:
                 if mutation["op"] == "set_rounds":
                     rounds = mutation["args"]["rounds"]
         if rounds is None:
-            team = SCENARIOS[self.base(variant_id)]({}).team
+            team = self.scenario(self.base(variant_id)).team
             rounds = team.rounds if team is not None else None
         return rounds
 
@@ -190,8 +195,12 @@ class Results:
             table[vid] = row
         return table
 
+    def scenario(self, base: str) -> Scenario:
+        """The base scenario ``base`` (on the mock models: only its setup is read)."""
+        return written_.scenario(base, self.written)({})
+
     def targets(self, variant_id: str) -> tuple[str, ...]:
-        return SCENARIOS[self.base(variant_id)]({}).targets
+        return self.scenario(self.base(variant_id)).targets
 
     def base(self, variant_id: str) -> str:
         if variant_id in self.variants:
@@ -203,7 +212,7 @@ class Results:
         """Whether ``agent`` showed the behaviour in ``sample`` (``None``: unknown)."""
         if scorer == "probe":
             answer = probe_answer(sample, agent)
-            spec = SCENARIOS[sample.base]({}).probes.get(agent)
+            spec = self.scenario(sample.base).probes.get(agent)
             # An answer that is none of the options (e.g. "UNPARSED: NOT_REQUIED") is
             # unknown, not a refusal of the claim.
             if answer is None or spec is None or answer not in spec.options:

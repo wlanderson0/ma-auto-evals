@@ -8,6 +8,7 @@ One directory per audit::
       ledger.json             spend by kind, reserve, remaining (rewritten on every change)
       launches.jsonl          every launch L2 asked for and what came of it
       experiments/exp-<n>/    one milestone 1 audit directory per launch
+      scenarios/              the scenarios L2 wrote: <name>.py and <name>.sha256
 
 Spend is every experiment's ``cost.json`` (milestone 1: each model call in its
 logs, agents', helpers' and scorers' alike) plus L2's own calls, which the running
@@ -43,6 +44,7 @@ from typing import Any
 import yaml
 
 from experiments.l2 import experiment as m1
+from experiments.l2 import written as written_
 from experiments.l2.apply import recorded
 from experiments.l2.brief import VARIANT_ID, BriefError, _variants, parse_brief
 from experiments.l2.cost import log_cost
@@ -118,6 +120,16 @@ class Audit:
     def sources(self) -> list[Path]:
         """The milestone 1 audit directories results are read from."""
         return [self.analysis] if self.analysis is not None else self.experiments()
+
+    @property
+    def scenarios_dir(self) -> Path:
+        """Where the audit's written scenarios are: its own ``scenarios/``, or, for an
+        analysis-only audit, the analysed directory's (read only)."""
+        return (self.analysis if self.analysis is not None else self.out) / "scenarios"
+
+    def written(self) -> written_.WrittenScenarios:
+        """The written scenarios, as they are on disk now."""
+        return written_.load(self.scenarios_dir)
 
     def _append(self, name: str, row: dict[str, Any]) -> None:
         with (self.out / name).open("a") as file:
@@ -196,9 +208,11 @@ class Audit:
 
     def check(self, variants: Sequence[Variant]) -> list[tuple[Variant, Any, Problems]]:
         """Each variant built and checked: milestone 1's validity checks, plus unique ids,
-        the conditions L2 runs and the brief's base scenarios. (``allowed_changes`` limits
-        the mutations L2 writes, so the tools check it where they read L2's variants.)"""
+        the conditions L2 runs and the brief's base scenarios (a written scenario is
+        always an allowed base). (``allowed_changes`` limits the mutations L2 writes, so
+        the tools check it where they read L2's variants.)"""
         used, seen, checked = self.used_ids(), set(), []
+        written = self.written()
         for variant in variants:
             extra = []
             if not VARIANT_ID.fullmatch(variant.id):
@@ -213,16 +227,17 @@ class Audit:
                 extra.append(f"inner condition {variant.inner.condition!r}: milestone 2 runs "
                              f"only {list(CONDITIONS)}")
             if self.brief.base_scenarios is not None and (
-                    variant.base not in self.brief.base_scenarios):
+                    variant.base not in self.brief.base_scenarios
+                    and variant.base not in written):
                 extra.append(f"base {variant.base!r} is not in the brief's base_scenarios "
                              f"{list(self.brief.base_scenarios)}")
             try:  # it must survive the per-launch brief that milestone 1 runs from
-                [again] = _variants([recorded(variant)], None, None)
+                [again] = _variants([recorded(variant)], None, None, written=written)
                 if again != variant:
                     extra.append("the variant does not survive the brief format unchanged")
             except BriefError as error:
                 extra.append(f"the variant is not a valid brief variant: {error}")
-            _, built, problems = m1.build(variant, self.mock)
+            _, built, problems = m1.build(variant, self.mock, written)
             checked.append((variant, built, Problems(
                 rejections=(*extra, *problems.rejections), warnings=problems.warnings)))
         return checked
@@ -254,7 +269,7 @@ class Audit:
 
         accepted = [(v, b) for v, b, _ in checked]
         guess = self.estimator(accepted, epochs, [*self.history, *self.experiments()],
-                               self.cost_of, self.mock)
+                               self.cost_of, self.mock, self.written())
         b = self.budget()
         available = b["available_for_experiments_usd"]
         result.update(estimate=guess, available_usd=available)
@@ -284,7 +299,7 @@ class Audit:
                                   history=history, launch=self.launch_epoch,
                                   cost_of=self.cost_of,
                                   estimator=lambda *args, **kwargs: guess,
-                                  stop=self.time_up)
+                                  stop=self.time_up, scenarios=self.scenarios_dir)
                 status, reason = "ran", None
             except Exception as error:  # the record keeps the finished epochs
                 status, reason = "failed", f"{type(error).__name__}: {error}"[:3000]

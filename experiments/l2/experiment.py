@@ -9,6 +9,9 @@ Offline, on the scripted mock models (no network, no cost)::
 
     uv run python -m experiments.l2.experiment --brief ... --epochs 2 --mock
 
+Variants may be built on scenarios L2 wrote (``experiments.l2.written``):
+``--scenarios <dir>`` names the directory they are in.
+
 ``run_experiment`` builds every variant (``apply``), checks it (``check``), records
 it (rejected ones too), estimates the cost against the brief's budget, then runs
 the accepted variants one epoch at a time: each epoch is one subprocess
@@ -42,6 +45,7 @@ from typing import Any
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import EvalLog, read_eval_log
 
+from experiments.l2 import written as written_
 from experiments.l2.apply import ApplyError, apply, recorded
 from experiments.l2.brief import parse_brief
 from experiments.l2.cost import PRICES, PRICES_CHECKED, log_cost, price
@@ -62,8 +66,9 @@ from experiments.scenarios import SCENARIOS, Scenario, build_team
 from orbit_audit.branches import AuditLimits
 from orbit_audit.scope import AuditScope
 
-Launch = Callable[[Path, list[str], int, Path, bool], dict[str, str]]
-"""``(brief, variant ids, epoch, out, mock) -> {variant id: eval log path}``."""
+Launch = Callable[[Path, list[str], int, Path, bool, Path | None], dict[str, str]]
+"""``(brief, variant ids, epoch, out, mock, scenarios) -> {variant id: eval log path}``;
+``scenarios`` is the directory of written scenarios, if any."""
 CostOf = Callable[[EvalLog], dict[str, Any]]
 REPO = Path(__file__).resolve().parents[2]
 """Where ``python -m experiments...`` must run from (the package is not installed)."""
@@ -76,19 +81,24 @@ log's ``error_retries``."""
 
 
 # ------------------------------------------------------------------ building
-def base_scenario(name: str, mock: bool) -> Scenario:
-    """The base scenario a variant is built on: on the mock models, or on the live
-    models of ``experiments.run.TARGETS``."""
-    return SCENARIOS[name]({} if mock else TARGETS[name])
+def base_scenario(name: str, mock: bool,
+                  written: written_.WrittenScenarios = written_.NONE) -> Scenario:
+    """The base scenario a variant is built on: a seed scenario on the mock models or on
+    the live models of ``experiments.run.TARGETS``; a written one with ``{}`` (its code
+    sets its own models)."""
+    models = {} if mock or name not in SCENARIOS else TARGETS[name]
+    return written_.scenario(name, written)(models)
 
 
-def build(variant: Variant, mock: bool) -> tuple[Scenario | None, Scenario | None, Problems]:
+def build(variant: Variant, mock: bool, written: written_.WrittenScenarios = written_.NONE
+          ) -> tuple[Scenario | None, Scenario | None, Problems]:
     """``(base, built, problems)``; a variant that cannot be built is a rejection. On the
     mock models every agent runs on the task's mock, whatever model a mutation gave it
-    (it is still checked against the price table)."""
-    if variant.base not in SCENARIOS:
+    (it is still checked against the price table). A variant of a written scenario
+    records the hash of its code (``scenario_sha256``, L2-17)."""
+    if not written_.known(variant.base, written):
         return None, None, Problems(rejections=(f"unknown base scenario {variant.base!r}",))
-    base = base_scenario(variant.base, mock)
+    base = base_scenario(variant.base, mock, written)
     try:
         built = apply(base, variant)
     except ApplyError as error:
@@ -97,6 +107,9 @@ def build(variant: Variant, mock: bool) -> tuple[Scenario | None, Scenario | Non
     if mock:
         team = dataclasses.replace(built.team, models={})
         built = dataclasses.replace(built, team=team, task=build_team(built.name, team))
+    if variant.base not in SCENARIOS:  # so a written one
+        built = dataclasses.replace(built, variant={
+            **built.variant, "scenario_sha256": written[variant.base].sha256})
     return base, built, check(base, built, variant)
 
 
@@ -110,15 +123,17 @@ def models_for(mock: bool) -> dict[str, Any]:
 
 # ----------------------------------------------------------- one epoch, run
 def run_epoch(brief_path: Path, ids: Sequence[str], epoch: int, out: Path,
-              mock: bool) -> dict[str, str]:
+              mock: bool, scenarios: Path | None = None) -> dict[str, str]:
     """Run epoch ``epoch`` of the variants ``ids`` as one ``inspect_eval`` call; return
-    each variant's log path, also written to ``out/epoch-<e>.json``."""
-    brief = parse_brief(brief_path)
+    each variant's log path, also written to ``out/epoch-<e>.json``. ``scenarios``: the
+    directory of written scenarios the variants may be built on."""
+    written = written_.load(scenarios)
+    brief = parse_brief(brief_path, written)
     by_id = {v.id: v for v in brief.variants or ()}
     models = models_for(mock)
     tasks, names = [], {}
     for vid in ids:
-        _, built, problems = build(by_id[vid], mock)
+        _, built, problems = build(by_id[vid], mock, written)
         if built is None or problems.rejected:  # the parent never sends these
             raise ValueError(f"variant {vid} is rejected: {problems.rejections}")
         condition = by_id[vid].inner.condition
@@ -142,13 +157,15 @@ def run_epoch(brief_path: Path, ids: Sequence[str], epoch: int, out: Path,
 
 
 def launch_subprocess(brief_path: Path, ids: list[str], epoch: int, out: Path,
-                      mock: bool) -> dict[str, str]:
+                      mock: bool, scenarios: Path | None = None) -> dict[str, str]:
     """``run_epoch`` in a fresh process (Inspect caches model clients per event loop)."""
     command = [sys.executable, "-m", "experiments.l2.experiment", "--brief",
                str(Path(brief_path).resolve()), "--variants", ",".join(ids), "--epoch",
                str(epoch), "--out", str(Path(out).resolve())]
     if mock:
         command.append("--mock")
+    if scenarios is not None:
+        command += ["--scenarios", str(Path(scenarios).resolve())]
     done = subprocess.run(command, capture_output=True, text=True, cwd=REPO)
     record = out / f"epoch-{epoch}.json"
     if done.returncode != 0 or not record.exists():
@@ -233,7 +250,8 @@ class History:
                     runs.append((variant_from(row["variant"]), costs))
         return cls(runs=runs, skipped=skipped)
 
-    def per_sample(self, variant: Variant, built: Scenario) -> tuple[float, str] | None:
+    def per_sample(self, variant: Variant, built: Scenario,
+                   written: written_.WrittenScenarios = written_.NONE) -> tuple[float, str] | None:
         """The mean per-sample cost of earlier runs of the same variant, else of the same
         base and condition scaled by the token estimates' ratio (a longer variant costs
         more than its control), with how it was got; ``None`` without history."""
@@ -248,7 +266,7 @@ class History:
             return None
         scaled = []
         for v, costs in related:
-            _, reference, _ = build(v, mock=False)
+            _, reference, _ = build(v, mock=False, written=written)
             if reference is None:
                 continue
             ratio = token_estimate(built) / token_estimate(reference)
@@ -259,16 +277,18 @@ class History:
 
 
 def estimate(accepted: list[tuple[Variant, Scenario]], epochs: int,
-             history: Sequence[Path], cost_of: CostOf, mock: bool = False) -> dict[str, Any]:
+             history: Sequence[Path], cost_of: CostOf, mock: bool = False,
+             written: written_.WrittenScenarios = written_.NONE) -> dict[str, Any]:
     """The experiment's estimated cost, per variant, with its basis. Mock runs are free
-    and ignore ``history`` (whose logs may be live)."""
+    and ignore ``history`` (whose logs may be live). ``written``: the scenarios earlier
+    runs may be built on."""
     if mock:
         return {"usd": 0.0, "basis": ["mock models (free)"],
                 "per_variant": {v.id: 0.0 for v, _ in accepted}, "epochs": epochs}
     known = History.read(history, cost_of)
     per_variant, bases = {}, set()
     for variant, built in accepted:
-        found = known.per_sample(variant, built)
+        found = known.per_sample(variant, built, written)
         per_sample, basis = found if found is not None else (token_estimate(built),
                                                              "token counts")
         bases.add(basis)
@@ -302,10 +322,15 @@ def _jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
 
 
-def _run_row(run: VariantRun, errors: list[str]) -> dict[str, Any]:
-    return {"variant": recorded(run.variant), "rejections": list(run.problems.rejections),
-            "warnings": list(run.problems.warnings), "cost_usd": run.cost_usd,
-            "logs": list(run.logs), "epochs_done": run.epochs_done, "errors": errors}
+def _run_row(run: VariantRun, errors: list[str], built: Scenario | None) -> dict[str, Any]:
+    """A ``runs.jsonl`` row; a variant of a written scenario also gets the hash of its
+    code (``scenario_sha256``)."""
+    row = {"variant": recorded(run.variant), "rejections": list(run.problems.rejections),
+           "warnings": list(run.problems.warnings), "cost_usd": run.cost_usd,
+           "logs": list(run.logs), "epochs_done": run.epochs_done, "errors": errors}
+    if built is not None and "scenario_sha256" in built.variant:
+        row["scenario_sha256"] = built.variant["scenario_sha256"]
+    return row
 
 
 def provenance(mock: bool, checked: list) -> dict[str, Any]:
@@ -330,15 +355,18 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
                    confirm: bool = False, history: Sequence[Path] = (),
                    launch: Launch = launch_subprocess, cost_of: CostOf = log_cost,
                    estimator: Callable[..., dict[str, Any]] = estimate,
-                   stop: Callable[[], str | None] | None = None) -> list[VariantRun]:
+                   stop: Callable[[], str | None] | None = None,
+                   scenarios: Path | None = None) -> list[VariantRun]:
     """Build, check, record and run the brief's variants for ``epochs`` epochs.
 
     ``out`` must be new or empty. Every epoch runs from the recorded copy of the brief
     (``out/brief.md``), so editing the brief during a run changes nothing. A failed
     epoch stops the run: the record keeps every finished epoch, and lists the failed
-    epoch's logs and cost as far as they can be read, before the error is re-raised."""
+    epoch's logs and cost as far as they can be read, before the error is re-raised.
+    ``scenarios``: the directory of written scenarios the variants may be built on."""
     brief_path, out = Path(brief_path), Path(out)
-    brief: L2Brief = parse_brief(brief_path)
+    written = written_.load(scenarios)
+    brief: L2Brief = parse_brief(brief_path, written)
     if not brief.variants:
         raise ValueError(f"{brief_path} fixes no variants: run_experiment runs fixed grids")
     if out.exists() and any(out.iterdir()):
@@ -349,7 +377,7 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
 
     checked = []
     for variant in brief.variants:
-        _, built, problems = build(variant, mock)
+        _, built, problems = build(variant, mock, written)
         checked.append((variant, built, problems))
     _jsonl(out / "variants.jsonl", [
         {**recorded(v), "rejections": list(p.rejections), "warnings": list(p.warnings),
@@ -357,7 +385,7 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
         for v, _, p in checked])
     accepted = [(v, b) for v, b, p in checked if not p.rejected and b is not None]
 
-    guess = estimator(accepted, epochs, history, cost_of, mock)
+    guess = estimator(accepted, epochs, history, cost_of, mock, written)
     over = guess["usd"] > brief.budget_usd
     decisions: dict[str, Any] = {
         "mode": brief.mode, "epochs": epochs, "mock": mock, "budget_usd": brief.budget_usd,
@@ -388,7 +416,7 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
             decisions["stopped"] = f"before epoch {epoch}: {why}"
             break
         try:
-            paths = launch(recorded_brief, ids, epoch, out, mock)
+            paths = launch(recorded_brief, ids, epoch, out, mock, scenarios)
             if set(paths) != set(ids):
                 raise RuntimeError(f"epoch {epoch} returned logs for {sorted(paths)}, "
                                    f"expected {sorted(ids)}")
@@ -449,8 +477,9 @@ class _State:
         runs = [VariantRun(variant=v, problems=p, cost_usd=self.spent[v.id],
                            logs=tuple(self.logs[v.id]), epochs_done=len(self.logs[v.id]))
                 for v, _, p in self.checked]
-        _jsonl(out / "runs.jsonl", [_run_row(run, self.errors[run.variant.id])
-                                    for run in runs])
+        built = {v.id: b for v, b, _ in self.checked}
+        _jsonl(out / "runs.jsonl", [_run_row(run, self.errors[run.variant.id],
+                                             built[run.variant.id]) for run in runs])
         (out / "decisions.json").write_text(json.dumps(decisions, indent=1, sort_keys=True))
         (out / "cost.json").write_text(json.dumps({
             "budget_usd": brief.budget_usd, "estimate": decisions["estimate"],
@@ -474,6 +503,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                         help="launch even if the estimate exceeds the budget")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier audit directories to estimate cost from")
+    parser.add_argument("--scenarios", type=Path, default=None,
+                        help="the directory of written scenarios variants may be built on")
     parser.add_argument("--variants", help=argparse.SUPPRESS)  # epoch mode (subprocess)
     parser.add_argument("--epoch", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -482,12 +513,13 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         load_dotenv(".env")  # OPENROUTER_API_KEY from the gitignored .env
     if args.epoch is not None:
-        run_epoch(args.brief, args.variants.split(","), args.epoch, args.out, args.mock)
+        run_epoch(args.brief, args.variants.split(","), args.epoch, args.out, args.mock,
+                  args.scenarios)
         return
     out = args.out or Path(f"logs/l2/{time.strftime('%Y%m%d-%H%M%S')}"
                            + ("-mock" if args.mock else ""))
     runs = run_experiment(args.brief, args.epochs, out, mock=args.mock, confirm=args.confirm,
-                          history=args.history)
+                          history=args.history, scenarios=args.scenarios)
     decisions = json.loads((out / "decisions.json").read_text())
     for run in runs:
         state = "rejected" if run.problems.rejected else f"{run.epochs_done} epoch(s)"

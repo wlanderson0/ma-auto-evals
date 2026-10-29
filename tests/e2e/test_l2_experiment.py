@@ -65,10 +65,10 @@ class Launcher:
         self.briefs: list[Path] = []
         self.fail_at = fail_at
 
-    def __call__(self, brief, ids, epoch, out, mock):
+    def __call__(self, brief, ids, epoch, out, mock, scenarios=None):
         self.calls.append((list(ids), epoch))
         self.briefs.append(Path(brief))
-        paths = run_epoch(brief, ids, epoch, out, mock)
+        paths = run_epoch(brief, ids, epoch, out, mock, scenarios)
         if epoch == self.fail_at:
             raise RuntimeError("the epoch's process died")
         return paths
@@ -270,11 +270,11 @@ def test_the_launch_decision_is_on_disk_before_the_first_epoch(tmp_path):
     out = tmp_path / "out"
     seen = {}
 
-    def launch(brief, ids, epoch, out_dir, mock):
+    def launch(brief, ids, epoch, out_dir, mock, scenarios):
         decisions = json.loads((out / "decisions.json").read_text())
         seen.update(launched=decisions["launched"], runs=len(lines(out / "runs.jsonl")),
                     cost=(out / "cost.json").exists())
-        return run_epoch(brief, ids, epoch, out_dir, mock)
+        return run_epoch(brief, ids, epoch, out_dir, mock, scenarios)
 
     run_experiment(subset(tmp_path, ["K1"]), 1, out, mock=True, launch=launch)
     assert seen == {"launched": True, "runs": 1, "cost": True}

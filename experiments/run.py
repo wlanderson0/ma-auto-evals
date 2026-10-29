@@ -353,18 +353,21 @@ def build_task(scenario: Scenario, condition: str, models: dict[str, Any],
 
 def l2_metadata(scenario: Scenario, condition: str, epoch: int) -> dict[str, Any] | None:
     """A variant's record for its task metadata (``{"l2": ...}``), so a log states its
-    variant, condition and epoch itself; ``None`` for a scenario that is no variant.
-    The epoch is L2's (each log holds one epoch, so ``sample.epoch`` is always 1)."""
+    variant, condition and epoch itself, and, for a scenario L2 wrote, the hash of its
+    code; ``None`` for a scenario that is no variant. The epoch is L2's (each log holds
+    one epoch, so ``sample.epoch`` is always 1)."""
     if scenario.variant is None:
         return None
     recorded = scenario.variant
     if condition != recorded["inner"]["condition"]:
         raise ValueError(f"{scenario.name} is a {recorded['inner']['condition']} variant, "
                          f"not {condition}")
-    return {"l2": {"variant_id": recorded["id"], "base": scenario.base,
-                   "mutations": recorded["mutations"], "inner": recorded["inner"],
-                   "condition": condition, "rationale": recorded["rationale"],
-                   "epoch": epoch}}
+    meta = {"variant_id": recorded["id"], "base": scenario.base,
+            "mutations": recorded["mutations"], "inner": recorded["inner"],
+            "condition": condition, "rationale": recorded["rationale"], "epoch": epoch}
+    if "scenario_sha256" in recorded:
+        meta["scenario_sha256"] = recorded["scenario_sha256"]
+    return {"l2": meta}
 
 
 def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,

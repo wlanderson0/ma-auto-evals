@@ -41,6 +41,7 @@ from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
 
 from experiments.l2 import workspace
+from experiments.l2 import written as written_
 from experiments.l2.apply import recorded_inner
 from experiments.l2.audit import Audit
 from experiments.l2.brief import BRIEF_KEYS, VARIANT_KEYS, BriefError, _variants
@@ -49,7 +50,6 @@ from experiments.l2.experiment import variant_from
 from experiments.l2.model import L2Brief, Variant
 from experiments.l2.report import SCORER as MEASURE_SCORER
 from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
-from experiments.scenarios import SCENARIOS
 from experiments.scorers import read_sample
 
 ALPHA = 0.05
@@ -71,7 +71,9 @@ class Refused(Exception):
 
 
 # ------------------------------------------------------------------ variants
-def entry_variant(entry: Any, brief: L2Brief) -> tuple[Variant | None, list[str]]:
+def entry_variant(entry: Any, brief: L2Brief,
+                  written: written_.WrittenScenarios = written_.NONE
+                  ) -> tuple[Variant | None, list[str]]:
     """L2's JSON variant as a variant, with what is wrong with it.
 
     With ``base``, the entry is a variant in the brief's format. With ``control``, it is
@@ -100,7 +102,7 @@ def entry_variant(entry: Any, brief: L2Brief) -> tuple[Variant | None, list[str]
     if raw.get("inner") is None and default is not None:
         raw["inner"] = recorded_inner(default)
     try:  # only L2's own mutations are parsed, so errors point at its own list
-        [variant] = _variants([raw], None, None)
+        [variant] = _variants([raw], None, None, written=written)
     except BriefError as error:
         return None, [str(error)]
     if control is not None:
@@ -150,6 +152,8 @@ class Tools:
         self._unlabelled: dict[str, str] = {}
         self.stop_reason: str | None = None
         """Why L2 stopped without ending the audit, when the agent knows (``agent.py``)."""
+        self.written = audit.written()
+        """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
 
     # ------------------------------------------------------------ dispatch
@@ -202,10 +206,10 @@ class Tools:
         key = [(str(s), (s / "runs.jsonl").stat().st_mtime_ns
                 if (s / "runs.jsonl").exists() else None) for s in sources]
         if key != self._key:
-            merged = Results(samples=[])
+            merged = Results(samples=[], written=self.written)
             self._where = {}
             for source in sources:
-                part = Results.load(source)
+                part = Results.load(source, self.written)
                 merged.samples.extend(part.samples)
                 merged.variants.update(part.variants)
                 merged.runs.update(part.runs)
@@ -213,6 +217,7 @@ class Tools:
                 self._where.update({vid: source.name for vid in part.runs})
             bases = self.audit.brief.base_scenarios
             if bases is not None:  # e.g. an analysis-only audit over a wider audit's runs
+                bases = (*bases, *self.written)  # a written scenario is always allowed
                 out_of_scope = hidden(merged, bases)
                 merged = Results(
                     samples=[s for s in merged.samples if s.base in bases],
@@ -220,7 +225,8 @@ class Tools:
                     runs={k: r for k, r in merged.runs.items()
                           if r["variant"]["base"] in bases},
                     problems=[p for p in merged.problems if p.split(": ")[1:2] == []
-                              or p.split(": ")[1] not in out_of_scope])
+                              or p.split(": ")[1] not in out_of_scope],
+                    written=self.written)
             self._results, self._key = merged, key
         return self._results
 
@@ -229,8 +235,8 @@ class Tools:
             bases = self.audit.brief.base_scenarios
             raise Refused(f"unknown variant(s) {missing}; list_runs shows the variants run so "
                           f"far: {sorted(results.runs)}"
-                          + (f" (only runs of the brief's base_scenarios {list(bases)} are "
-                             "visible)" if bases is not None else ""))
+                          + (f" (only runs of the brief's base_scenarios {list(bases)} and of "
+                             "written scenarios are visible)" if bases is not None else ""))
 
     @staticmethod
     def _agent(agent: str, posts: Sequence[Mapping[str, Any]], targets: Any) -> None:
@@ -287,7 +293,7 @@ class Tools:
         problems: list[list[str]] = []
         built: dict[int, Variant] = {}
         for i, entry in enumerate(entries):
-            variant, found = entry_variant(entry, self.audit.brief)
+            variant, found = entry_variant(entry, self.audit.brief, self.written)
             problems.append(found)
             if variant is not None:
                 built[i] = variant
@@ -400,7 +406,7 @@ class Tools:
         """Mention-based scorers mean nothing on a scenario with no mention pattern."""
         if scorer in ("counts", "round_counts"):
             for vid in ids:
-                if SCENARIOS[results.base(vid)]({}).mention is None:
+                if results.scenario(results.base(vid)).mention is None:
                     raise Refused(f"{scorer} is not measured on {results.base(vid)} (it has "
                                   "no mention pattern); use probe or post_judge")
 

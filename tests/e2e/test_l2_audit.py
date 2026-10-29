@@ -304,8 +304,8 @@ def test_no_epoch_starts_after_l2s_time_is_up(tmp_path):
     """The epoch in progress finishes; the next one does not start, and the stop is
     recorded like a budget stop."""
     class TimeUpAfterEpoch1(InProcess):
-        def __call__(self, brief_path, ids, epoch, out, mock):
-            paths = super().__call__(brief_path, ids, epoch, out, mock)
+        def __call__(self, brief_path, ids, epoch, out, mock, scenarios=None):
+            paths = super().__call__(brief_path, ids, epoch, out, mock, scenarios)
             a.deadline = 0.0  # the deadline passes while epoch 1 runs
             return paths
 
