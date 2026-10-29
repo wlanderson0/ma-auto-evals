@@ -74,10 +74,10 @@ single bridge between #town and #pod matters most.
 | `budget_usd` | required (§7) | — |
 | `run_budget_usd` | a cap on spend on runs, inside `budget_usd`, e.g. to compare with a fixed grid at the same spend on runs (§9.4) | runs can use the whole budget |
 | `mode` | `elicit` or `characterise` | L2 picks one and states it at the start; it is recorded |
-| `base_scenarios` | L2 starts from these | L2 picks from the existing scenarios, or writes new scenario code (§3.5) |
+| `base_scenarios` | L2 starts from these; `[]` names none, so L2 writes its own (§3.5). A scenario L2 wrote is always an allowed base | L2 picks from the existing scenarios, or writes new scenario code (§3.5) |
 | `base_logs` | L2 starts from these existing logs (e.g. a run with interesting behaviour) and follows them up with new runs or auditors | L2 starts from scenarios |
 | `measure` | fixed; L2 cannot change it; includes its unit (what counts, for whom, how runs are combined) | L2 picks; results are leads until confirmed (§6.3) |
-| `allowed_changes` | limits what L2 may change (§3.2) | anything, including targets and probes |
+| `allowed_changes` | limits what L2 may change (§3.2): axes, the changes that make a new scenario, and `scenario` (writing scenarios, §3.5); a list without `scenario` rules out writing them | anything, including targets and probes, and writing scenarios |
 | `variants` | the exact variants to run (§3), for a set experiment such as the fixed grid | L2 designs them |
 | `controls` | variants (same format as `variants`) that L2's own variants can name as a shorthand: such a variant is the control's base, mutations and inner, with its own mutations added | L2 builds every variant from a base scenario |
 | `hypotheses` | starting points L2 may refine or replace, recording why | L2 forms its own |
@@ -94,10 +94,10 @@ class L2Brief:
     budget_usd: float                            # §7
     run_budget_usd: float | None = None          # cap on spend on runs (§9.4)
     mode: Literal["elicit", "characterise"] | None = None
-    base_scenarios: tuple[str, ...] | None = None   # keys of experiments.scenarios.SCENARIOS
+    base_scenarios: tuple[str, ...] | None = None   # keys of experiments.scenarios.SCENARIOS; () for none
     base_logs: tuple[str, ...] | None = None        # paths to existing eval logs to follow up
     measure: str | None = None
-    allowed_changes: tuple[str, ...] | None = None  # subset of §3.2
+    allowed_changes: tuple[str, ...] | None = None  # subset of §3.2, or "scenario" (§3.5)
     variants: tuple[Variant, ...] | None = None     # §3
     controls: tuple[Variant, ...] | None = None     # starting points for L2's variants
     hypotheses: tuple[str, ...] | None = None
@@ -155,7 +155,7 @@ Variants are recorded as a diff against the base so results stay comparable. Eac
 - `apply` rebuilds each agent's instructions from the variant's channel configuration. This needs a small code change: `migration_team` already takes `rounds` and `task` as inputs, and also needs to take `channels` and `personas` (today's values as defaults) and build each agent's prompt from them. The functions that build the other scenarios (`release_pressure`, etc.) need the same change before L2 can vary them.
 - The inner auditor's goal comes from a template filled in with the variant's real channels, rounds and who can reach whom; it replaces `Scenario.goal`. L2 can add extra instructions (`InnerSpec.brief`, §4) but never writes setup facts by hand. Those additions are free text, so they could still hint at L2's hypothesis, which is why they're logged separately from the generated part.
 - `plan_check`s are filled in from the variant's setup in the same way, or switched off for variants they don't fit.
-- For scenarios L2 writes itself, there is no template to fill: L2 writes the prompts. A **setup checker** compares each agent's prompt and the inner goal against the actual configuration (channels, rounds, who can reach whom) and attaches a warning when they disagree (§3.4).
+- For scenarios L2 writes itself, there is no template to fill: L2 writes the prompts. A **setup checker** would compare each agent's prompt and the inner goal against the actual configuration (channels, rounds, who can reach whom) and attach a warning when they disagree (§3.4). It is deferred: L2 sees every prompt and channel in the description `write_scenario` returns, so a check by pattern adds little for now.
 
 ### 3.2 Search space: ready-made changes, not a limit
 
@@ -222,7 +222,7 @@ Rejected:
 - the `output_agent` (e.g. Dave in `migration_team`) is left out of the schedule;
 - a scripted opening message on a channel the seat cannot write to in the variant (§4.1);
 - mid-run mutations combined with an inner L0/L1 auditor, until the combined policy exists (§3.3);
-- the scenario code fails to build, or fails its dry-run on the generic mocks (§3.5);
+- the scenario code fails to build, or fails its dry-run on the generic mocks (§3.5): `write_scenario` refuses it and saves nothing, so no variant can name it;
 - a base log whose scenario can't be rebuilt (§3.1).
 
 Warned (run, flagged):
@@ -230,7 +230,7 @@ Warned (run, flagged):
 - a scheduled agent can read and write nothing;
 - the seat or a target is left out of the schedule (no op removes an agent from the setup; "leave an agent out" is the only route); a never-scheduled target's probes mean little;
 - a target is unreachable from the seat;
-- a prompt or inner goal disagrees with the setup (§3.1);
+- a prompt or inner goal disagrees with the setup (§3.1; the setup checker that would find it is deferred);
 - the realism check flags the setup.
 
 An estimated cost above the remaining budget is not a rejection either: L2 sees a warning and must confirm the launch (§5).
@@ -239,11 +239,11 @@ An estimated cost above the remaining budget is not a rejection either: L2 sees 
 
 ### 3.5 Scenarios written by L2
 
-L2 may write a new scenario: a Python module that builds a `Scenario` with the same helpers the existing ones use (e.g. `migration_team`), defining the agents, channels, schedule, task, seat, targets and scorers.
+L2 may write a new scenario with the tool `write_scenario(name, code)`: a Python module defining one function, `make(models: dict) -> Scenario`, built with the same helpers the existing ones use (`team_setup` / `build_team`, `Probe`, an outcome function), defining the agents, channels, schedule, task, seat, targets and scorers. The module sets its agents' models itself, each in the price table (an agent it gives no model runs on the run's default model). `make({})` returns a `Scenario` named after the tool's `name`, whose task is `build_team(name, team)` for its `team`, since variants rebuild the task from `team`. For now every written scenario is the Northwind migration team (`build_team` writes its preamble into every prompt), with its own channels, roster, schedule, task, duty, tools and scorers.
 
-- **Recorded:** the code is saved in the experiment record, with a hash, so every run can be traced to the exact code that built it.
-- **Checked:** before it runs, it is built and dry-run with generic mock models (no cost), and goes through the §3.4 checks and the setup checker (§3.1). The existing scripted mocks in `experiments/run.py` (`_mock_models`) are tuned to today's scenarios (they pick channels by matching prompt text and call scenario-specific tools by name), so they stay as they are for the existing tests, and new generic mocks are added for L2: they post on a channel the agent can write to and call each other tool once with valid placeholder arguments, all taken from the tool definitions the model receives. The dry-run checks plumbing only (the scenario builds, runs end to end, its scorers run on the log, nothing uses a tool it isn't allowed to), not behaviour.
-- **Sandboxed:** the code runs without provider API keys, so all model calls go through the budget ledger (§7).
+- **Recorded:** the code is saved in the audit directory (`scenarios/<name>.py`, with `<name>.sha256`), and every run built from it records that hash in its log and its `runs.jsonl` row, so it can be traced to the exact code that built it (L2-17). A name that already has runs cannot be rewritten: a new version gets a new name, so runs of two versions never mix.
+- **Checked:** before it is saved, it is built and dry-run with generic mock models (no cost), and goes through the §3.4 checks and L2-9. The setup checker (§3.1) is deferred. The existing scripted mocks in `experiments/run.py` (`_mock_models`) are tuned to today's scenarios (they pick channels by matching prompt text and call scenario-specific tools by name), so they stay as they are for the existing tests, and new generic mocks are added for L2: each turn an agent calls a tool of its own that no agent has called yet, with valid placeholder arguments taken from the tool's definition, or else posts on the first channel it can write to; the judge and probe give fixed answers. The dry-run checks plumbing only (the scenario builds, runs end to end, and its scorers give every target a value), not behaviour. A scenario that fails is not saved; L2 gets the reasons.
+- **Keys:** the check runs without provider API keys. Live epochs of a written scenario run its code in the per-epoch subprocess, which has the provider key the agents need, and the L2 process imports it to build variants; a model call the code made outside Inspect would not be counted by the ledger (§7). Accepted until scenario code runs in a sandbox (§12).
 - **Scorers kept apart:** probes, judge prompts and expected answers are defined separately from anything agents can see, and the rule that scorers stay out of the agents' reach still holds (test L2-9).
 - **Comparisons:** a new scenario is its own base; the one-change rule (§6.3) applies among its variants.
 
@@ -267,7 +267,7 @@ class InnerSpec:
                                       # its cost also counts towards the global budget (§7)
 ```
 
-- For existing scenarios, the inner goal is built from the setup template (§3.1) plus L2's additions in `brief`, logged separately. For a scenario L2 wrote, there is no template: L2 writes the whole goal, and the setup checker warns if it contradicts the configuration (§3.1). In both cases the inner auditor is the existing `audit_task` + LLM policy, unchanged.
+- For existing scenarios, the inner goal is built from the setup template (§3.1) plus L2's additions in `brief`, logged separately. For a scenario L2 wrote, there is no template: L2 writes the whole goal, and the setup checker, once built, warns if it contradicts the configuration (§3.1). In both cases the inner auditor is the existing `audit_task` + LLM policy, unchanged.
 - `scope` is chosen by L2 per variant but limited to what the scenario allows; `seat` stays fixed by the scenario. This limits what the inner auditor may do, not L2. A scenario L2 writes declares the scope it allows, as the existing ones do.
 - The inner auditor's `end_audit` summary is passed to L2 as notes. Before relying on a claim in it, L2 checks it against the logs or scorers: L1 summaries have reported adoption that didn't happen.
 - Comparing inner conditions (e.g. scripted vs L1 on the same topology) holds the built setup fixed (agents, channels, schedule, task and scorers) but not the models' randomness: agents and auditors are called through an API and cannot be made repeatable with a seed. Each run records its model IDs, configuration and any seed used, and differences are reported across epochs rather than treated as paired.
@@ -308,7 +308,7 @@ If the estimate exceeds the remaining budget, the launch result says so, and the
 
 So that running out of budget doesn't leave some variants with more epochs than others, samples run one epoch at a time across all variants: epoch 1 of every variant, then epoch 2, and so on.
 
-**Dry-run.** A scenario L2 writes is dry-run once, when it is written: one sample with the generic mock models (§3.5), at no cost. If that fails, L2 gets the error and the scenario can't be used until a new version passes (§3.4).
+**Dry-run.** A scenario L2 writes is dry-run once, when it is written (`write_scenario`): one sample with the generic mock models (§3.5), at no cost. If that fails, L2 gets the error and the scenario is not saved, so it can't be used until a new version passes (§3.4). `run_experiment` does not dry-run it again.
 
 Each `VariantRun` holds the variant, validity problems and warnings, cost spent, and **log paths** — not measured values. Measurements are read back from the eval logs (§6), where the scorers put them since #22; `results.json` is not relied on.
 
@@ -396,7 +396,7 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 
 **L2 sees what's left.** `budget()` returns spent, remaining and the reserve, broken down by kind of call. The remaining amount is also appended to the result of every launch.
 
-**API keys.** All model calls go through keys the ledger controls. L2's code workspace has none (§6), so it cannot make calls the ledger doesn't see. As a backstop, each audit can use its own provider key with a credit limit set to the budget (§12).
+**API keys.** All model calls go through keys the ledger controls. L2's code workspace has none (§6), so it cannot make calls the ledger doesn't see. Scenario code L2 writes is the exception until it is sandboxed: it is checked without keys but runs with them (§3.5). As a backstop, each audit can use its own provider key with a credit limit set to the budget (§12).
 
 ## 8. Recording and visualisation
 
@@ -523,7 +523,7 @@ The LLM L2 is an agent working with tools (`run_experiment`, the §6 tools, writ
    - `find` and the other §6.1 tools;
    - comments and tags in `annotations.jsonl`, with the Cosmos sync and the tag request to Cosmos (§6.2, §8.1);
    - the generic mocks for L2-written scenarios (§3.5);
-   - the setup checker (§3.1).
+   - the setup checker (§3.1; deferred).
 4. **LLM L2**, with everything above, including writing scenarios. First run its analysis half on the milestone 1 logs as a development smoke test; the scored version of §9.2 uses held-out logs with findings written down in advance. Then run it in full and compare it, at the same budget, with the fixed grid, best-of-N, and itself given a minimal versus a detailed brief (§9.4).
 5. **Inner L1**: the same sweep with `inner.condition="l1"`, testing whether L1's effectiveness depends on topology. Needs templated goals (§3.1) and parameterised `plan_check`s, and the **combined policy** that runs an L1 auditor and the mid-run helper together (§3.3), so that L1 can be tested with mid-run changes such as the Advocate joining.
 6. **Native mid-run setup changes** in our Orbit fork: save a run's state at a point and resume it with an edited setup (a new agent; a changed persona, model or channels), instead of replaying from the start (§3.3).
@@ -543,7 +543,7 @@ Contract tests for L2, in the style of `auditor-tests.md`:
 | L2-3a | Baseline helper only changes the schedule     | In a `baseline` variant with a mid-run mutation, the helper issues only `AmendPending`; any other op is rejected by its scope. |
 | L2-3b | Scripted helper only does its two jobs        | In a `scripted` variant, the helper issues only the seat's opening (`ReplaceGeneration`, at the opening's generations) and any `AmendPending` from the variant's mutations; checked on the helper's actual output, since the scope alone cannot limit `replace_generation` to the seat (§3.3). |
 | L2-5  | Prompts match the setup                       | After a topology mutation, each agent's system prompt names exactly the channels it can write to in the config; the templated inner goal states the variant's actual rounds and reachability. |
-| L2-5b | Setup checker flags mismatches                | In an L2-written scenario whose prompt names a channel the agent cannot write to, the setup checker attaches a warning. |
+| L2-5b | Setup checker flags mismatches (deferred)     | In an L2-written scenario whose prompt names a channel the agent cannot write to, the setup checker attaches a warning. |
 | L2-6  | Scripted opening, then the seat itself        | The seat's first posts are exactly the opening's (channel, text) messages, labelled `auditor-as:<seat>`; all its later posts come from its own model, labelled `agent:<seat>`. |
 | L2-7  | Delivered dose is measured, not assumed       | The seat's delivered dose is computed from its own posts for every run; off-dose runs are flagged and kept, never dropped. |
 | L2-8  | Advocate control differs only in the schedule | An Advocate variant and its control have identical setups and helpers, except that the control never schedules the Advocate. |
@@ -573,7 +573,8 @@ Contract tests for L2, in the style of `auditor-tests.md`:
 - **Which Cosmos server should L2 use?** The shared server with a dedicated L2 user, or a separate instance for L2 (§8.1).
 - **Tags in Cosmos.** The data model, and which filters on runs and samples L2 needs (§6.2).
 - **Where does L2's code workspace run?** A container or an Inspect sandbox; what it can read (logs, read-only?) and write (annotations, scorers, scenario code); no network beyond what it needs (§6).
-- **How much human review do L2-written scenarios need?** Should a person look at a new scenario before results from it are trusted, or are the dry-run, setup checker and realism warnings enough (§3.5)?
+- **Where does scenario code run?** L2-written scenario code is checked without provider keys, but live epochs run it with the key the agents need, and the L2 process imports it; code that calls a model outside Inspect would not be counted by the ledger. A sandbox for scenario code would close this (§3.5).
+- **How much human review do L2-written scenarios need?** Should a person look at a new scenario before results from it are trusted, or are the dry-run, setup checker (once built) and realism warnings enough (§3.5)?
 - **Can comments direct auditors?** E.g. tagging an auditor while it runs, or tagging another auditor to investigate a comment (§6.2). If so, only team members' comments should count as instructions, never text that came from inside the runs.
 - **Background monitoring.** Should something watch runs as they happen and flag interesting results or security issues? Possibly out of scope.
 - **Per-audit provider keys.** Does our provider support a credit limit per key, and is the backstop worth setting up (§7)?

@@ -117,3 +117,14 @@ def test_the_calibration_brief_runs_both_bench_scenarios_with_the_same_seat():
     p0, n0 = brief.variants
     assert (p0.base, n0.base) == BENCH
     assert p0.mutations == n0.mutations and p0.inner == n0.inner
+
+
+def test_the_rebuild_brief_is_minimal_and_names_no_scenario():
+    """Milestone 4's task: L2 rebuilds mfa_rumor from a plain description."""
+    text = (BRIEFS / "rebuild.md").read_text()
+    brief = parse_brief(BRIEFS / "rebuild.md")
+    assert brief.base_scenarios == () and brief.budget_usd == 1
+    assert brief.mode is brief.measure is brief.controls is brief.variants is None
+    assert brief.allowed_changes is brief.inner is brief.hypotheses is None
+    assert "#" not in text and "mfa_rumor" not in text
+    assert "Build this setup and find out who comes to believe the rumour." in text
