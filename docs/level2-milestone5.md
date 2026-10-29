@@ -1,6 +1,6 @@
 # Level 2 milestone 5: rebuilding an incident from a brief
 
-Status: draft. Builds on milestone 4 (`docs/level2-milestone4.md`, branch `sarah/level2-scenarios`). Work on `sarah/level2-board`, branched from `sarah/level2-scenarios`. Spec: `docs/level2-interface.md` §2, §3.5, §9.1 ("Replications", "from a brief").
+Status: steps 1–3 done on `sarah/level2-board`; step 4 (review, then the calibration) next. Builds on milestone 4 (`docs/level2-milestone4.md`, branch `sarah/level2-scenarios`). Work on `sarah/level2-board`, branched from `sarah/level2-scenarios`. Spec: `docs/level2-interface.md` §2, §3.5, §9.1 ("Replications", "from a brief").
 
 ## Goal
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from inspect_ai.log import read_eval_log
 
 from experiments.l2.apply import OPS, apply
 from experiments.l2.brief import parse_brief
@@ -154,3 +155,59 @@ def test_the_rebuild_check_runs_the_written_scenario_next_to_mfa_rumor():
     models = {vid: {a.name: (a.model, a.system_prompt) for a in b.task["setup"].agents}
               for vid, (b, _) in built.items()}
     assert models["W"] == models["M"]
+
+
+# ---------------------------------------------- milestone 5: the board workaround task
+CALIBRATION = BRIEFS / "bench-board-calibration.md"
+
+
+def test_the_board_calibration_arms_differ_only_in_the_seats_opening():
+    """Plan docs/level2-milestone5.md, scope item 3: one arm posts the workaround and how,
+    the other a neutral post of similar length; nothing else differs."""
+    post, neutral = parse_brief(CALIBRATION).variants
+    assert (post.base, neutral.base) == ("board_workaround", "board_workaround")
+    assert post.mutations == neutral.mutations == ()
+    assert post.inner.condition == neutral.inner.condition == "scripted"
+    [(channel, text)], [(neutral_channel, neutral_text)] = (post.inner.opening,
+                                                            neutral.inner.opening)
+    assert channel == neutral_channel == "board"
+    assert "dump_replica" in text and "dump_replica" not in neutral_text
+    assert abs(len(text.split()) - len(neutral_text.split())) <= 5
+
+
+def test_both_board_calibration_arms_build_and_run_on_the_mocks(tmp_path):
+    """Both variants pass the validity checks (the opening's channel among them), run an
+    epoch, the seat's first post is the opening, on #board, and every target gets an
+    outcome. Plumbing only: the scripted mocks post on #town, so the targets' turns fail
+    on this layout, and none of them calls a tool."""
+    from experiments.l2.experiment import resolve, run_experiment
+    from orbit_audit.measurements import MEASUREMENTS_KEY
+    from tests.support.l2_audit import InProcess
+
+    out = tmp_path / "out"
+    runs = run_experiment(CALIBRATION, 1, out, mock=True, launch=InProcess())
+    assert [run.variant.id for run in runs] == ["B1", "B0"]
+    for run in runs:
+        assert not run.problems.rejections and run.epochs_done == 1
+        [sample] = read_eval_log(str(resolve(run.logs[0], out))).samples
+        assert sample.error is None
+        first = next(p for p in sample.store["CommunicationState:messages"]
+                     if p["sender"] == "alice")
+        assert (first["channel_id"], first["content"]) == run.variant.inner.opening[0]
+        authors = sample.store[MEASUREMENTS_KEY]["branches"]["branch-0"]["authors"]
+        assert authors[first["id"]] == "auditor-as:alice"
+        judged = sample.scores["post_judge"].metadata["agents"]
+        assert {agent: judged[agent]["outcome"] for agent in ("bob", "carol", "dave")} == {
+            agent: {"uses": 0} for agent in ("bob", "carol", "dave")}
+
+
+def test_the_board_task_brief_is_minimal_and_names_no_scenario_tool_or_model():
+    text = (BRIEFS / "board.md").read_text()
+    brief = parse_brief(BRIEFS / "board.md")
+    assert brief.base_scenarios == () and brief.budget_usd == 1
+    assert brief.mode is brief.measure is brief.controls is brief.variants is None
+    assert brief.allowed_changes is brief.inner is brief.hypotheses is None
+    assert "#" not in text  # no comments for L2 to read
+    named = ["board_workaround", "dump_replica", "get_export", "replica", "export",
+             "gpt", "openrouter", "TARGETS"]
+    assert not [word for word in named if word.lower() in text.lower()]
