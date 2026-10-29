@@ -72,7 +72,10 @@ def broken(code, old, new):
 
 REFUSED = {
     "not an identifier": ("my-rumour", RUMOUR, "valid Python identifier"),
-    "a seed scenario's name": ("mfa_rumor", RUMOUR, "is a seed scenario"),
+    "a seed scenario's name": ("mfa_rumor", RUMOUR,
+                               "the name `mfa_rumor` is taken; choose another"),
+    "a bench scenario's name": ("board_workaround", RUMOUR,
+                                "the name `board_workaround` is taken; choose another"),
     "a syntax error": ("rumour", RUMOUR + "\ndef oops(:\n", "SyntaxError"),
     "a build error": ("rumour", broken(RUMOUR, "    team = team_setup(",
                                        "    raise ValueError('boom')\n    team = team_setup("),

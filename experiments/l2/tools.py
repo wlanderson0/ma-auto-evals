@@ -414,6 +414,11 @@ class Tools:
                 if results.scenario(results.base(vid)).mention is None:
                     raise Refused(f"{scorer} is not measured on {results.base(vid)} (it has "
                                   "no mention pattern); use probe or post_judge")
+        if scorer == "outcome":
+            for vid in ids:
+                if results.scenario(results.base(vid)).outcome is None:
+                    raise Refused(f"outcome is not measured on {results.base(vid)} (it has "
+                                  "no outcome function)")
 
     def measure_scorer(self, ids: Sequence[str]) -> str:
         """The scorer that reads the brief's fixed measure on these variants' scenario."""
@@ -429,21 +434,32 @@ class Tools:
         return found.pop()
 
     def scores(self, variant_ids: Sequence[str] | str, scorer: str,
-               against: str | None = None, rounds: int | None = None) -> str:
+               against: str | None = None, rounds: int | None = None,
+               field: str | None = None) -> str:
         """The score table; with ``against``, each variant is also compared with it
         (``compare``: the chance check and the reading-guidance notes)."""
+        if field is not None and scorer != "outcome":
+            raise Refused("field applies only to scorer outcome")
         if against is None:
             if rounds is not None:
                 raise Refused("rounds applies only with against (it limits the comparison)")
-            return self.score_table(variant_ids, scorer)
+            return self.score_table(variant_ids, scorer, field)
         ids = [vid for vid in dict.fromkeys(_ids(variant_ids)) if vid != against]
         if not ids:
             raise Refused("against needs at least one other variant to compare with it")
-        table = self.score_table([*ids, against], scorer)
-        return "\n\n".join([table, *(self.compare(vid, against, scorer, rounds)
+        table = self.score_table([*ids, against], scorer, field)
+        return "\n\n".join([table, *(self.compare(vid, against, scorer, rounds, field)
                                       for vid in ids)])
 
-    def score_table(self, variant_ids: Sequence[str] | str, scorer: str) -> str:
+    def _field(self, results: Results, ids: Sequence[str], field: str) -> None:
+        """``field`` must be one of the outcome's fields in these variants' runs."""
+        fields = {key for vid in ids for s in results.of(vid) for agent in results.targets(vid)
+                  for key in (VALUES["outcome"](s, agent) or {})}
+        if field not in fields:
+            raise Refused(f"the outcome has no field {field!r}; its fields: {sorted(fields)}")
+
+    def score_table(self, variant_ids: Sequence[str] | str, scorer: str,
+                    field: str | None = None) -> str:
         ids = _ids(variant_ids)
         if scorer not in SCORERS:
             raise Refused(f"unknown scorer {scorer!r}; scorers: {list(SCORERS)} (or leave "
@@ -451,6 +467,8 @@ class Tools:
         results = self.results()
         self._known(results, ids)
         self._measured(results, ids, scorer)
+        if field is not None:
+            self._field(results, ids, field)
         if scorer == "seat_dose":
             rows = []
             for vid, row in results.scores(ids, scorer, by="sample").items():
@@ -470,8 +488,9 @@ class Tools:
             for agent in targets:
                 values = ", ".join(_short(v, 60) for v in row[agent])
                 adopted = "-"
-                if scorer in ("probe", "counts"):
-                    known = [results.adopted(s, agent, scorer) for s in results.of(vid)]
+                if scorer in ("probe", "counts") or field is not None:
+                    known = [results.adopted(s, agent, scorer, field=field)
+                             for s in results.of(vid)]
                     done = [x for x in known if x is not None]
                     adopted = f"{sum(done)}/{len(done)}" + (
                         f" (+{len(known) - len(done)} unknown)" if len(done) < len(known)
@@ -481,10 +500,14 @@ class Tools:
                       table(["target", "values", "adopted k/n"], rows)]
         return "\n".join(lines)
 
-    def compare(self, a: str, b: str, scorer: str, rounds: int | None = None) -> str:
-        if scorer not in ("probe", "counts"):
-            raise Refused(f"against reads 'probe' or 'counts', not {scorer!r} (or leave "
-                          "scorer out to read the brief's measure)")
+    def compare(self, a: str, b: str, scorer: str, rounds: int | None = None,
+                field: str | None = None) -> str:
+        if scorer not in ("probe", "counts", "outcome"):
+            raise Refused(f"against reads 'probe', 'counts' or 'outcome' (with field), not "
+                          f"{scorer!r} (or leave scorer out to read the brief's measure)")
+        if scorer == "outcome" and field is None:
+            raise Refused("outcome needs field: the outcome's value that counts as the "
+                          "behaviour when > 0 or true (scores without against shows them)")
         results = self.results()
         self._known(results, [a, b])
         if results.base(a) != results.base(b):
@@ -498,28 +521,29 @@ class Tools:
             _positive(rounds, "rounds")
             if too_few := [v for v in (a, b) if (results.rounds(v) or 0) < rounds]:
                 raise Refused(f"{too_few} have fewer than {rounds} rounds")
-        compared = results.compare(a, b, scorer, rounds=rounds)
+        compared = results.compare(a, b, scorer, rounds=rounds, field=field)
         rows = []
         for agent, row in compared.items():
             diff = "n/a" if row["difference"] is None else f"{row['difference']:+.2f}"
             rows.append([agent, _rate(row["a"]), _rate(row["b"]), diff, _chance(row)])
-        lines = [f"{a} vs {b} on {scorer}" + (f" up to round {rounds}" if rounds is not None
-                                               else "")
+        lines = [f"{a} vs {b} on {scorer}" + (f".{field}" if field else "")
+                 + (f" up to round {rounds}" if rounds is not None else "")
                  + ": per target, k of n runs showing the behaviour", "",
                  table(["target", a, b, f"difference ({a} − {b})",
                         f"told apart from chance? (Fisher exact, p < {ALPHA})"], rows), ""]
-        lines += self.departures(a, b, scorer, rounds) or [
+        lines += self.departures(a, b, scorer, rounds, field) or [
             "Checks: one change apart, same experiment, equal epochs."]
         return "\n".join(lines)
 
-    def departures(self, a: str, b: str, scorer: str, rounds: int | None) -> list[str]:
+    def departures(self, a: str, b: str, scorer: str, rounds: int | None,
+                   field: str | None = None) -> list[str]:
         """Where comparing ``a`` with ``b`` departs from the reading guidance (§6.3)."""
         results = self.results()
         notes = []
         ra = results.runs[a]["variant"]
         rb = results.runs[b]["variant"]
         changes = _difference(ra, rb)
-        rows = results.compare(a, b, scorer, rounds=rounds)
+        rows = results.compare(a, b, scorer, rounds=rounds, field=field)
         ps = [p for row in rows.values() if (p := _p_value(row)) is not None]
         if not ps or min(ps) >= ALPHA:
             notes.append("Note: for no target can the difference be told apart from chance "
@@ -618,7 +642,7 @@ class Tools:
         if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
             raise Refused(f"name must be a valid Python identifier, not {name!r}")
         if name in SCENARIOS:
-            raise Refused(f"{name} is a seed scenario's name; give yours another")
+            raise Refused(f"the name `{name}` is taken; choose another")
         if clash := [n for n in (*SCENARIOS, *self.written)
                      if n.casefold() == name.casefold() and n != name]:
             raise Refused(f"{name} differs from {clash[0]} only in case; names are compared "
@@ -913,7 +937,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
     @tool
     def scores() -> Tool:
         async def execute(variant_ids: list[str], scorer: str | None = None,
-                          against: str | None = None, rounds: int | None = None) -> str:
+                          against: str | None = None, rounds: int | None = None,
+                          field: str | None = None) -> str:
             """One scorer's values per target and epoch for some variants. With against,
             each variant is also compared with that one, per target: k of n runs on each
             side, the difference, whether it can be told apart from chance (Fisher exact
@@ -924,17 +949,20 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                 variant_ids: The variants to show.
                 against: A variant to compare each of them with (e.g. the same setup
                     without the change); its scores are shown too. Comparisons read
-                    probe or counts.
+                    probe, counts or outcome (with field).
                 rounds: With against and counts only: compare post counts up to this
                     round.
+                field: With outcome: the outcome's value that counts as the behaviour
+                    in a run when it is > 0 or true (e.g. a count of tool calls).
                 scorer: Leave out to read the brief's measure, if the brief fixes one
                     (the first message says). Otherwise: probe (each
                     target's private answer), counts (uses of the scenario's mention in a
-                    target's own words), post_judge, round_counts, or seat_dose (whether
-                    the seat delivered its intended dose).
+                    target's own words), post_judge, round_counts, outcome (what each
+                    target did with its tools, from the scenario's outcome function), or
+                    seat_dose (whether the seat delivered its intended dose).
             """
             return await call("scores", variant_ids=variant_ids, scorer=scorer,
-                              against=against, rounds=rounds)
+                              against=against, rounds=rounds, field=field)
         return execute
 
     @tool

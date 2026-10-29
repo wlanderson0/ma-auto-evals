@@ -7,10 +7,11 @@ each log holds one epoch, so ``sample.epoch`` is always 1.
 
 - ``scores(variant_ids, scorer, by="agent")``: per-target values across epochs;
   a score that could not be made shows as ``INCOMPLETE``, never as a zero.
-- ``compare(a, b, scorer, rounds=None)``: per target, k of n for each variant,
-  the difference in rates, and n. ``scorer`` is ``"probe"`` (adopted: the probe's
-  adopted answer, e.g. NOT_REQUIRED) or ``"counts"`` (at least one use of the
-  mention in the target's own words); with ``rounds``, ``"counts"`` is read from
+- ``compare(a, b, scorer, rounds=None, field=None)``: per target, k of n for each
+  variant, the difference in rates, and n. ``scorer`` is ``"probe"`` (adopted: the
+  probe's adopted answer, e.g. NOT_REQUIRED), ``"counts"`` (at least one use of the
+  mention in the target's own words) or ``"outcome"`` (the outcome function's
+  ``field`` is > 0 or true); with ``rounds``, ``"counts"`` is read from
   ``round_counts`` up to that round, so variants with different rounds are
   compared at the rounds they share (spec §6.3). Incomplete samples are left out
   of n and counted separately.
@@ -103,6 +104,8 @@ VALUES = {
                                 else s.scores["post_judge"]["agents"][a]["flagged_posts"]),
     "round_counts": lambda s, a: (None if s.scores.get("round_counts") is None
                                   else s.scores["round_counts"]["agents"][a]),
+    "outcome": lambda s, a: (None if s.scores.get("post_judge") is None
+                             else s.scores["post_judge"]["agents"][a]["outcome"]),
 }
 """Per-target value of each scorer, from a sample."""
 
@@ -187,7 +190,7 @@ class Results:
                 for agent in self.targets(vid):
                     values = []
                     for s in samples:
-                        value = VALUES[scorer](s, agent) if s.scores.get(scorer) else None
+                        value = VALUES[scorer](s, agent)  # None when it is missing
                         values.append(INCOMPLETE if value is None else value)
                     row[agent] = values
             else:
@@ -208,7 +211,7 @@ class Results:
         return next(s.base for s in self.samples if s.variant_id == variant_id)
 
     def adopted(self, sample: SampleResult, agent: str, scorer: str,
-                rounds: int | None = None) -> bool | None:
+                rounds: int | None = None, field: str | None = None) -> bool | None:
         """Whether ``agent`` showed the behaviour in ``sample`` (``None``: unknown)."""
         if scorer == "probe":
             answer = probe_answer(sample, agent)
@@ -221,16 +224,23 @@ class Results:
         if scorer == "counts":
             uses = own_uses(sample, agent, rounds)
             return None if uses is None else uses > 0
-        raise ValueError(f"compare reads 'probe' or 'counts', not {scorer!r}")
+        if scorer == "outcome":
+            if field is None:
+                raise ValueError("outcome needs the field to read, e.g. uses")
+            value = (VALUES["outcome"](sample, agent) or {}).get(field)
+            if isinstance(value, bool):
+                return value
+            return value > 0 if isinstance(value, int | float) else None
+        raise ValueError(f"compare reads 'probe', 'counts' or 'outcome', not {scorer!r}")
 
-    def compare(self, a: str, b: str, scorer: str,
-                rounds: int | None = None) -> dict[str, dict[str, Any]]:
+    def compare(self, a: str, b: str, scorer: str, rounds: int | None = None,
+                field: str | None = None) -> dict[str, dict[str, Any]]:
         """Per target: k of n for ``a`` and ``b``, the difference of their rates."""
         table = {}
         for agent in self.targets(a):
             row: dict[str, Any] = {}
             for side, vid in (("a", a), ("b", b)):
-                known = [self.adopted(s, agent, scorer, rounds) for s in self.of(vid)]
+                known = [self.adopted(s, agent, scorer, rounds, field) for s in self.of(vid)]
                 done = [x for x in known if x is not None]
                 row[side] = {"variant": vid, "k": sum(done), "n": len(done),
                              "incomplete": len(known) - len(done)}
