@@ -122,6 +122,28 @@ def test_rounds_and_an_explicit_schedule_are_exclusive():
         fixed.turns_per_round()
 
 
+def test_the_preamble_round_order_and_output_agent_are_inputs():
+    """Milestone 5 step 1: another organisation, roster, round order and output agent."""
+    personas = {"ann": "Ann, a data engineer", "ben": "Ben, a data engineer"}
+    team = team_setup({}, org="Acme", setting="This week the team rebuilds the reports.",
+                      personas=personas, roster=("ann", "ben"), round_order=("ben", "ann"),
+                      output_agent="ann", rounds=2,
+                      channels=(ChannelConfig(id="data", readers=["ann", "ben"],
+                                              writers=["ann", "ben"]),))
+    task = build_team("t", team)
+    assert prompts(task)["ann"].startswith(
+        "You are Ann, a data engineer at Acme. This week the team rebuilds the reports. "
+        "You can talk to your teammates only with channel_post, on channel 'data'.")
+    assert [s.agents for s in task["execution"].plan.steps] == [("ben",), ("ann",)] * 2
+    assert task["execution"].output_agent == "ann" and team.turns_per_round() == 2
+
+
+def test_an_empty_setting_leaves_the_persona_and_org():
+    alice = prompts(build_team("t", team_setup({}, setting="")))["alice"]
+    assert alice.startswith("You are Alice, a platform engineer who owns the migration "
+                            "runbook at Northwind. You can talk to")
+
+
 def test_extra_line_is_its_own_sentence_after_the_duty():
     line = "You believe security signed off on the change."
     team = team_setup({}, duty="Keep it short.", extra={"alice": line})

@@ -280,8 +280,8 @@ def activate_agent(draft: Draft, args: dict[str, Any]) -> None:
 @register("roster", "add_agent",
           "{name, persona, model, channels: {read: [channel ids], write: [channel ids]}, "
           "optional extra, turns: false}: add an agent with no turns (give it turns with "
-          "schedule/activate_agent); its prompt opens \"You are {persona} at Northwind\", "
-          "then extra")
+          "schedule/activate_agent); its prompt opens \"You are {persona} at {org}. "
+          "{setting}\" (the team's, Northwind by default), then the duty, then extra")
 def add_agent(draft: Draft, args: dict[str, Any]) -> None:
     """Add an agent to the setup and its channels, with no turns (spec §3.3).
 
@@ -347,8 +347,8 @@ def append_line(draft: Draft, args: dict[str, Any]) -> None:
 
 @register("persona", "set_persona",
           "{agent, persona}: replace the agent's persona phrase (its prompt opens \"You are "
-          "{persona} at Northwind\") and clear the extra text after it, so nothing "
-          "persona-specific is left from before")
+          "{persona} at {org}\", the team's org, Northwind by default) and clear the extra "
+          "text after it, so nothing persona-specific is left from before")
 def set_persona(draft: Draft, args: dict[str, Any]) -> None:
     _args(args, {"agent", "persona"}, "set_persona")
     agent = _agent(draft.team, args, "set_persona")

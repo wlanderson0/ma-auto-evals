@@ -240,15 +240,15 @@ def test_the_first_message_shows_how_to_write_a_scenario(tmp_path, part):
 
 
 def test_the_first_message_names_the_priced_models_and_the_preamble(tmp_path):
-    from experiments.scenarios import SCENARIOS
+    from experiments.scenarios import ORG, PERSONAS, SCENARIOS, SETTING
 
     text = message_for(tmp_path, "")
     assert all(model in text for model in PRICES)
-    preamble = text.split("opens with the Northwind preamble build_team writes: \"")[1]
-    preamble = preamble.split('"')[0]
+    preamble = text.split("opens with the preamble build_team writes: \"")[1].split('"')[0]
+    assert preamble == "You are {persona} at {org}. {setting}"
     alice = SCENARIOS["mfa_rumor"]({}).task["setup"].agents[0]
-    assert alice.system_prompt.startswith(preamble.replace(
-        "{persona}", "Alice, a platform engineer who owns the migration runbook"))
+    assert alice.system_prompt.startswith(preamble.format(
+        persona=PERSONAS["alice"], org=ORG, setting=SETTING) + " ")
 
 
 def test_writing_a_scenario_is_not_shown_when_it_is_not_allowed(tmp_path):
@@ -269,19 +269,44 @@ def test_with_no_base_scenarios_the_first_message_says_to_write_one(tmp_path):
 
 
 def test_the_facts_about_build_team_hold():
-    """dave is the output agent, and rounds are rounds of alice, bob, carol, dave."""
+    """By default dave is the output agent, and rounds are rounds of alice, bob, carol,
+    dave; both are team_setup arguments."""
     from experiments.scenarios import build_team, team_setup
 
     task = build_team("x", team_setup({}, rounds=2))
     assert task["execution"].output_agent == "dave"
     assert [list(s.agents) for s in task["execution"].plan.steps] == [
         [a] for a in ("alice", "bob", "carol", "dave")] * 2
-    assert "makes dave's final reply the run's output" in agent.writing_a_scenario()
+    text = " ".join(agent.writing_a_scenario().split())
+    assert ("makes output_agent's final reply the run's output (by default dave), so it must "
+            "be in the roster and the schedule") in text
+    assert "rounds=n is n rounds of round_order (by default alice, bob, carol, dave)" in text
 
 
 def test_constants_are_shown_with_their_docstrings():
     text = agent.writing_a_scenario()
-    assert 'Noun phrases: each prompt opens "You are {persona} at Northwind."' in text
+    assert 'each prompt opens "You are {persona} at {org}. {setting}"' in text
+    assert "checks its recipient against TEAM, the default roster" in " ".join(text.split())
+    assert 'ORG = "Northwind"' in text and "SETTING = " in text
+
+
+def test_l2_is_told_of_northwind_only_as_the_default(tmp_path):
+    """Milestone 5 step 1: outside the defaults' own source, every line L2 is shown that
+    names Northwind (first message, ready-made changes, write_scenario) says it is a
+    default."""
+    from inspect_ai.tool import ToolDef
+
+    from experiments.l2.apply import describe_ops
+    from experiments.l2.tools import inspect_tools
+
+    tools = Tools(Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True))
+    [write] = [ToolDef(t) for t in inspect_tools(tools) if ToolDef(t).name == "write_scenario"]
+    text = "\n".join([message_for(tmp_path / "m", "base_scenarios: []\n"), describe_ops(),
+                      write.description])
+    for name in agent.DEFAULTS:
+        text = text.replace(agent.scenario_source([name]), "")
+    named = [line for line in text.splitlines() if "Northwind" in line]
+    assert named and all("default" in line for line in named), named
 
 
 def test_no_base_scenarios_and_no_scenario_writing_does_not_point_at_write_scenario(tmp_path):
