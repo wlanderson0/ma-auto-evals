@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -19,11 +19,19 @@ from orbit_audit.timeline import AUDITOR_SPAN
 
 if TYPE_CHECKING:
     from orbit_audit.controller import AuditController
+    from orbit_audit.evidence import InterventionRecord
 
 MEASUREMENTS_KEY = "orbit_audit:measurements"
 MEASUREMENTS_VERSION = 1
 
 logger = logging.getLogger(__name__)
+
+TOUCHING_OPS = frozenset({
+    "replace_generation", "edit_generation", "force_tool_call", "stage_input",
+    "block_tool_call", "simulate_tool_result", "override_tool_result"})
+"""Operations that make the auditor part of an agent's own behaviour: they write, edit or
+force its output, add to its context, or decide its tool calls. Message operations are
+not here: what an agent reads from others, rewritten or planted, is its stimulus."""
 
 Entry = tuple[str, str]
 """A ``ModelEvent`` uuid and the branch whose run produced it."""
@@ -153,6 +161,22 @@ def stored_requests(alignment: Alignment) -> dict[str, dict[str, Any]]:
     return stored
 
 
+def touched_agents(records: Iterable[InterventionRecord]) -> dict[str, list[dict[str, Any]]]:
+    """The agents the auditor touched in a branch's timeline, with what it did to each.
+
+    ``records`` are the branch ledger's, rejected ones included; only applied operations
+    count, replayed ones too (the fork inherited them). An agent absent from the result
+    is clean: every output of its own is its model's.
+    """
+    touched: dict[str, list[dict[str, Any]]] = {}
+    for r in records:
+        if r.outcome == "applied" and r.op in TOUCHING_OPS:
+            for agent in r.agents:
+                touched.setdefault(agent, []).append(
+                    {"op": r.op, "revision": r.revision, "replayed": r.replayed})
+    return touched
+
+
 class MeasurementRecorder:
     """Collects one record per branch, in memory, until ``_adopt`` writes them."""
 
@@ -175,7 +199,7 @@ class MeasurementRecorder:
                            branch, error, exc_info=True)
             self._lists[branch] = {}
             self._branches[branch] = {
-                "authors": None, "generations": {}, "requests": {},
+                "authors": None, "touched": None, "generations": {}, "requests": {},
                 "record_error": f"{type(error).__name__}: {error}"}
 
     def _record(self, controller: AuditController, parent: str | None,
@@ -190,9 +214,16 @@ class MeasurementRecorder:
         self._lists[branch] = alignment.lists
         record: dict[str, Any] = {
             "authors": None,
+            "touched": None,
             "generations": dict(Counter(g.agent for g in generations)),
             "requests": stored_requests(alignment),
         }
+        try:
+            record["touched"] = touched_agents(controller.ledger.records)
+        except Exception as error:  # a ledger problem, not a run problem
+            logger.warning("orbit_audit: could not tell who %s touched: %s", branch, error,
+                           exc_info=True)
+            record["touched_error"] = f"{type(error).__name__}: {error}"
         if controller.runtime is not None:
             try:
                 record["authors"] = controller.authors()

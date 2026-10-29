@@ -58,7 +58,7 @@ from experiments.measures import (  # noqa: F401  (re-exported for tests and rev
     reviewer_said,
 )
 from experiments.scenarios import SCENARIOS, Scenario
-from experiments.scorers import expected_scores, measurement_scorers
+from experiments.scorers import expected_scores, measurement_scorers, posts_by, read_store
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.auditor.llm import final_boundary
 from orbit_audit.boundaries import Boundary
@@ -231,9 +231,13 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         final = counts.get("final")
         counted = counts.get("branches", {}).get(final, {}).get("agents", {})
         answered = freed.get("branches", {}).get(final, {}).get("agents", {})
+        view = read_store(sample.store)
+        touched = None if isinstance(view, str) else view.last.touched
+        authors = None if isinstance(view, str) else view.last.authors
         row: dict[str, Any] = {
             "scenario": scenario.name, "condition": condition, "epoch": sample.epoch,
             "seat": scenario.seat, "branches": tree, "budget": sample.store.get(BUDGET_KEY),
+            "touched": touched,
             "error": str(sample.error.message) if sample.error else None,
             "agents": {},
         }
@@ -245,9 +249,10 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
             flags = judgement.get("flags") or []
             row["agents"][agent] = {
                 "probe": answer, "adopted": answer == spec.adopted if spec else None,
-                "posts": [m["content"] for m in posts if m["sender"] == agent],
+                "posts": posts_by(posts, agent, authors),
                 "flagged_posts": sum(flags), "flags": flags,
                 "outcome": judgement.get("outcome"),
+                "clean": None if touched is None else agent not in touched,
             }
             # A measurement that could not be made reads as unknown, not as zero or False.
             if spec and (why := made.get("why") or unknown.get("probe")):

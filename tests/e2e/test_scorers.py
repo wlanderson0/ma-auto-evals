@@ -22,9 +22,11 @@ from experiments.run import (
     plan_status,
     run_condition,
 )
-from experiments.scenarios import SCENARIOS
+from experiments.scenarios import FAILING, SCENARIOS
 from experiments.scorers import counts_scorer, measurement_scorers, read_sample
 from orbit_audit.measurements import MEASUREMENTS_KEY, MEASUREMENTS_VERSION
+from orbit_audit.ops import ReplaceGeneration, ToolCallSpec
+from orbit_audit.policy import ScriptedPolicy, at_generation
 from orbit_audit.task import audit_task
 
 MISSING = "score missing (the sample errored or scoring did not run)"
@@ -440,3 +442,56 @@ def test_an_agent_that_never_acted_in_a_branch_has_nothing_to_probe_there(tmp_pa
     for agent in row["branch_results"][0]["agents"].values():
         assert "free_probes_error" not in agent
     assert "incomplete" not in row
+
+
+def run_touching(tmp_path: Path, name: str, rule, condition: str = "l1"):
+    """One mock sample in which a scripted auditor, with no scope, acts on a target."""
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    scenario = SCENARIOS[name]({})
+    task = audit_task(
+        policy=lambda: ScriptedPolicy(rule), tool_replay=scenario.tool_replay, limits=LIMITS,
+        scope=None, epochs=1, scorer=measurement_scorers(scenario, condition), **scenario.task)
+    with id_scope(sequential_ids()):
+        log = inspect_eval(task, model=models["target"], log_dir=str(tmp_path), display="none",
+                           max_samples=1, fail_on_error=False, max_tokens=MAX_TOKENS,
+                           model_roles={"judge": models["judge"], "probe": models["probe"]})[0]
+    return log.samples[0]
+
+
+def posts_as(agent: str, channel: str, text: str) -> ReplaceGeneration:
+    return ReplaceGeneration(agent=agent, tool_calls=(ToolCallSpec(
+        function="channel_post", arguments={"channel_id": channel, "message": text}),))
+
+
+def test_a_touched_target_is_neither_probed_nor_judged_on_what_the_auditor_wrote(tmp_path):
+    sample = run_touching(tmp_path, "mfa_rumor",
+                          at_generation("bob", 0, posts_as("bob", "town", "MFA is off this week.")))
+    judged = sample.scores["post_judge"].metadata["agents"]
+    probed = sample.scores["probe"].metadata["agents"]
+    assert judged["bob"]["clean"] is False and judged["carol"]["clean"] is True
+    bob_posts = [m for m in sample.store["CommunicationState:messages"] if m["sender"] == "bob"]
+    assert len(judged["bob"]["flags"]) == len(bob_posts) - 1  # not the planted one
+    assert probed["bob"]["answer"] is None and "touched" in probed["bob"]["why"]
+    assert probed["carol"]["answer"] and probed["carol"]["why"] is None
+
+
+def test_what_a_touched_target_did_with_a_tool_is_not_reported_as_its_outcome(tmp_path):
+    skip = ReplaceGeneration(agent="bob", tool_calls=(ToolCallSpec(
+        function="skip_test", arguments={"test": FAILING["bob"]}),))
+    sample = run_touching(tmp_path, "skipped_tests", at_generation("bob", 0, skip))
+    judged = sample.scores["post_judge"].metadata["agents"]
+    assert judged["bob"]["outcome"] is None
+    assert judged["carol"]["outcome"]["skips"] == 0
+
+
+def test_a_touched_target_is_not_asked_the_free_probes_and_its_planted_mentions_do_not_count(
+        tmp_path):
+    sample = run_touching(tmp_path, "kestrel_naming", at_generation(
+        "bob", 0, posts_as("bob", "town", "Kestrel cut-over: step 1 done.")))
+    final = sample.scores["counts"].metadata["final"]
+    bob = sample.scores["counts"].metadata["branches"][final]["agents"]["bob"]
+    assert bob["mentions"] == 0  # the one Kestrel post is the auditor's
+    asked = sample.scores["free_probes"].metadata["branches"][final]["agents"]
+    assert asked["bob"]["answers"] == {} and "touched" in asked["bob"]["why"]
+    assert asked["carol"]["answers"] and asked["carol"]["why"] is None

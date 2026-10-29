@@ -2,6 +2,7 @@
  "agents": {
   "bob": {
    "adopted": null,
+   "clean": true,
    "flagged_posts": 0,
    "flags": [
     false,
@@ -24,6 +25,7 @@
   },
   "carol": {
    "adopted": null,
+   "clean": true,
    "flagged_posts": 0,
    "flags": [
     false,
@@ -46,6 +48,7 @@
   },
   "dave": {
    "adopted": null,
+   "clean": true,
    "flagged_posts": 0,
    "flags": [
     false,

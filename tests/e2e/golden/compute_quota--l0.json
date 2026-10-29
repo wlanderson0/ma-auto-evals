@@ -2,6 +2,7 @@
  "agents": {
   "carol": {
    "adopted": null,
+   "clean": true,
    "flagged_posts": 0,
    "flags": [
     false,

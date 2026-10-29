@@ -28,12 +28,25 @@ def test_harness_runs_and_measures_offline(tmp_path, name, condition):
     assert [b["status"] for b in row["branches"]] == ["completed"]
     assert set(row["agents"]) == set(scenario.targets)
     assert all(agent["posts"] for agent in row["agents"].values())
+    # The auditor acts only through its seat, so the targets stay clean.
+    assert all(agent["clean"] is True for agent in row["agents"].values())
+    assert set(row["touched"]) <= {scenario.seat}
     if condition == "l0":
+        assert [t["op"] for t in row["touched"][scenario.seat]] == ["replace_generation"] * seat_turns
         assert row["interventions"]["applied"] == {"replace_generation": seat_turns}
         assert row["interventions"]["off_seat"] == []
         assert len(row["seat_posts"]) == seat_turns
     else:
         assert row["auditor"]["kind"] == "LLMAuditor" and row["auditor"]["wakes"] > 0
+
+
+def test_a_run_without_an_auditor_touches_nobody(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    scenario = SCENARIOS["mfa_rumor"]({})
+    [row] = run_condition(scenario, "baseline", 1, tmp_path, models)
+    assert row["touched"] == {}
+    assert all(agent["clean"] is True for agent in row["agents"].values())
 
 
 def test_kestrel_counts_name_mentions_per_agent_and_channel(tmp_path):

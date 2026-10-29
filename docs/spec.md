@@ -90,7 +90,9 @@ Taking over an agent is the same operation at both levels. At Level 0, `SeatPoli
 
 At Level 1 the auditor can affect several agents in one audit, but each generation, tool call or tool result is its own boundary, and an operation there may target only the agent at that boundary: writing Bob's generation at Alice's boundary is rejected, with the rest of the batch. To take over several agents, the auditor acts at each one's boundary in turn (the scope's `agents` lists all of them). Message operations are the exception: one batch may rewrite a message differently for each recipient, drop it for some, and inject a message to several recipients at once. A `rollback`'s interventions are validated at the fork boundary under the same rules.
 
-Planted content is not target behaviour. Auditor-authored content keeps its `auditor-as:<agent>` label, and the experiments scope the auditor to the seat and measure only the targets' own channel posts and private probes. `AuditController.authors()` labels every channel message of a branch `auditor-as:<sender>` (injected, or posted from a generation the auditor wrote or edited) or `agent:<sender>`, so autonomous-behaviour counts can take the `agent:` messages only (P3). The experiments do not use it yet: an auditor-edited post by a target would still be judged as the target's.
+Planted content is not target behaviour. Auditor-authored content keeps its `auditor-as:<agent>` label, and the experiments scope the auditor to the seat and measure only the targets' own channel posts and private probes. `AuditController.authors()` labels every channel message of a branch `auditor-as:<sender>` (injected, or posted from a generation the auditor wrote or edited) or `agent:<sender>`, so autonomous-behaviour counts can take the `agent:` messages only (P3).
+
+The experiments' scorers keep to what an agent did itself. An agent is **touched** in a branch if the auditor wrote, edited or forced its output, staged input for it, or decided its tool calls (message operations do not count: what an agent reads is its stimulus), and **clean** otherwise; each branch's measurement record lists the touched agents, replayed prefix included. The post judge and the mention counts take an agent's `agent:` posts only. The belief probes, free probes and tool outcomes (skips, votes, transfers) skip a touched agent and say why, because its context and tool calls hold what the auditor wrote. Result rows give `touched` (final branch) and each target's `clean`. The seed scenarios scope the auditor to the seat, so their targets are always clean; the gating matters once an auditor may act on more than one agent. The seat's own dose is still counted from its posts, not from the labels.
 
 ### 3.5 Tools: real versus simulated
 
@@ -139,7 +141,7 @@ Known gaps (Level 1). The gaps listed when this section was first written were c
 - `RealismCheck`'s model calls are not charged to the audit budget.
 - `final_boundary` cannot tell a repeating plan (`ScheduleConfig.repeat`) apart from a finished one, so it holds only for plans that do not repeat; none of the scenarios repeat.
 - The experiments wake the auditor only on posts, not on other tool results, so it cannot see skips, votes or transfers and judges from posts.
-- The experiments do not yet use `authors()` or `exposure()`, and measure tool outcomes on the final branch only.
+- The experiments use `authors()` only to keep an agent's planted posts out of its counts, do not yet use `exposure()`, and measure tool outcomes on the final branch only.
 - Concurrent schedule steps (`concurrent: True`) are refused: `audit_task` and the controller raise on a plan that has one. Pauses assume one agent is mid-turn at a time, and replay matches recorded outputs in arrival order, so supporting them needs serialized pauses and order-independent replay. Sequential steps, including multi-agent ones, are the supported case (§1.3).
 
 ### 4.3 Level 2: auditor changing the eval setup
