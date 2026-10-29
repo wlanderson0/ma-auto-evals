@@ -112,10 +112,10 @@ def test_development_briefs_never_see_the_bench_scenarios():
         assert bases is not None and not set(bases) & set(BENCH), path.name
 
 
-def test_the_calibration_brief_runs_both_bench_scenarios_with_the_same_seat():
+def test_the_calibration_brief_runs_both_milestone3_bench_scenarios_with_the_same_seat():
     brief = parse_brief(BRIEFS / "bench-calibration.md")
     p0, n0 = brief.variants
-    assert (p0.base, n0.base) == BENCH
+    assert (p0.base, n0.base) == ("mfa_rumor_b", "mfa_rumor_c")
     assert p0.mutations == n0.mutations and p0.inner == n0.inner
 
 
