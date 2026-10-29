@@ -170,11 +170,18 @@ def test_with_no_base_scenarios_a_written_base_is_accepted_and_its_runs_visible(
 
 
 # ------------------------------------------------------------ generic mocks (step 2)
+def checked(name, found):
+    """``name`` built as it is dry-run: its check variant, on the mock models."""
+    _, built, problems = build(written.check_variant(name), mock=True, written=found)
+    assert not problems.rejected
+    return built
+
+
 def test_a_new_channel_and_a_new_tool_run_end_to_end_on_the_generic_mocks(tmp_path):
     """L2-16: each agent posts on the first channel it can write to, the new tool is called
     once with placeholder arguments, and every scorer gets a value for every target."""
     found = written.load(save(tmp_path / "scenarios", "board", BOARD).parent)
-    log = written.dry_run("board", found, tmp_path / "logs")
+    log = written.dry_run(checked("board", found), tmp_path / "logs")
     [sample] = log.samples
     assert log.status == "success" and sample.error is None
     posts = sample.store["CommunicationState:messages"]
@@ -205,7 +212,7 @@ def test_an_agent_that_can_post_nowhere_calls_its_tool_on_each_turn(tmp_path):
     code = re.sub(r"TOPOLOGY = .*?\)\)\n", topology, BOARD, count=1, flags=re.S)
     assert "ops" not in code
     found = written.load(save(tmp_path / "scenarios", "board", code).parent)
-    [sample] = written.dry_run("board", found, tmp_path / "logs").samples
+    [sample] = written.dry_run(checked("board", found), tmp_path / "logs").samples
     assert sample.error is None
     assert not any(p["sender"] == "dave" for p in sample.store["CommunicationState:messages"])
     # Alice, first to act, calls the tool nobody has called yet; Dave, who can write to

@@ -20,6 +20,9 @@ AXES = ("topology", "boards", "models", "persona", "schedule", "roster", "task")
 """Kinds of setup change (spec §3.2)."""
 MEASURED = ("seat", "targets", "probes", "judge", "mention", "free_probes", "outcome")
 """Changes that make a new scenario rather than a variant (spec §3.2)."""
+SCENARIO = "scenario"
+"""Writing scenarios (spec §3.5): an ``allowed_changes`` value that is no axis and no
+measured change."""
 START = "start"
 
 

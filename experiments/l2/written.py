@@ -16,17 +16,29 @@ called with ``{}``: its code sets its agents' models itself.
 its scorers run on the log, not how agents behave. The scripted mocks of
 ``experiments.run`` are tuned to the seed scenarios and stay as they are.
 
+``python -m experiments.l2.written --check <file> --name <name>`` is the check
+``write_scenario`` runs on new code, in a subprocess without provider keys (``check``):
+the code builds a ``Scenario`` named ``name`` whose task is ``build_team(name, team)``
+(variants rebuild the task from ``team``, so it must be what runs), its agents' models
+are priced, it passes the §3.4 checks and L2-9 (no scorer text in a prompt or the task),
+and its dry-run gives every target a value on each of its scorers.
+
 **Keys.** The code is checked without provider keys, but live epochs of a written
 scenario run it in the per-epoch subprocess, which has the OpenRouter key (the agents
-need it). Code that called a model outside Inspect would not be counted by the ledger.
-Accepted until scenario code runs in a sandbox (spec §12).
+need it), and the L2 process imports it to build variants. Code that called a model
+outside Inspect would not be counted by the ledger. Accepted until scenario code runs in
+a sandbox (spec §12).
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.util
+import os
+import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +51,7 @@ from inspect_ai.tool import ToolInfo
 from inspect_ai.util import JSONSchema
 
 from experiments.l2.model import InnerSpec, Variant
-from experiments.scenarios import SCENARIOS, Scenario
+from experiments.scenarios import SCENARIOS, Scenario, build_team
 
 Factory = Callable[[dict], Scenario]
 
@@ -176,18 +188,13 @@ def check_variant(name: str) -> Variant:
                    rationale="check")
 
 
-def dry_run(name: str, written: WrittenScenarios, log_dir: Path) -> EvalLog:
-    """One ``baseline`` sample of the written scenario ``name`` on the generic mocks,
-    built as a variant of it is (``experiment.build``), at no cost."""
-    # Imported here: experiment imports this module.
+def dry_run(built: Scenario, log_dir: Path) -> EvalLog:
+    """One ``baseline`` sample of ``built`` (a written scenario built as its check
+    variant, on the mock models) on the generic mocks, at no cost."""
     from inspect_ai import eval as inspect_eval
 
-    from experiments.l2.experiment import build
     from experiments.run import MAX_TOKENS, build_task, l2_metadata
 
-    _, built, problems = build(check_variant(name), mock=True, written=written)
-    if built is None or problems.rejected:
-        raise ValueError(f"{name} is rejected: {'; '.join(problems.rejections)}")
     models = generic_models(built)
     task = build_task(built, "baseline", models,
                       metadata=l2_metadata(built, "baseline", epoch=1))
@@ -195,3 +202,168 @@ def dry_run(name: str, written: WrittenScenarios, log_dir: Path) -> EvalLog:
                          fail_on_error=False, score_on_error=True, max_tokens=MAX_TOKENS,
                          model_roles={"judge": models["judge"], "probe": models["probe"]})
     return log
+
+
+# ------------------------------------------------------------------ checking
+CHECK_TIMEOUT = 300
+"""Seconds the check subprocess may take (it imports Inspect and runs one mock sample)."""
+
+
+class CheckFailed(Exception):
+    """The written scenario failed its checks; the message says why."""
+
+
+def leaks(scenario: Scenario) -> list[str]:
+    """L2-9: scorer text the agents would see, i.e. a probe question, the judge question
+    or a free probe that is part of an agent's system prompt or of the task."""
+    scorer_texts = [("probe question", p.question) for p in scenario.probes.values()]
+    scorer_texts += [("judge question", scenario.judge)]
+    scorer_texts += [(f"free probe {label!r}", q) for label, q in scenario.free_probes.items()]
+    visible = {f"{spec.name}'s system prompt": spec.system_prompt or ""
+               for spec in scenario.task["setup"].agents}
+    visible["the task"] = scenario.task["dataset"][0].input
+    return list(dict.fromkeys(
+        f"the {kind} is in {where}" for kind, text in scorer_texts if text.strip()
+        for where, seen in visible.items() if text.strip() in seen))
+
+
+def unscored(log: EvalLog, built: Scenario) -> list[str]:
+    """What the dry-run's scorers left without a value: a score that is missing or
+    incomplete, or a target with no value (or a probe answer that is none of its options)."""
+    from experiments.l2.results import VALUES, sample_results
+    from experiments.scorers import expected_scores
+
+    samples = log.samples or []
+    if len(samples) != 1:
+        return [f"the dry-run left {len(samples)} samples, not 1 (log status {log.status})"]
+    if samples[0].error is not None:
+        return [f"the dry-run errored: {samples[0].error.message}"]
+    scores = samples[0].scores or {}
+    expected = expected_scores(built)
+    found = [f"{name}: no score" if name not in scores else
+             f"{name}: {scores[name].metadata['incomplete']}" for name in expected
+             if name not in scores or "incomplete" in (scores[name].metadata or {})]
+    if found:
+        return found
+    [sample] = sample_results(log.location)
+    for agent in built.targets:
+        if built.outcome is not None and (
+                scores["post_judge"].metadata["agents"][agent]["outcome"] is None):
+            found.append(f"outcome: no value for {agent}")
+        for name, value in VALUES.items():
+            if name not in expected or (name == "counts" and built.mention is None) or (
+                    name == "probe" and agent not in built.probes):
+                continue
+            got = value(sample, agent)
+            if got is None:
+                found.append(f"{name}: no value for {agent}")
+            elif name == "probe" and got not in built.probes[agent].options:
+                found.append(f"probe: {agent}'s answer {got!r} is none of its options "
+                             f"{list(built.probes[agent].options)} (answers are read in "
+                             "upper case)")
+        if "free_probes" in expected:
+            meta = scores["free_probes"].metadata
+            answers = meta["branches"][meta["final"]]["agents"].get(agent, {}).get("answers")
+            if missing := sorted(set(built.free_probes) - set(answers or {})):
+                found.append(f"free_probes: no answer from {agent} to {missing}")
+    return found
+
+
+def check(path: Path, name: str) -> str:
+    """Check the scenario module at ``path`` as ``name``; the warnings and its description,
+    or ``CheckFailed`` with the reasons."""
+    from experiments.l2.cost import PRICES
+    from experiments.l2.describe import describe_scenario
+    from experiments.l2.experiment import build
+
+    try:
+        found = {name: load_file(path)}
+        scenario = found[name].make({})
+    except (Exception, SystemExit) as error:
+        raise CheckFailed(f"the code does not build: {type(error).__name__}: {error}") from error
+    if not isinstance(scenario, Scenario):
+        raise CheckFailed(f"make({{}}) must return a Scenario, not {type(scenario).__name__}")
+    if (scenario.name, scenario.base) != (name, name):
+        raise CheckFailed(f"make({{}}) must return a Scenario with name and base {name!r}, "
+                          f"got name {scenario.name!r} and base {scenario.base!r}")
+    if scenario.team is None:
+        raise CheckFailed("the Scenario has no team: build its task with team_setup and "
+                          "build_team and pass team=<the TeamSetup>, so ready-made changes "
+                          "apply to it")
+    if not same_task(scenario.task, build_team(name, scenario.team)):
+        raise CheckFailed(f"the Scenario's task is not build_team({name!r}, team): runs "
+                          "rebuild the task from team, so build it from the same TeamSetup")
+    if unpriced := sorted({spec.model for spec in scenario.task["setup"].agents
+                           if spec.model and spec.model not in PRICES}):
+        raise CheckFailed(f"models not in the price table: {unpriced} (priced: "
+                          f"{sorted(PRICES)})")
+    _, built, problems = build(check_variant(name), mock=True, written=found)
+    rejections = [*problems.rejections, *(leaks(built) if built is not None else [])]
+    if rejections:
+        raise CheckFailed("\n".join(f"- {reason}" for reason in rejections))
+    with tempfile.TemporaryDirectory() as logs:
+        if missing := unscored(dry_run(built, Path(logs)), built):
+            raise CheckFailed("the dry-run on the generic mocks failed:\n"
+                              + "\n".join(f"- {reason}" for reason in missing))
+    warnings = [f"Warning: {w}" for w in problems.warnings]
+    return "\n".join([*warnings, *([""] if warnings else []),
+                      describe_scenario(name, mock=False, written=found)])
+
+
+def same_task(task: dict[str, Any], rebuilt: dict[str, Any]) -> bool:
+    """``task`` is ``rebuilt``: equal but for the tool factories (closures), which must
+    bind the same tools."""
+    def plain(kwargs: dict[str, Any]) -> dict[str, Any]:
+        return {**kwargs, "tool_bindings": sorted(kwargs.get("tool_bindings", {}))}
+
+    return plain(task) == plain(rebuilt)
+
+
+def check_code(name: str, code: str) -> tuple[bool, str]:
+    """Run ``check`` on ``code`` in a subprocess without provider keys (every
+    ``*_API_KEY`` set to empty, as in ``workspace.run_python``), from the repository so
+    it can import its modules. ``(passed, the result or the reasons)``."""
+    from experiments.l2 import workspace
+    from experiments.l2.experiment import REPO
+
+    env = {**os.environ, **{key: "" for key in workspace.key_names(REPO)}}
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / f"{name}.py"
+        path.write_text(code, encoding="utf-8")
+        command = [sys.executable, "-m", "experiments.l2.written", "--check", str(path),
+                   "--name", name]
+        try:
+            done = subprocess.run(command, cwd=REPO, env=env, capture_output=True, text=True,
+                                  timeout=CHECK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return False, f"the check did not finish in {CHECK_TIMEOUT} s"
+    if done.returncode == 0:
+        return True, done.stdout.strip()
+    return False, ("\n".join(part for part in (done.stdout.strip(), done.stderr.strip()[-3000:])
+                             if part) or f"the check exited with code {done.returncode}")
+
+
+def save(directory: Path, name: str, code: str) -> None:
+    """``<name>.py`` and ``<name>.sha256`` in ``directory``."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.py").write_text(code, encoding="utf-8")  # as sha256 hashes it
+    (directory / f"{name}.sha256").write_text(sha256(code) + "\n")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Check a scenario module L2 wrote.")
+    parser.add_argument("--check", required=True, type=Path, metavar="FILE")
+    parser.add_argument("--name", required=True)
+    args = parser.parse_args(argv)
+    try:
+        print(check(args.check, args.name))
+    except CheckFailed as failure:
+        print(failure)
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    # The module the rest of the code imports, not a second copy run as __main__.
+    from experiments.l2.written import main as _main
+
+    _main()

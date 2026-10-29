@@ -18,6 +18,8 @@ for L2 rather than an exception.
   posts from the logs, each with its authorship label (``agent:<a>`` for an
   agent's own model, ``auditor-as:<a>`` for text written in its seat).
 - ``run_python(code)``: L2's own Python on the audit's logs (``workspace``).
+- ``write_scenario(name, code)``: a scenario module L2 writes (``written``), saved once it
+  passes its checks and dry-run; then a base like any other.
 - ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions)``.
 
 Outputs are short by default: small plain tables, the first N posts or matches.
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import keyword
 import math
 import re
 import time
@@ -50,6 +53,7 @@ from experiments.l2.experiment import variant_from
 from experiments.l2.model import L2Brief, Variant
 from experiments.l2.report import SCORER as MEASURE_SCORER
 from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
+from experiments.scenarios import SCENARIOS
 from experiments.scorers import read_sample
 
 ALPHA = 0.05
@@ -62,7 +66,7 @@ FREE = ("budget", "end_audit")
 """Tools that still run after the hard stop."""
 ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
-TOOLS = ("run_experiment", "list_runs", "scores", "transcript", "find",
+TOOLS = ("run_experiment", "write_scenario", "list_runs", "scores", "transcript", "find",
          "run_python", "note_decision", "budget", "end_audit")
 
 
@@ -157,8 +161,9 @@ class Tools:
         self._seq = len(self.trace())
 
     # ------------------------------------------------------------ dispatch
-    def call(self, name: str, **args: Any) -> tuple[bool, str]:
-        """Run tool ``name``; ``(ok, text)``. Refusals and errors are ``ok=False``."""
+    def call(self, name: str, /, **args: Any) -> tuple[bool, str]:
+        """Run tool ``name``; ``(ok, text)``. Refusals and errors are ``ok=False``.
+        (``name`` is positional-only, so a tool can take an argument called name.)"""
         try:
             if name not in TOOLS:
                 raise Refused(f"unknown tool {name!r}")
@@ -602,6 +607,38 @@ class Tools:
             raise Refused("code is required: the Python to run")
         return workspace.run_python(code, self.audit.out, self.audit.sources())
 
+    def write_scenario(self, name: str, code: str) -> str:
+        """Check ``code`` in a subprocess without keys, then save it as ``name``."""
+        audit = self.audit
+        if not audit.writes_scenarios:
+            raise Refused("refused: this is an analysis-only audit: write_scenario is off"
+                          if audit.analysis is not None else
+                          f"refused: the brief's allowed_changes "
+                          f"{list(audit.brief.allowed_changes)} do not include scenario")
+        if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
+            raise Refused(f"name must be a valid Python identifier, not {name!r}")
+        if name in SCENARIOS:
+            raise Refused(f"{name} is a seed scenario's name; give yours another")
+        if clash := [n for n in (*SCENARIOS, *self.written)
+                     if n.casefold() == name.casefold() and n != name]:
+            raise Refused(f"{name} differs from {clash[0]} only in case; names are compared "
+                          "ignoring case (they name files), so give yours another")
+        if ran := audit.runs_of(name):
+            raise Refused(f"{name} already has runs in this audit ({', '.join(ran)}); a new "
+                          "version needs a new name, so runs of two versions never mix")
+        if not isinstance(code, str) or not code.strip():
+            raise Refused("code is required: the module's Python source")
+        passed, text = written_.check_code(name, code)
+        if not passed:
+            kept = (f" Nothing was saved; the earlier version of {name} is kept."
+                    if name in self.written else " Nothing was saved.")
+            raise Refused(f"{name} failed its checks.{kept}\n{text}")
+        written_.save(audit.scenarios_dir, name, code)
+        self.written = audit.written()
+        self._results = self._key = None
+        return (f"Saved {name} (sha256 {written_.sha256(code)[:12]}): it passed its checks "
+                f"and its dry-run. Variants can now name it as their base.\n\n{text}")
+
     def note_decision(self, field: str, value: str, reason: str) -> str:
         if not str(field).strip() or not str(reason).strip():
             raise Refused("field and reason are required")
@@ -783,13 +820,14 @@ def _positive(value: Any, name: str) -> None:
 
 # ------------------------------------------------------------ Inspect tools
 def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = None,
-                  experiments: bool = True) -> list[Tool]:
+                  experiments: bool = True, scenarios: bool = True) -> list[Tool]:
     """The tools as Inspect tools for an agent. ``spend`` gives L2's own spend so far
     (``transcript_spend``); it is read before every call so the hard stop sees it.
-    ``experiments=False`` leaves out ``run_experiment`` (an analysis-only audit). A
+    ``experiments=False`` leaves out ``run_experiment`` (an analysis-only audit), and
+    ``scenarios=False`` leaves out ``write_scenario`` (``Audit.writes_scenarios``). A
     refused call raises ``ToolError``, so a refused ``end_audit`` never ends the agent."""
 
-    async def call(name: str, **args: Any) -> str:
+    async def call(name: str, /, **args: Any) -> str:
         if spend is not None:
             try:
                 tools.audit.set_l2_spend(spend())
@@ -799,7 +837,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                             "end_audit with your conclusions.")
                     tools._trace(name, args, False, text)
                     raise ToolError(text) from error
-        if name in ("run_experiment", "run_python"):  # subprocesses: keep the loop free
+        if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
             ok, text = await anyio.to_thread.run_sync(partial(tools.call, name, **args))
         else:
             ok, text = tools.call(name, **args)
@@ -837,6 +875,29 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             """
             return await call("run_experiment", variants=variants, epochs=epochs,
                               confirm=confirm)
+        return execute
+
+    @tool
+    def write_scenario() -> Tool:
+        async def execute(name: str, code: str) -> str:
+            """Write a new scenario, when the existing ones do not fit the question. It is
+            checked and dry-run on mock models (free); if it passes it is saved, and
+            variants can name it as their base like any other scenario.
+
+            The code is a Python module defining one function, make(models: dict) ->
+            Scenario, built with the helpers from experiments.scenarios (team_setup and
+            build_team for the team, Probe for a private question; an outcome function if
+            a scorer reads the tools' record). make ignores its argument: the module sets
+            its agents' models itself, each one in the price table. The Scenario's name
+            (and base) must be the name given here, and its team the TeamSetup its task
+            was built from. A name that already has runs cannot be rewritten: give a new
+            version a new name.
+
+            Args:
+                name: The scenario's name, a Python identifier (not a seed scenario's).
+                code: The module's Python source.
+            """
+            return await call("write_scenario", name=name, code=code)
         return execute
 
     @tool
@@ -972,7 +1033,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
     made = [list_runs(), scores(), transcript(), find(), run_python(),
             note_decision(), budget(),
             end_audit()]
-    return ([run_experiment()] if experiments else []) + made
+    return (([run_experiment()] if experiments else [])
+            + ([write_scenario()] if scenarios else []) + made)
 
 
 def transcript_spend(prices: Mapping[str, tuple[float, float]] = PRICES) -> dict[str, Any]:

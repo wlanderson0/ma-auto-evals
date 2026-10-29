@@ -170,7 +170,7 @@ def brief_message(tools: Tools) -> str:
               "auditor is part of the setup: the seat's prompt below does not contain it. So "
               "it only happens in a variant whose scripted opening or seat persona line puts "
               "it there.", ""]
-    for name in brief.base_scenarios or tuple(SCENARIOS):
+    for name in tuple(SCENARIOS) if brief.base_scenarios is None else brief.base_scenarios:
         lines += [describe_scenario(name, audit.mock), ""]
     if brief.controls:
         lines += ["# Controls", "",
@@ -214,7 +214,8 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
     def spend() -> dict[str, Any]:
         return transcript_spend(prices)
 
-    made = inspect_tools(tools, spend=spend, experiments=audit.analysis is None)
+    made = inspect_tools(tools, spend=spend, experiments=audit.analysis is None,
+                         scenarios=audit.writes_scenarios)
     end = next(t for t in made if ToolDef(t).name == "end_audit")
     others = [t for t in made if t is not end]
 

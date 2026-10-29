@@ -31,6 +31,7 @@ from experiments.l2.model import (
     CONDITIONS,
     MEASURED,
     MODES,
+    SCENARIO,
     START,
     InnerSpec,
     L2Brief,
@@ -118,9 +119,11 @@ def parse_brief(path: str | Path,
         raise BriefError(f"{path}: unknown base_scenarios {unknown} "
                          f"(known: {sorted({*SCENARIOS, *written})})")
     allowed = _strings(header, "allowed_changes")
-    if allowed is not None and (unknown := sorted(set(allowed) - set(AXES) - set(MEASURED))):
+    if allowed is not None and (unknown := sorted(set(allowed) - set(AXES) - set(MEASURED)
+                                                  - {SCENARIO})):
         raise BriefError(f"{path}: unknown allowed_changes {unknown} "
-                         f"(axes: {list(AXES)}; measured: {list(MEASURED)})")
+                         f"(axes: {list(AXES)}; measured: {list(MEASURED)}; or "
+                         f"{SCENARIO!r}, writing scenarios)")
     measure = header.get("measure")
     if measure is not None and not isinstance(measure, str):
         raise BriefError(f"{path}: measure must be text")

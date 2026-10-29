@@ -48,7 +48,7 @@ from experiments.l2 import written as written_
 from experiments.l2.apply import recorded
 from experiments.l2.brief import VARIANT_ID, BriefError, _variants, parse_brief
 from experiments.l2.cost import log_cost
-from experiments.l2.model import L2Brief, Problems, Variant
+from experiments.l2.model import SCENARIO, L2Brief, Problems, Variant
 
 RESERVE = 0.10
 """Share of the budget held back from experiments for L2's final calls (spec §7)."""
@@ -130,6 +130,19 @@ class Audit:
     def written(self) -> written_.WrittenScenarios:
         """The written scenarios, as they are on disk now."""
         return written_.load(self.scenarios_dir)
+
+    @property
+    def writes_scenarios(self) -> bool:
+        """Whether L2 may write scenarios: not in an analysis-only audit, and only if the
+        brief's ``allowed_changes``, when set, names ``scenario``."""
+        allowed = self.brief.allowed_changes
+        return self.analysis is None and (allowed is None or SCENARIO in allowed)
+
+    def runs_of(self, base: str) -> list[str]:
+        """The variants of ``base`` that have run in this audit (at least one epoch)."""
+        return [row["variant"]["id"] for exp in self.experiments()
+                for row in m1._read_jsonl(exp / "runs.jsonl")
+                if row["variant"]["base"] == base and row["epochs_done"]]
 
     def _append(self, name: str, row: dict[str, Any]) -> None:
         with (self.out / name).open("a") as file:
