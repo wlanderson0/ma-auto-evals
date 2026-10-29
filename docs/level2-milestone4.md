@@ -1,6 +1,6 @@
 # Level 2 milestone 4: scenarios written by L2
 
-Status: ready to implement. Builds on milestone 3 (`docs/level2-milestone3.md`), whose code is on `sarah/level2-grid`; work on that branch. Spec: `docs/level2-interface.md` §2, §3.4, §3.5, §5, §9.1, §12, tests L2-9, L2-16, L2-17.
+Status: ready to implement. Builds on milestone 3 (`docs/level2-milestone3.md`), whose code is on `sarah/level2-grid`. Work on `sarah/level2-scenarios`, branched from `sarah/level2-grid`; leave `sarah/level2-grid` as milestone 3. Spec: `docs/level2-interface.md` §2, §3.4, §3.5, §5, §9.1, §12, tests L2-9, L2-16, L2-17.
 
 ## Goal
 
