@@ -136,3 +136,21 @@ def test_the_rebuild_models_brief_names_mfa_rumors_models():
     text = " ".join((BRIEFS / "rebuild-models.md").read_text().split())
     for agent, model in TARGETS["mfa_rumor"].items():
         assert f"{agent.capitalize()} {model}" in text
+
+
+def test_the_rebuild_check_runs_the_written_scenario_next_to_mfa_rumor():
+    """W (L2's written scenario on mfa_rumor's models) and M (mfa_rumor) differ only in base:
+    the same opening, Alice's belief line, and the same agents' models."""
+    from experiments.l2 import written
+    from experiments.l2.experiment import build
+
+    folder = BRIEFS / "rebuild-check"
+    found = written.load(folder / "scenarios")
+    w, m = parse_brief(folder / "brief.md", found).variants
+    assert (w.base, m.base) == ("mfa_rumour_migration_team", "mfa_rumor")
+    assert w.inner == m.inner and w.mutations[-1] == m.mutations[-1]
+    built = {v.id: build(v, mock=False, written=found)[1:] for v in (w, m)}
+    assert not any(problems.rejected for _, problems in built.values())
+    models = {vid: {a.name: (a.model, a.system_prompt) for a in b.task["setup"].agents}
+              for vid, (b, _) in built.items()}
+    assert models["W"] == models["M"]

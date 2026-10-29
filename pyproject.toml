@@ -55,6 +55,8 @@ timeout = 120
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# Scenario code L2 wrote, kept byte for byte (its hash is in the record).
+extend-exclude = ["experiments/l2/briefs/*/scenarios"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
