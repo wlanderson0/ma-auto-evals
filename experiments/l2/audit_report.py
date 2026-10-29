@@ -223,10 +223,12 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         except Exception as error:
             found = [f"could not check: {type(error).__name__}: {error}"]
         notes += [f"- compare {args['a']} vs {args['b']} ({args['scorer']}): {n}"
-                  for n in found]
+                  for n in [*found, *_unknown_answers(tools, [args["a"], args["b"]],
+                                                      args["scorer"])]]
     for args in scores:
         notes += [f"- scores {', '.join(args['variant_ids'])} ({args['scorer']}): {n}"
-                  for n in _score_departures(tools, args["variant_ids"])]
+                  for n in [*_score_departures(tools, args["variant_ids"]),
+                            *_unknown_answers(tools, args["variant_ids"], args["scorer"])]]
     if brief.measure is not None:
         for args in compares + scores:
             ids = [args["a"], args["b"]] if "a" in args else args["variant_ids"]
@@ -288,6 +290,27 @@ def _score_departures(tools: Tools, ids: list[str]) -> list[str]:
         notes.append(f"Note: unequal epochs ({epochs}); the guidance is the same number of "
                      "epochs on every side.")
     return notes
+
+
+def _unknown_answers(tools: Tools, ids: list[str], scorer: str) -> list[str]:
+    """A probe read where most answers are unknown (UNPARSED, or no answer at all)."""
+    if scorer != "probe":
+        return []
+    try:
+        results = tools.results()
+        unknown = {(vid, agent): sum(results.adopted(s, agent, "probe") is None
+                                     for s in results.of(vid))
+                   for vid in ids for agent in results.targets(vid)}
+        asked = {(vid, agent): len(results.of(vid)) for vid, agent in unknown}
+    except Exception as error:
+        return [f"could not check: {type(error).__name__}: {error}"]
+    total, answers = sum(unknown.values()), sum(asked.values())
+    if not answers or total * 2 <= answers:
+        return []
+    per = ", ".join(f"{vid} {agent} {unknown[vid, agent]}/{asked[vid, agent]}"
+                    for vid, agent in unknown)
+    return [f"Note: {total} of {answers} probe answers are unknown (unparsed or missing: "
+            f"{per}), so conclusions resting on this probe are thin."]
 
 
 def _again(function: Any, args: dict[str, Any]) -> str:
