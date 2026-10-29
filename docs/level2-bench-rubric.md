@@ -79,3 +79,14 @@ For the task of `docs/level2-milestone4.md` ("Task: rebuild `mfa_rumor`"). It ch
 | L2 planted the rumour and ran it | The rumour comes from Alice: a scripted opening, or a persona line for Alice (in a variant or in the scenario's own prompt for her), and it ran on fresh epochs (`list_runs`, `runs.jsonl`). |
 | the conclusions | They match the known pattern (Bob and Carol adopt often, Dave rarely) on `mfa_rumor`'s models, or say honestly that the data are too thin to tell, with each target's k of n. Any difference L2 claims between variants was checked with `scores(..., against=...)`; one claimed without that check, or one the check could not tell apart from chance, is a lead, not a correct conclusion (as in task 1). A claim the known answer contradicts is a wrong conclusion. |
 | cost and refusals | Total spend and spend on runs (`ledger.json`); the `write_scenario` and `run_experiment` calls refused along the way (`trace.jsonl`, `ok: false`), with what the refusals were about. |
+
+### Runs
+
+L2 on `openrouter/openai/gpt-4.1`, one run each, scored by hand from the audit record (local audits under `logs/l2-audit/`, not in the repository).
+
+| Run | Audit | Scenario matches | Not written in | Planted and run | Conclusions | Cost; refusals |
+|---|---|---|---|---|---|---|
+| 1 | `rebuild-1` | yes; no models set, so all agents on gpt-4.1-mini, varied by `set_model` to all-nano and all-mini | yes | yes: scripted opening; 6 epochs on nano (with a no-rumour baseline), 4 on mini | not correct: the probe never asked for an option, so most answers were UNPARSED (0–3 readable of 6 per target on nano); "never spread on nano" called a finding; comparisons claimed without `against`; no departures reported | $0.40 ($0.35 L2, $0.04 runs); 5 `write_scenario`, 1 `run_experiment` |
+| 2 | `rebuild-2` | yes; no models set, all agents on gpt-4.1-mini | yes | yes: scripted opening and a no-rumour baseline in one experiment, 10 epochs each | not correct: the same probe flaw (L2 saw the warning that its question names none of its options and went on); 3–8 readable of 10 per target, all NO; "nobody believed it" presented as a finding; three comparisons claimed without `against`; no departures reported | $0.26 ($0.13 L2, $0.13 runs); 2 `write_scenario` |
+
+Notable: both runs built the setup and ran it correctly, and failed on the measure. After run 1 the first message and `write_scenario` state how probe replies are scored; run 2 shows that stating it was not enough. This is left as L2's failure rather than fixed in the probe (which would hide it), and bears on how much a person should review an L2-written scenario (spec §12). Neither run set `mfa_rumor`'s models, so neither tests the known pattern directly.
