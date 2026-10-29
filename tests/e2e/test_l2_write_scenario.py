@@ -188,13 +188,18 @@ def test_write_scenario_is_offered_only_when_writing_scenarios_is_allowed(tmp_pa
     assert "write_scenario" not in names(tools)
 
 
-def test_an_analysis_only_audit_offers_no_write_scenario(tmp_path):
+def test_an_analysis_only_audit_reads_written_runs_but_writes_no_scenario(tmp_path):
+    """It reads an experiment of an L2 audit, whose written scenarios are in that
+    audit's scenarios/."""
     source = new(tmp_path / "source")
     ok, text = source.call("write_scenario", name="rumour", code=RUMOUR)
     assert ok, text
     assert source.call("run_experiment", variants=json.dumps([W1]), epochs=1)[0]
     [exp] = source.audit.experiments()
     tools = new(tmp_path / "analysis", analysis=exp)
+    assert set(tools.written) == {"rumour"}
+    ok, text = tools.call("scores", variant_ids=["W1"], scorer="probe")
+    assert ok and "W1 (epochs [1])" in text, text
     ok, text = tools.call("write_scenario", name="rumour", code=RUMOUR)
     assert not ok and "analysis-only" in text
     assert "write_scenario" not in names(tools)

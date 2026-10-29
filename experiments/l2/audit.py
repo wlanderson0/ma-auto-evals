@@ -124,8 +124,11 @@ class Audit:
     @property
     def scenarios_dir(self) -> Path:
         """Where the audit's written scenarios are: its own ``scenarios/``, or, for an
-        analysis-only audit, the analysed directory's (read only)."""
-        return (self.analysis if self.analysis is not None else self.out) / "scenarios"
+        analysis-only audit, the ``scenarios/`` of the L2 audit holding the analysed
+        directory (``<audit>/experiments/exp-<n>``), read only."""
+        if self.analysis is None:
+            return self.out / "scenarios"
+        return self.analysis.parent.parent / "scenarios"
 
     def written(self) -> written_.WrittenScenarios:
         """The written scenarios, as they are on disk now."""
