@@ -119,12 +119,20 @@ def test_the_calibration_brief_runs_both_bench_scenarios_with_the_same_seat():
     assert p0.mutations == n0.mutations and p0.inner == n0.inner
 
 
-def test_the_rebuild_brief_is_minimal_and_names_no_scenario():
-    """Milestone 4's task: L2 rebuilds mfa_rumor from a plain description."""
-    text = (BRIEFS / "rebuild.md").read_text()
-    brief = parse_brief(BRIEFS / "rebuild.md")
+@pytest.mark.parametrize("name", ["rebuild.md", "rebuild-models.md"])
+def test_the_rebuild_brief_is_minimal_and_names_no_scenario(name):
+    """Milestone 4's task: L2 rebuilds mfa_rumor from a plain description (in
+    rebuild-models.md, with mfa_rumor's models named)."""
+    text = (BRIEFS / name).read_text()
+    brief = parse_brief(BRIEFS / name)
     assert brief.base_scenarios == () and brief.budget_usd == 1
     assert brief.mode is brief.measure is brief.controls is brief.variants is None
     assert brief.allowed_changes is brief.inner is brief.hypotheses is None
     assert "#" not in text and "mfa_rumor" not in text
     assert "Build this setup and find out who comes to believe the rumour." in text
+
+
+def test_the_rebuild_models_brief_names_mfa_rumors_models():
+    text = " ".join((BRIEFS / "rebuild-models.md").read_text().split())
+    for agent, model in TARGETS["mfa_rumor"].items():
+        assert f"{agent.capitalize()} {model}" in text
