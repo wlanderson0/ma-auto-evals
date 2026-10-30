@@ -39,7 +39,10 @@ One experiment is one Cosmos run; each of its samples is one L2 run. The folder 
   inner conditions have no auditor whose interventions it would count.
 - ``manifest.json``: from ``experiments.run.build_manifest``, with each variant's
   built scenario, so per-agent models are as run (written scenarios and ``set_model``
-  included). ``--pr`` decides which PR Cosmos files the run under.
+  included). It describes the run, not the export: the commit, the dirty flag and the
+  start and end times come from the experiment's ``decisions.json`` (the branch only
+  when the checkout is at that commit, else null). ``--pr`` decides which PR Cosmos
+  files the run under.
 - For an experiment of an L2 audit (the directory two levels up has ``brief.md`` and
   ``report.md``): ``report.html`` (Cosmos's "Open report"), the audit's report followed
   by its brief, the experiment's variants (``variants.jsonl``, one record each) and the
@@ -55,6 +58,7 @@ import json
 import shlex
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from inspect_ai.log import read_eval_log, write_eval_log
@@ -63,7 +67,7 @@ from markdown_it import MarkdownIt
 from experiments.l2 import experiment as m1
 from experiments.l2 import written as written_
 from experiments.l2.results import Results
-from experiments.run import _now, build_manifest, write_manifest
+from experiments.run import build_manifest, write_manifest
 from experiments.scenarios import Scenario
 
 
@@ -85,17 +89,22 @@ def export(experiment: Path, out: Path, *, pr: int | None = None,
     experiment, out = Path(experiment), Path(out)
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"{out} is not empty")
+    if out.resolve().is_relative_to(experiment.resolve()):
+        raise ValueError(f"{out} is inside {experiment}, which the export never changes")
     audit = audit_of(experiment)
     written = written_.load(audit / "scenarios") if audit is not None else written_.NONE
     results = Results.load(experiment, written)
     if results.problems:
         raise ValueError(f"{experiment}: " + "; ".join(results.problems))
-    mock = json.loads((experiment / "decisions.json").read_text())["mock"]
+    decisions = json.loads((experiment / "decisions.json").read_text())
+    mock = decisions["mock"]
 
     built: dict[str, Scenario] = {}
     for vid, row in results.runs.items():
         if row["logs"]:
-            _, scenario, _ = m1.build(m1.variant_from(row["variant"]), mock, written)
+            _, scenario, problems = m1.build(m1.variant_from(row["variant"]), mock, written)
+            if scenario is None:
+                raise ValueError(f"{vid} cannot be rebuilt: " + "; ".join(problems.rejections))
             built[vid] = scenario
 
     out.mkdir(parents=True, exist_ok=True)
@@ -124,13 +133,23 @@ def export(experiment: Path, out: Path, *, pr: int | None = None,
     epochs = max((row["epochs_done"] for row in results.runs.values()), default=0)
     manifest = build_manifest({s.name: s for s in built.values()}, conditions, epochs,
                               m1.models_for(mock), pr=pr, argv=list(argv))
-    manifest["finished_at"] = _now()
+    run = decisions["provenance"]
+    if manifest["sha"] != run["commit"]:
+        manifest["branch"] = None
+    manifest.update(sha=run["commit"], short_sha=run["commit"] and run["commit"][:7],
+                    dirty=run["dirty"], started_at=_iso(decisions["started"]),
+                    finished_at=_iso(decisions.get("finished")))
     write_manifest(out, manifest)
 
     if audit is not None:
         ran = sorted({s.base for s in built.values()} & set(written))
         (out / "report.html").write_text(report_html(audit, experiment, ran))
     return out
+
+
+def _iso(stamp: str | None) -> str | None:
+    """An ``experiment.py`` time stamp (``%Y-%m-%dT%H:%M:%S%z``) as ISO 8601."""
+    return None if stamp is None else datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S%z").isoformat()
 
 
 def report_html(audit: Path, experiment: Path, scenarios: Sequence[str]) -> str:

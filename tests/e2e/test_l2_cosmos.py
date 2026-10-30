@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from inspect_ai.log import read_eval_log
+from inspect_ai.log import read_eval_log, write_eval_log
 
 from experiments.l2.agent import run_l2
 from experiments.l2.audit import Audit
@@ -24,7 +24,7 @@ from experiments.l2.experiment import launch_subprocess, run_experiment
 from experiments.l2.fake import PROMPT, fake_model
 from experiments.l2.results import Results
 from experiments.l2.tools import Tools
-from experiments.l2.written import load, sha256
+from experiments.l2.written import sha256
 from experiments.run import TARGETS
 from tests.support.l2_audit import InProcess, fixed
 from tests.support.written import RUMOUR
@@ -129,11 +129,21 @@ def test_a_name_clash_fails_and_overwrites_nothing(experiment, tmp_path):
     assert read_eval_log(str(written)).samples[0].epoch == 1  # the first, not overwritten
 
 
-def test_the_folder_must_be_new_or_empty(experiment, tmp_path):
+def test_the_folder_must_be_new_or_empty_and_outside_the_experiment(experiment, tmp_path):
     (tmp_path / "folder").mkdir()
     (tmp_path / "folder" / "x.json").write_text("{}")
     with pytest.raises(FileExistsError):
         export(experiment, tmp_path / "folder")
+    with pytest.raises(ValueError, match="never changes"):
+        export(experiment, experiment / "cosmos")
+    assert not (experiment / "cosmos").exists()
+
+
+def test_a_variant_that_cannot_be_rebuilt_fails_with_the_reason(audit, tmp_path):
+    """An audit's experiment copied out of its audit: its written scenario is not found."""
+    shutil.copytree(audit / "experiments" / "exp-1", tmp_path / "exp")
+    with pytest.raises(ValueError, match="W1 cannot be rebuilt: unknown base scenario 'rumour'"):
+        export(tmp_path / "exp", tmp_path / "folder")
 
 
 def test_the_experiment_directory_is_unchanged(experiment, exported, audit, audit_exported):
@@ -165,19 +175,64 @@ def test_results_have_one_row_per_sample_with_each_targets_scores(experiment, ex
             (path.parent.parent.name, path.parent.name, sample.epoch)]
 
 
+def test_each_row_carries_its_own_logs_scores(experiment, tmp_path):
+    """The mocks score every target 0, so one log gets distinct values: each row must
+    show exactly what its own log's scorer recorded, for the right target."""
+    copy = tmp_path / "exp"
+    shutil.copytree(experiment, copy)
+    [b1] = [json.loads(line) for line in (copy / "runs.jsonl").read_text().splitlines()
+            if json.loads(line)["variant"]["id"] == "B1"]
+    patched = copy / b1["logs"][1]  # B1, epoch 2
+    log = read_eval_log(str(patched))
+    judged = log.samples[0].scores["post_judge"].metadata["agents"]
+    judged["bob"]["outcome"] = {"uses": 3}
+    judged["carol"]["flagged_posts"] = 2
+    write_eval_log(log, str(patched))
+    export(copy, tmp_path / "folder")
+    rows = json.loads((tmp_path / "folder" / "results.json").read_text())["results"]
+    for row in rows:
+        [path] = (tmp_path / "folder").rglob(row["log"])
+        agents = read_eval_log(str(path)).samples[0].scores["post_judge"].metadata["agents"]
+        for agent, values in row["agents"].items():
+            assert values == {"outcome": agents[agent]["outcome"],
+                              "post_judge": agents[agent]["flagged_posts"]}
+    [hit] = [r for r in rows if r["agents"]["bob"]["outcome"] == {"uses": 3}]
+    assert (hit["variant_id"], hit["epoch"], hit["log"]) == ("B1", 2, patched.name)
+    assert hit["agents"]["carol"]["post_judge"] == 2 and hit["agents"]["dave"]["post_judge"] == 0
+    assert sum(r["agents"]["carol"]["post_judge"] for r in rows) == 2
+
+
 # ----------------------------------------------------------------- manifest
-def test_the_manifest_records_the_pr_and_each_agents_model_as_run(exported):
+def test_the_manifest_records_the_pr_and_each_agents_model_as_run(experiment, exported):
     folder, _ = exported
     manifest = json.loads((folder / "manifest.json").read_text())
     assert manifest["schema"] == "cosmos.manifest/1" and manifest["pr"] == 28
     assert set(manifest["scenarios"]) == BUILT and manifest["conditions"] == ["scripted"]
     assert manifest["epochs"] == 2 and manifest["seats"] == dict.fromkeys(BUILT, "alice")
-    assert manifest["finished_at"] is not None
+    decisions = json.loads((experiment / "decisions.json").read_text())
+    assert manifest["sha"] == decisions["provenance"]["commit"]
+    assert manifest["dirty"] == decisions["provenance"]["dirty"]
+    assert manifest["started_at"].startswith(decisions["started"][:19])
+    assert manifest["finished_at"].startswith(decisions["finished"][:19])
     for path in logs_in(folder):
         log = read_eval_log(str(path))
         agents = log.samples[0].metadata["experiment"]["setup"]["agents"]
         ran = {a["name"]: a.get("model") or log.eval.model for a in agents}
         assert manifest["models"]["agents"][path.parent.parent.name] == ran
+
+
+def test_the_manifest_records_the_runs_commit_not_the_exports(experiment, tmp_path):
+    """An experiment run at another commit is filed under that commit, with no branch
+    (only the checkout's own commit has a known branch)."""
+    copy = tmp_path / "exp"
+    shutil.copytree(experiment, copy)
+    decisions = json.loads((copy / "decisions.json").read_text())
+    decisions["provenance"].update(commit="ab" * 20, dirty=True)
+    (copy / "decisions.json").write_text(json.dumps(decisions))
+    export(copy, tmp_path / "folder")
+    manifest = json.loads((tmp_path / "folder" / "manifest.json").read_text())
+    assert (manifest["sha"], manifest["short_sha"]) == ("ab" * 20, "abababa")
+    assert manifest["dirty"] is True and manifest["branch"] is None
 
 
 def test_the_manifest_records_a_set_model_from_the_built_scenario(experiment, tmp_path):
@@ -210,7 +265,6 @@ def test_an_audits_experiment_gets_its_report_with_brief_variants_and_code(audit
     for line in (audit / "experiments" / "exp-1" / "variants.jsonl").read_text().splitlines():
         assert html.escape(json.dumps(json.loads(line), indent=2)) in page
     assert html.escape(RUMOUR) in page and sha256(RUMOUR) in page
-    assert load(audit / "scenarios")["rumour"].sha256 == sha256(RUMOUR)
     # Only files Cosmos uploads: nothing is copied as .md, .py, .jsonl or .sha256.
     assert {p.suffix for p in folder.rglob("*") if p.is_file()} == {".eval", ".json", ".html"}
     rows = json.loads((folder / "results.json").read_text())["results"]
