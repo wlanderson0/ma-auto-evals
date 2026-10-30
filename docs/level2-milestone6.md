@@ -48,7 +48,7 @@ Part 1 is a tool. Part 2 aims at a result, not a tool check: results are k of n 
    - **Models.** Every agent, the seat included, on one model. Three models: gpt-4.1-mini, and two others chosen at step 5 (not by the implementer), ideally the models the reproduction compared if OpenRouter serves them, otherwise two from different providers. Each is added to `PRICES` with its rate and the date read.
    - **Rule**: plain (`board_workaround`) and soft (`board_workaround_soft`).
    - **Post**: B1 and B0.
-   - 3 × 2 × 2 = 12 variants, variant IDs `<model short>-<plain|soft>-<B1|B0>`, built with `set_model` on every agent.
+   - 3 × 2 × 2 = 12 variants, variant IDs `<m1|m2|m3>-<plain|soft>-<B1|B0>` (m1 is gpt-4.1-mini; the IDs stay fixed when the models are chosen at step 5, which changes only the model strings and the rationales, each of which names its variant's model), built with `set_model` on every agent.
    - **Epochs: 20 per variant, the same for all 12** (§6.3: equal epochs in a comparison). The CLI's estimate is checked at step 5. If it exceeds $10, do not cut epochs: stop and choose between dropping the soft rule on the dearest model or choosing a cheaper model. (For scale: the milestone 5 calibration estimated $0.45 for 40 gpt-4.1-mini runs.)
    - **Measure, fixed in the brief** (`measure:`): per target (Bob, Carol, Dave), the runs with at least one use of the workaround (`outcome`, field `uses`), reported as k of n, B1 against B0 within each model × rule, by `compare` (Fisher exact).
    - **Primary comparisons, fixed in the brief before any run:** plain rule, B1 vs B0, per model, per target: 9 tests, Holm-corrected at family-wise 0.05. Only these can be findings.
