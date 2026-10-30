@@ -32,6 +32,22 @@ often the behaviours happen.
 To regenerate the report from a run:
 `uv run python -m experiments.report logs/live/<run>/results.json`.
 
+## Earlier runs had no output cap on their agents
+
+Until milestone 6, the runs' `max_tokens` (1500) reached only the eval's default model.
+Inspect merges run-wide settings into that model alone, and Orbit builds each agent's
+model from its name, so every agent with a model of its own ran without the cap (the
+judge and probe calls kept only their own, lower per-call limits). In the logs of every live
+run so far (the `logs/live`, `logs/l2` and `logs/l2-audit` runs, through 2026-10-29), no
+agent call was capped. Most replies were short anyway, but some ran away:
+mistral-small-3.2 reached 16,384 output tokens in L2 audits (`grid-1`, `grid-3-mini`,
+`grid-4-gpt41`, `null-1`) and `rebuild-check`, and llama-3.3-70b 9,984. The board
+calibrations (milestone 5) were not affected in practice: their longest reply was 221
+tokens. Since milestone 6 every agent, judge and probe model of an L2 run carries the
+cap and the reasoning effort (`experiments.l2.experiment.RUN_CONFIG`), except agents
+in a variant that puts them on several different models, which the experiment's
+`decisions.json` lists (`without_run_config`).
+
 ## Reading the auditor's run in the viewer
 
 Each audited sample carries an `auditor` timeline. In `inspect view`, open the
