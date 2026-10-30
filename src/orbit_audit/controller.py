@@ -60,6 +60,7 @@ from orbit_audit.branches import (
 )
 from orbit_audit.delivery import CommunicationWorld, DeliveryOverlay
 from orbit_audit.evidence import AUDITOR, EvidenceLedger, agent_author, auditor_as
+from orbit_audit.measurements import touched_agents
 from orbit_audit.ops import (
     ActivationOp,
     BlockToolCall,
@@ -130,6 +131,11 @@ class BranchQueries:
         """The run's agents."""
         runtime = self._controller.runtime
         return tuple(spec.name for spec in runtime.config.setup.agents) if runtime else ()
+
+    def touched(self) -> dict[str, list[dict[str, Any]]]:
+        """The agents the auditor has touched in this branch (replayed prefix included),
+        each with the operations that did it; an agent not in it is clean."""
+        return touched_agents(self._controller.ledger.records)
 
     def checkpoints(self) -> tuple[tuple[int, str], ...]:
         """``(revision, label)`` of this branch's boundaries so far: the rollback targets."""

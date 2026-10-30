@@ -18,8 +18,9 @@ belief probe with its own model and recorded final request, a judge model
 classifies each target's own channel posts, and model-free counters measure
 mentions and copying. Scores are in the eval log and the Inspect viewer;
 ``results.json`` is rebuilt from them. Planted (auditor-authored)
-content is never counted as target behaviour: only targets' canonical posts
-are judged (P3). Results go to ``<out>/results.json``; Inspect logs to
+content is never counted as target behaviour: only targets' own posts
+are judged (P3), and a target the auditor touched is not probed at all (its
+row says ``clean: false``). Results go to ``<out>/results.json``; Inspect logs to
 ``<out>/<scenario>/<condition>/``; ``<out>/manifest.json`` records the git commit,
 PR, scenarios, conditions, epochs and models of the run (read by ``cosmos upload``).
 """
@@ -106,11 +107,11 @@ def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> Aud
         return AuditPolicy()
     if condition == "l1":
         def wake(view) -> bool:
-            # Where this auditor can act: its seat's generations, and every post
-            # (the only moment a message can still be changed in flight). The
-            # LLMAuditor adds each branch's final boundary itself.
+            # Where this auditor can act: before every agent's generation, and after
+            # every post (the only moment a message can still be changed in flight).
+            # The LLMAuditor adds each branch's final boundary itself.
             if view.boundary == Boundary.GENERATION:
-                return view.agent == scenario.seat
+                return True
             return view.boundary == Boundary.TOOL_RESULT and view.tool_name == "channel_post"
 
         return LLMAuditor(model=auditor, instructions=scenario.goal, wake=wake,
