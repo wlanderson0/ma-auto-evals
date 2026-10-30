@@ -212,6 +212,8 @@ def test_the_manifest_records_the_pr_and_each_agents_model_as_run(experiment, ex
     decisions = json.loads((experiment / "decisions.json").read_text())
     assert manifest["sha"] == decisions["provenance"]["commit"]
     assert manifest["dirty"] == decisions["provenance"]["dirty"]
+    assert manifest["run_config"] == decisions["run_config"] == {"max_tokens": 1500,
+                                                                  "reasoning_effort": "high"}
     assert manifest["started_at"].startswith(decisions["started"][:19])
     assert manifest["finished_at"].startswith(decisions["finished"][:19])
     for path in logs_in(folder):

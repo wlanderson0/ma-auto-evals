@@ -27,11 +27,16 @@ The audit directory ``out/`` holds ``brief.md`` (a copy), ``variants.jsonl``
 any stop), ``runs.jsonl`` (one ``VariantRun`` per variant, with its log paths in
 epoch order), ``cost.json`` and the eval logs under ``logs/epoch-<e>/``. Results
 are read from the logs (``experiments.l2.results``), never from these files.
+
+The agents', judge's and probes' models carry ``RUN_CONFIG`` (``run_models``,
+``run_roles``), recorded in ``decisions.json``; an inner L0/L1 auditor keeps its own
+settings.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import json
 import shutil
@@ -43,7 +48,9 @@ from pathlib import Path
 from typing import Any
 
 from inspect_ai import eval as inspect_eval
+from inspect_ai import task_with
 from inspect_ai.log import EvalLog, read_eval_log
+from inspect_ai.model import GenerateConfig, Model, get_model
 
 from experiments.l2 import written as written_
 from experiments.l2.apply import ApplyError, apply, recorded
@@ -113,6 +120,53 @@ def build(variant: Variant, mock: bool, written: written_.WrittenScenarios = wri
     return base, built, check(base, built, variant)
 
 
+RUN_CONFIG = GenerateConfig(max_tokens=MAX_TOKENS, reasoning_effort="high")
+"""The settings attached to every model of a run: the agents', the judge's and the
+probes'. Models without reasoning are expected to ignore the effort."""
+
+
+def configured(model: str | Model) -> Model:
+    """``model`` with ``RUN_CONFIG`` attached (uncached: Inspect's cached clients belong
+    to the event loop of the eval that made them)."""
+    if isinstance(model, str):
+        return get_model(model, config=RUN_CONFIG, memoize=False)
+    attached = copy.copy(model)
+    attached.config = model.config.merge(RUN_CONFIG)
+    return attached
+
+
+def run_models(built: Scenario, models: dict[str, Any]) -> tuple[Scenario, Model]:
+    """``(built, default)``: the variant to run and its task's default model, with
+    ``RUN_CONFIG`` attached (the judge's and probes' roles: ``run_roles``).
+
+    Orbit builds an agent's model from its name alone, without settings, so the
+    settings reach agents through the task's default model: when every agent runs on
+    one model, their names are cleared and that model is the default (probes then ask
+    it too, as the agent's own model). Agents on several models keep their names and
+    run without the settings (recorded in ``decisions.json``)."""
+    default = one_model(built, models["target"])
+    if default is None:
+        default = models["target"]
+    else:
+        setup = built.task["setup"]
+        setup = setup.model_copy(update={"agents": [
+            spec.model_copy(update={"model": None}) for spec in setup.agents]})
+        built = dataclasses.replace(built, task={**built.task, "setup": setup})
+    return built, configured(default)
+
+
+def run_roles(models: dict[str, Any]) -> dict[str, Model]:
+    """The judge's and (on the mocks) the probes' roles, with ``RUN_CONFIG`` attached."""
+    return {role: configured(models[role]) for role in ("judge", "probe") if role in models}
+
+
+def one_model(built: Scenario, default: str | Model) -> str | Model | None:
+    """The one model all of ``built``'s agents run on (``default`` for an agent with
+    none of its own), else ``None``."""
+    used = {spec.model or default for spec in built.task["setup"].agents}
+    return next(iter(used)) if len(used) == 1 else None
+
+
 def models_for(mock: bool) -> dict[str, Any]:
     if mock:
         models = _mock_models()
@@ -137,18 +191,20 @@ def run_epoch(brief_path: Path, ids: Sequence[str], epoch: int, out: Path,
         if built is None or problems.rejected:  # the parent never sends these
             raise ValueError(f"variant {vid} is rejected: {problems.rejections}")
         condition = by_id[vid].inner.condition
-        tasks.append(build_task(built, condition, models,
-                                limits=by_id[vid].inner.limits or LIMITS,
-                                metadata=l2_metadata(built, condition, epoch=epoch)))
+        metadata = l2_metadata(built, condition, epoch=epoch)
+        built, default = run_models(built, models)
+        tasks.append(task_with(build_task(built, condition, models,
+                                          limits=by_id[vid].inner.limits or LIMITS,
+                                          metadata=metadata), model=default))
         names[built.name] = vid
-    roles = {"judge": models["judge"], **({"probe": models["probe"]} if "probe" in models else {})}
     # No outer id_scope(sequential_ids()) as run_condition has: the runner gives every
     # sample its own id scope, and a counter shared by tasks running in parallel would
     # not be reproducible anyway.
     logs = inspect_eval(
-        tasks, model=models["target"], log_dir=str(out / "logs" / f"epoch-{epoch}"),
+        tasks, model=configured(models["target"]),
+        log_dir=str(out / "logs" / f"epoch-{epoch}"),
         display="none", max_tasks=len(tasks), epochs=1, fail_on_error=False,
-        score_on_error=True, max_tokens=MAX_TOKENS, model_roles=roles,
+        score_on_error=True, model_roles=run_roles(models),
         attempt_timeout=ATTEMPT_TIMEOUT, max_retries=MAX_RETRIES,
         retry_on_error=SAMPLE_RETRIES)
     paths = {names[log.eval.task]: relative(log.location, out) for log in logs}
@@ -389,6 +445,8 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
     over = guess["usd"] > brief.budget_usd
     decisions: dict[str, Any] = {
         "mode": brief.mode, "epochs": epochs, "mock": mock, "budget_usd": brief.budget_usd,
+        "run_config": RUN_CONFIG.model_dump(exclude_none=True),
+        "without_run_config": [v.id for v, b in accepted if one_model(b, AUDITOR) is None],
         "estimate": guess, "over_budget": over, "confirmed": confirm,
         "launched": bool(accepted) and (not over or confirm),
         "accepted": [v.id for v, _ in accepted],

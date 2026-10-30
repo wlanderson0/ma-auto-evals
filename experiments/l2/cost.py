@@ -39,6 +39,10 @@ PRICES: dict[str, tuple[float, float]] = {
     "openrouter/meta-llama/llama-3.3-70b-instruct": (0.71, 0.71),
     "openrouter/openai/gpt-4.1-mini": (0.40, 1.60),  # the judge (and L1/L0 auditor)
     "openrouter/openai/gpt-4.1": (2.00, 8.00),  # a stronger L2 (listed rate, 2026-10-28)
+    # The board study's m2 and m3 (read 2026-10-30). Listed 0.006 / 7 and 0.07 / 1.40, but
+    # OpenRouter routes them across many providers: these are the dearest seen.
+    "openrouter/z-ai/glm-5.2": (2.31, 8.00),
+    "openrouter/z-ai/glm-5.3": (2.80, 8.80),
 }
 FREE_PREFIXES = ("mockllm/",)
 """Offline mock models: no provider, no cost."""

@@ -7,6 +7,7 @@ the subprocess entry point itself.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -16,15 +17,19 @@ import yaml
 from inspect_ai.log import read_eval_log
 
 from experiments.l2.brief import parse_brief
-from experiments.l2.experiment import build as build_variant
 from experiments.l2.experiment import (
+    RUN_CONFIG,
     estimate,
     launch_subprocess,
+    one_model,
     resolve,
     run_epoch,
     run_experiment,
+    run_models,
     token_estimate,
 )
+from experiments.l2.experiment import build as build_variant
+from experiments.run import AUDITOR
 
 MILESTONE1 = Path(__file__).parents[2] / "experiments" / "l2" / "briefs" / "milestone1.md"
 
@@ -129,6 +134,102 @@ def test_epochs_run_one_call_each_over_every_variant(tmp_path):
         assert (out / name).exists(), name
     assert (out / "brief.md").read_text() == (tmp_path / "brief.md").read_text()
     assert json.loads((out / "decisions.json").read_text())["stopped"] is None
+
+
+def on_one_model(path: Path, vid: str, model: str) -> Path:
+    """``path``'s brief with ``vid`` copied as ``vid``-one, every agent set to ``model``."""
+    header = yaml.safe_load(re.match(r"---\n(.*?)\n---\n", path.read_text(), re.S)[1])
+    [base] = [v for v in header["variants"] if v["id"] == vid]
+    one = json.loads(json.dumps(base))
+    one.update(id=f"{vid}-one", rationale="every agent on one model of its own")
+    one["mutations"] = [*one.get("mutations", []), *(
+        {"axis": "models", "op": "set_model", "args": {"agent": agent, "model": model}}
+        for agent in ("alice", "bob", "carol", "dave"))]
+    header["variants"] = [one]
+    path.write_text("---\n" + yaml.safe_dump(header, sort_keys=False) + "---\nQ?\n")
+    return path
+
+
+def test_every_model_call_carries_the_run_config(tmp_path):
+    """On the mocks (where agents carry no model name): every agent call, and the
+    judge's and probes', carries max_tokens and the reasoning effort (the scorers'
+    own, lower max_tokens win for theirs)."""
+    out = tmp_path / "out"
+    brief = on_one_model(subset(tmp_path, ["K1"]), "K1", "openrouter/openai/gpt-4o-mini")
+    [run] = run_experiment(brief, 1, out, mock=True, launch=Launcher())
+    decisions = json.loads((out / "decisions.json").read_text())
+    assert decisions["run_config"] == {"max_tokens": 1500, "reasoning_effort": "high"}
+    assert decisions["without_run_config"] == []
+    [sample] = read_eval_log(str(resolve(run.logs[0], out))).samples
+    calls = [e for e in sample.events if e.event == "model"]
+    by_role = {role: [e.config for e in calls if e.role == role] for role in
+               (None, "judge", "probe")}
+    assert all(by_role.values()), {r: len(c) for r, c in by_role.items()}
+    assert {(c.max_tokens, c.reasoning_effort) for c in by_role[None]} == {(1500, "high")}
+    for role in ("judge", "probe"):
+        assert {c.reasoning_effort for c in by_role[role]} == {"high"}
+        assert all(c.max_tokens is not None and c.max_tokens <= 1500 for c in by_role[role])
+
+
+def test_agents_with_model_names_get_the_run_config_on_every_call(tmp_path, monkeypatch):
+    """The live path, end to end: agents keep the model set_model gave each, and only
+    get_model is swapped for the scripted mocks (the agents' model -> the scripted
+    target, the judge's -> the scripted judge). Every agent call, the judge's and the
+    probes' (asked of the agent's own model) carry the run config."""
+    import copy
+
+    from inspect_ai.model import GenerateConfig
+
+    import experiments.l2.experiment as experiment
+    from experiments.run import _mock_models
+    from tests.support.l2_audit import estimate_of
+
+    mocks, model = _mock_models(), "openrouter/openai/gpt-4o-mini"
+
+    def scripted(name, config=None, memoize=True):
+        made = copy.copy(mocks["target"] if name == model else mocks["judge"])
+        made.config = made.config.merge(config or GenerateConfig())
+        return made
+
+    monkeypatch.setattr(experiment, "get_model", scripted)
+    out = tmp_path / "out"
+    brief = on_one_model(subset(tmp_path, ["K1"]), "K1", model)
+    [run] = run_experiment(brief, 1, out, launch=Launcher(), estimator=estimate_of(0.0))
+    assert run.epochs_done == 1 and not run.problems.rejected
+    [sample] = read_eval_log(str(resolve(run.logs[0], out))).samples
+    calls = [e for e in sample.events if e.event == "model"]
+    agents = {e.config.max_tokens for e in calls if e.role is None}
+    judged = [e for e in calls if e.role == "judge"]
+    assert calls and judged and 1500 in agents
+    assert {e.config.reasoning_effort for e in calls} == {"high"}
+    assert all(e.config.max_tokens is not None and e.config.max_tokens <= 1500 for e in calls)
+    assert {e.model for e in calls} == {"mockllm/model", "mockllm/judge"}
+    assert len(agents) > 1  # the probes' own, lower max_tokens, on the agents' model
+
+
+def test_agents_on_one_named_model_run_on_it_as_the_tasks_configured_default(
+        tmp_path, monkeypatch):
+    """The live path, built but not run: the agents' names are cleared and their model
+    is the task's default, with the run config; agents on several models keep their
+    names, and the record lists the variant."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-not-a-key")  # no call is made
+    model = "openrouter/openai/gpt-4o-mini"
+    brief = parse_brief(on_one_model(subset(tmp_path, ["K1"]), "K1", model))
+    [variant] = brief.variants
+    _, built, _ = build_variant(variant, mock=False)
+    assert one_model(built, AUDITOR) == model
+    ran, default = run_models(built, {"target": AUDITOR})
+    assert {spec.model for spec in ran.task["setup"].agents} == {None}
+    assert str(default) == model and default.config.max_tokens == RUN_CONFIG.max_tokens
+    assert default.config.reasoning_effort == "high"
+    mixed = built.task["setup"].agents[0].model_copy(update={"model": AUDITOR})
+    setup = built.task["setup"].model_copy(
+        update={"agents": [mixed, *built.task["setup"].agents[1:]]})
+    several = dataclasses.replace(built, task={**built.task, "setup": setup})
+    assert one_model(several, AUDITOR) is None
+    kept, default = run_models(several, {"target": AUDITOR})
+    assert kept.task["setup"].agents == several.task["setup"].agents
+    assert str(default) == AUDITOR
 
 
 def test_a_budget_stop_leaves_every_variant_at_the_same_epoch(tmp_path):

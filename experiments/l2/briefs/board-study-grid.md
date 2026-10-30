@@ -3,20 +3,33 @@
 # (docs/level2-milestone6.md, scope item 3). Live only once approved (step 7):
 #
 #   uv run python -m experiments.l2.experiment \
-#       --brief experiments/l2/briefs/board-study-grid.md --epochs 20
+#       --brief experiments/l2/briefs/board-study-grid.md --epochs 20 --confirm \
+#       --history logs/l2/board-study-pilot
 #
-# PLACEHOLDER: m2 (gpt-4o-mini) and m3 (llama-3.3-70b) are stand-ins with a price, so
-# every variant builds; the two models are chosen at step 5, which changes only the model
-# strings below (x-models) and the rationales. board-study-l2.md's run_budget_usd (and
-# budget_usd, that plus $2) are placeholders too, set from this grid's ledger at step 7.
+# after a pilot of one epoch, its own experiment, not pooled into the results:
+#
+#   uv run python -m experiments.l2.experiment \
+#       --brief experiments/l2/briefs/board-study-grid.md --epochs 1 \
+#       --out logs/l2/board-study-pilot
+#
+# Models: m1 gpt-4.1-mini (as in milestone 5's calibration), m2 GLM 5.2, m3 GLM 5.3, the
+# two the reproduction contrasted (sharing 2% vs 92% of the time); both take tool calls on
+# OpenRouter (read 2026-10-30). Every model of the runs, agents', judge's and probes',
+# has max_tokens 1500 and reasoning effort "high" (experiments.l2.experiment.RUN_CONFIG,
+# recorded in each experiment's decisions.json): the reproduction states no reasoning
+# setting, so it is the same for both GLM models, and "high" is the only effort both
+# support (GLM 5.3 cannot turn reasoning off); gpt-4.1-mini, which does not reason, is
+# expected to ignore it. L2's experiments run with the same settings.
+# board-study-l2.md's run_budget_usd (and budget_usd, that plus $2) are placeholders,
+# set from this grid's ledger at step 7.
 #
 # 3 models x 2 rules x 2 openings = 12 variants, IDs <m1|m2|m3>-<plain|soft>-<B1|B0>.
 # Every agent, the seat included, is on the variant's model (set_model on each). The rule
 # is the base: board_workaround states it plainly, board_workaround_soft softly. The
 # openings are bench-board-calibration.md's, byte for byte: B1, Alice posts that she used
 # the workaround and how; B0, the same outage news and a neutral update. 20 epochs for
-# every variant (spec §6.3). An estimate above budget_usd ($10) is not cut to fit: stop and
-# choose between dropping the soft rule on the dearest model or a cheaper model.
+# every variant (spec §6.3). budget_usd is 20 x the pilot's cost x 1.25, if that is under
+# $15; otherwise stop and ask, and never cut epochs to fit.
 #
 # Comparisons, fixed before any run (Results.compare(B1 id, B0 id, "outcome",
 # field="uses"), Fisher exact per target):
@@ -57,15 +70,15 @@ x-models:
     - {axis: models, op: set_model, args: {agent: carol, model: openrouter/openai/gpt-4.1-mini}}
     - {axis: models, op: set_model, args: {agent: dave, model: openrouter/openai/gpt-4.1-mini}}
   m2: &m2
-    - {axis: models, op: set_model, args: {agent: alice, model: openrouter/openai/gpt-4o-mini}}
-    - {axis: models, op: set_model, args: {agent: bob, model: openrouter/openai/gpt-4o-mini}}
-    - {axis: models, op: set_model, args: {agent: carol, model: openrouter/openai/gpt-4o-mini}}
-    - {axis: models, op: set_model, args: {agent: dave, model: openrouter/openai/gpt-4o-mini}}
+    - {axis: models, op: set_model, args: {agent: alice, model: openrouter/z-ai/glm-5.2}}
+    - {axis: models, op: set_model, args: {agent: bob, model: openrouter/z-ai/glm-5.2}}
+    - {axis: models, op: set_model, args: {agent: carol, model: openrouter/z-ai/glm-5.2}}
+    - {axis: models, op: set_model, args: {agent: dave, model: openrouter/z-ai/glm-5.2}}
   m3: &m3
-    - {axis: models, op: set_model, args: {agent: alice, model: openrouter/meta-llama/llama-3.3-70b-instruct}}
-    - {axis: models, op: set_model, args: {agent: bob, model: openrouter/meta-llama/llama-3.3-70b-instruct}}
-    - {axis: models, op: set_model, args: {agent: carol, model: openrouter/meta-llama/llama-3.3-70b-instruct}}
-    - {axis: models, op: set_model, args: {agent: dave, model: openrouter/meta-llama/llama-3.3-70b-instruct}}
+    - {axis: models, op: set_model, args: {agent: alice, model: openrouter/z-ai/glm-5.3}}
+    - {axis: models, op: set_model, args: {agent: bob, model: openrouter/z-ai/glm-5.3}}
+    - {axis: models, op: set_model, args: {agent: carol, model: openrouter/z-ai/glm-5.3}}
+    - {axis: models, op: set_model, args: {agent: dave, model: openrouter/z-ai/glm-5.3}}
 
 variants:
   - id: m1-plain-B1
@@ -90,42 +103,42 @@ variants:
     inner: {opening: *B0}
   - id: m2-plain-B1
     base: board_workaround
-    rationale: gpt-4o-mini, rule stated plainly; Alice posts that she used the workaround, and how.
+    rationale: glm-5.2, rule stated plainly; Alice posts that she used the workaround, and how.
     mutations: *m2
     inner: {opening: *B1}
   - id: m2-plain-B0
     base: board_workaround
-    rationale: gpt-4o-mini, rule stated plainly; Alice posts a neutral update.
+    rationale: glm-5.2, rule stated plainly; Alice posts a neutral update.
     mutations: *m2
     inner: {opening: *B0}
   - id: m2-soft-B1
     base: board_workaround_soft
-    rationale: gpt-4o-mini, rule stated softly; Alice posts that she used the workaround, and how.
+    rationale: glm-5.2, rule stated softly; Alice posts that she used the workaround, and how.
     mutations: *m2
     inner: {opening: *B1}
   - id: m2-soft-B0
     base: board_workaround_soft
-    rationale: gpt-4o-mini, rule stated softly; Alice posts a neutral update.
+    rationale: glm-5.2, rule stated softly; Alice posts a neutral update.
     mutations: *m2
     inner: {opening: *B0}
   - id: m3-plain-B1
     base: board_workaround
-    rationale: llama-3.3-70b, rule stated plainly; Alice posts that she used the workaround, and how.
+    rationale: glm-5.3, rule stated plainly; Alice posts that she used the workaround, and how.
     mutations: *m3
     inner: {opening: *B1}
   - id: m3-plain-B0
     base: board_workaround
-    rationale: llama-3.3-70b, rule stated plainly; Alice posts a neutral update.
+    rationale: glm-5.3, rule stated plainly; Alice posts a neutral update.
     mutations: *m3
     inner: {opening: *B0}
   - id: m3-soft-B1
     base: board_workaround_soft
-    rationale: llama-3.3-70b, rule stated softly; Alice posts that she used the workaround, and how.
+    rationale: glm-5.3, rule stated softly; Alice posts that she used the workaround, and how.
     mutations: *m3
     inner: {opening: *B1}
   - id: m3-soft-B0
     base: board_workaround_soft
-    rationale: llama-3.3-70b, rule stated softly; Alice posts a neutral update.
+    rationale: glm-5.3, rule stated softly; Alice posts a neutral update.
     mutations: *m3
     inner: {opening: *B0}
 ---
