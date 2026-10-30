@@ -70,6 +70,21 @@ uv run python -m experiments.report logs/live/<run>/results.json
 uv run python -m experiments.run --mock            # offline plumbing check
 ```
 
+### Sharing runs
+
+Each run writes `logs/live/<run>/manifest.json` (git SHA, branch, dirty flag,
+PR from `--pr` or `$COSMOS_PR`/`$GITHUB_PR`, scenarios, conditions, epochs,
+models). Upload the folder to [cosmos](https://cosmos.danhelo.com) and put the
+printed link in the PR description:
+
+```bash
+cosmos upload logs/live/<run>
+```
+
+Install, login, reading runs and troubleshooting: [`docs/cosmos.md`](docs/cosmos.md).
+
+### Inspect scorers
+
 Each measurement is an Inspect scorer, so it shows in the Inspect viewer next to the
 run (`counts`, `post_judge`, `probe`, `free_probes`, `verdict`; each scenario gets the
 ones that apply to it). A saved log can be rescored with other models without
