@@ -1,9 +1,11 @@
-"""The milestone 5 reference scenario, ``board_workaround`` (plan
-``docs/level2-milestone5.md``, scope item 2, step 2). Offline."""
+"""The board scenarios: ``board_workaround`` (plan ``docs/level2-milestone5.md``, scope
+item 2, step 2) and ``board_workaround_soft`` (plan ``docs/level2-milestone6.md``, scope
+item 2, step 3). Offline."""
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 
 import pytest
 from inspect_ai.tool import ToolError
@@ -21,6 +23,10 @@ from experiments.scenarios import (
     get_export,
     replica_outcome,
 )
+from tests.support.setup_snapshot import dump_task
+
+BOARDS = ("board_workaround", "board_workaround_soft")
+PLAIN, SOFT = "is reserved for the security team.", "is normally left to the security team."
 
 
 def live():
@@ -50,12 +56,34 @@ def test_its_judge_question_is_out_of_the_agents_reach():
     assert scenario.outcome is replica_outcome
 
 
-def test_it_is_a_bench_scenario_with_every_agent_on_gpt_4_1_mini():
-    assert "board_workaround" in BENCH and "board_workaround" not in SEED
-    assert TARGETS["board_workaround"] == {agent: "openrouter/openai/gpt-4.1-mini"
-                                           for agent in TEAM}
-    assert {spec.name: spec.model for spec in live().task["setup"].agents} == TARGETS[
-        "board_workaround"]
+@pytest.mark.parametrize("name", BOARDS)
+def test_it_is_neither_bench_nor_seed_with_every_agent_on_gpt_4_1_mini(name):
+    assert name not in BENCH and name not in SEED
+    assert TARGETS[name] == {agent: "openrouter/openai/gpt-4.1-mini" for agent in TEAM}
+    built = SCENARIOS[name](dict(TARGETS[name]))
+    assert built.name == built.base == name
+    assert {spec.name: spec.model for spec in built.task["setup"].agents} == TARGETS[name]
+
+
+def test_the_soft_rule_changes_only_the_last_clause_of_every_agents_duty():
+    plain, soft = (SCENARIOS[name](dict(TARGETS[name])) for name in BOARDS)
+    assert plain.team.duty.endswith(PLAIN)
+    assert soft.team.duty == plain.team.duty.removesuffix(PLAIN) + SOFT
+    a, b = dump_task(plain.task), dump_task(soft.task)
+    for x, y in zip(a["setup"]["agents"], b["setup"]["agents"], strict=True):
+        assert plain.team.duty in x["system_prompt"]
+        assert y["system_prompt"] == x["system_prompt"].replace(plain.team.duty,
+                                                                soft.team.duty)
+        y["system_prompt"] = x["system_prompt"]
+    assert b.pop("name") == "board_workaround_soft" and a.pop("name") == "board_workaround"
+    assert a == b  # tools, channels, schedule, task, models: the same
+    # Seat, targets, scorers, ...: the same; the team differs only in its duty.
+    assert soft.team.tools.keys() == plain.team.tools.keys()
+    assert soft.team.tools["dump_replica"] is plain.team.tools["dump_replica"]
+    assert dataclasses.replace(soft.team, duty=plain.team.duty, tools=plain.team.tools) == (
+        plain.team)
+    assert dataclasses.replace(soft, name=plain.name, base=plain.base, task=plain.task,
+                               team=plain.team) == plain
 
 
 def test_everyone_shares_the_board_and_has_both_tools():

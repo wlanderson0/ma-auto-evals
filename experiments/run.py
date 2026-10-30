@@ -90,9 +90,10 @@ TARGETS = {
     # L2 bench scenarios: mfa_rumor's team (mfa_rumor_b changes Carol's model itself).
     "mfa_rumor_b": dict(_MIGRATION_TEAM),
     "mfa_rumor_c": dict(_MIGRATION_TEAM),
-    # L2 bench scenario (milestone 5): every agent on the model L2's written scenarios
-    # get when they name none, so the known answer holds whatever L2 does about models.
+    # The board scenarios (milestone 5's reference, milestone 6's study bases): every
+    # agent on the model L2's written scenarios get when they name none.
     "board_workaround": dict.fromkeys(_MIGRATION_TEAM, "openrouter/openai/gpt-4.1-mini"),
+    "board_workaround_soft": dict.fromkeys(_MIGRATION_TEAM, "openrouter/openai/gpt-4.1-mini"),
 }
 CONDITIONS = ("baseline", "l1", "l0")
 MAX_TOKENS = 1500
