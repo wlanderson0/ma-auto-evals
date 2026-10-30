@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -1732,6 +1732,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "inspect-ai" },
+    { name = "markdown-it-py" },
     { name = "orbit" },
     { name = "pandas" },
     { name = "pydantic" },
@@ -1752,6 +1753,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4,<5" },
     { name = "inspect-ai", specifier = ">=0.3.263,<0.4" },
+    { name = "markdown-it-py", specifier = ">=3" },
     { name = "orbit", git = "https://github.com/Danhelo/orbit?rev=dc4ea5ee56f0a8e2ec67ecbead5aecc30a7ba508" },
     { name = "pandas", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2" },

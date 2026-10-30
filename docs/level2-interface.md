@@ -424,7 +424,7 @@ Transect's own caveats apply to us too. Model-written labels can be wrong: two j
 
 ### 8.1 Option: sharing through Cosmos
 
-L2's experiments can be uploaded to Cosmos (`cosmos upload`, which reads a `manifest.json` describing the run; the writer for it is not on `main` yet), so the team browses them like any other run.
+L2's experiments can be uploaded to Cosmos (`cosmos upload`, which reads a `manifest.json` describing the run), so the team browses them like any other run. `experiments.l2.cosmos` turns an experiment directory into a folder `cosmos upload` accepts, without changing the directory; it never uploads.
 
 - One L2 experiment becomes one Cosmos run, and each of its samples one L2 run (§1).
 - `annotations.jsonl` can then be synced with Cosmos comments, and with tags once Cosmos has them (§6.2).
