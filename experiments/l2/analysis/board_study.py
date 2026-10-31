@@ -15,15 +15,17 @@ their correction are the ones the grid brief fixed before any run
 - primary: plain rule, per model, per target, Fisher exact (``tools.fisher_p``, the test
   ``compare`` reports), Holm-corrected over the 9 at family-wise 0.05; only these can be
   findings. For each, the smallest B1 count that would have reached p < 0.05 given its
-  observed B0 count;
+  observed B0 count, and p < 0.05/9, what one effect alone needs to pass Holm;
 - secondary, leads only: the same with the soft rule (raw p), and whether the post's
   effect differs between models (soft rule) or between rules (per model), by a
   likelihood-ratio test of the interaction term in a logistic regression, per target. A
-  regression with a 0 of n or n of n cell has no finite fit; it is reported as such;
+  regression with a 0 of n or n of n cell has no finite estimates and the chi-square
+  approximation is unreliable there, so such a test is reported as not run;
 - alongside, not evidence: reposting (runs with at least one post the judge flagged),
   and the seat's own uses in the B0 arms (the off-dose check), per model; the m1/plain
   cells against milestone 5's calibration (``--calibration``: its experiment directories,
-  pooled; variants ``B1`` and ``B0``).
+  pooled; variants ``B1`` and ``B0``); the runs' health per model (agent calls, replies
+  that reached the token cap, reasoning tokens' share of output).
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ import numpy as np
 from inspect_ai.log import read_eval_log
 from inspect_ai.util import Store
 
-from experiments.l2.results import Results
+from experiments.l2.results import VALUES, Results
 from experiments.l2.tools import fisher_p
 from experiments.scenarios import replica_outcome
 
@@ -90,7 +92,7 @@ def interaction(cells: dict[tuple[str, int], tuple[int, int]]) -> tuple[float, f
     ``cells``: ``(group, post) -> (k, n)`` with post 1 (B1) or 0 (B0). The full model has
     a group effect, a post effect and their interaction; the reduced one drops the
     interaction. ``(statistic, p)``, or ``None`` when a cell is 0 of n or n of n (no
-    finite fit)."""
+    finite estimates, and the chi-square approximation is unreliable)."""
     if any(k in (0, n) for k, n in cells.values()):
         return None
     groups = sorted({g for g, _ in cells})
@@ -113,10 +115,11 @@ def kn(results: Results, vid: str, agent: str, scorer: str = "outcome") -> tuple
     if scorer == "outcome":
         known = [results.adopted(s, agent, "outcome", field="uses") for s in results.of(vid)]
     else:
-        known = [None if (v := (s.scores.get("post_judge") or {}).get("agents", {})
-                              .get(agent, {}).get("flagged_posts")) is None else v > 0
+        known = [None if (v := VALUES["post_judge"](s, agent)) is None else v > 0
                  for s in results.of(vid)]
     done = [x for x in known if x is not None]
+    if not known:
+        raise ValueError(f"no runs of variant {vid!r}")
     return sum(done), len(done)
 
 
@@ -154,13 +157,16 @@ def report(grid: Path, calibration: Sequence[Path] = ()) -> str:
     primary = [(m, a) for m in MODELS for a in targets]
     raw = [fisher_p(*cell[m, "plain", a][0], *cell[m, "plain", a][1]) for m, a in primary]
     lines += ["", "### Primary: plain rule, B1 vs B0 (Fisher exact; Holm over the 9)", "",
-              "| model | target | B1 | B0 | p | Holm p | smallest B1 for p < 0.05 |",
-              "|---|---|---|---|---|---|---|"]
+              "| model | target | B1 | B0 | p | Holm p | smallest B1 for p < 0.05 "
+              f"| smallest B1 for p < 0.05/{len(primary)} |",
+              "|---|---|---|---|---|---|---|---|"]
     for (m, a), p, adj in zip(primary, raw, holm(raw), strict=True):
         (k1, n1), (k0, n0) = cell[m, "plain", a]
-        need = smallest_detectable(k0, n0, n1)
+        needs = [smallest_detectable(k0, n0, n1, alpha) for alpha in
+                 (ALPHA, ALPHA / len(primary))]
         lines.append(f"| {MODELS[m]} | {a} | {k1}/{n1} | {k0}/{n0} | {p:.3g} | {adj:.3g} | "
-                     f"{'none' if need is None else f'{need}/{n1}'} |")
+                     + " | ".join('none' if need is None else f'{need}/{n1}' for need in needs)
+                     + " |")
 
     lines += ["", "### Secondary (leads): soft rule, B1 vs B0 (Fisher exact, raw p)", "",
               "| model | target | B1 | B0 | p |", "|---|---|---|---|---|"]
@@ -186,7 +192,7 @@ def report(grid: Path, calibration: Sequence[Path] = ()) -> str:
                            for post in (1, 0)}))
     for name, a, cells in tests:
         found = interaction(cells)
-        lines.append(f"| {name} | {a} | " + ("no finite fit (a 0 of n or n of n cell) | – |"
+        lines.append(f"| {name} | {a} | " + ("not run (a 0 of n or n of n cell) | – |"
                                              if found is None else
                                              f"{found[0]:.2f} | {found[1]:.3g} |"))
 
@@ -220,6 +226,24 @@ def report(grid: Path, calibration: Sequence[Path] = ()) -> str:
                 now, then = cell["m1", "plain", a][side], tuple(map(sum, zip(*counts, strict=True)))
                 lines.append(f"| {a} | {arm} | {now[0]}/{now[1]} | {then[0]}/{then[1]} | "
                              f"{fisher_p(*now, *then):.3g} |")
+    lines += ["", "Health of the runs, from their model events.", "",
+              "| model | agent calls | replies at the token cap | reasoning share of output |",
+              "|---|---|---|---|"]
+    for m in MODELS:
+        calls = capped = out = reasoning = 0
+        for s in results.samples:
+            if not s.variant_id.startswith(f"{m}-"):
+                continue
+            for e in read_eval_log(s.log).samples[0].events:
+                if e.event == "model" and e.role is None:
+                    calls += 1
+                    capped += e.output.stop_reason == "max_tokens"
+                    usage = e.output.usage
+                    out += (usage.output_tokens or 0) if usage else 0
+                    reasoning += (usage.reasoning_tokens or 0) if usage else 0
+        lines.append(f"| {MODELS[m]} | {calls} | {capped} | "
+                     f"{reasoning / out:.0%} |" if out else f"| {MODELS[m]} | {calls} | "
+                     f"{capped} | – |")
     return "\n".join(lines) + "\n"
 
 

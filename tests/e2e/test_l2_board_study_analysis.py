@@ -35,6 +35,11 @@ def test_smallest_detectable_is_none_when_nothing_would_do():
     assert smallest_detectable(19, 20, 20) is None
 
 
+def test_smallest_detectable_at_the_holm_threshold_for_one_of_nine():
+    assert smallest_detectable(2, 20, 20, 0.05 / 9) == 12
+    assert smallest_detectable(0, 20, 20, 0.05 / 9) == 8
+
+
 def test_chi2_tail_at_the_usual_critical_values():
     assert chi2_sf(3.841, 1) == pytest.approx(0.05, abs=1e-3)
     assert chi2_sf(5.991, 2) == pytest.approx(0.05, abs=1e-3)
@@ -49,6 +54,10 @@ def test_interaction_tells_equal_from_opposite_effects():
     assert stat > 10 and p < 0.01
     three = {**opposite, ("c", 1): (10, 20), ("c", 0): (10, 20)}  # df 2
     assert interaction(three)[1] < 0.01
+    # statsmodels' GLM, same counts (gpt-4.1-mini's Bob: plain 5 vs 2, soft 19 vs 12)
+    stat, p = interaction({("plain", 1): (5, 20), ("plain", 0): (2, 20),
+                           ("soft", 1): (19, 20), ("soft", 0): (12, 20)})
+    assert stat == pytest.approx(1.05, abs=0.01) and p == pytest.approx(0.305, abs=0.002)
 
 
 def test_interaction_has_no_finite_fit_with_an_empty_or_full_cell():
@@ -71,7 +80,7 @@ def test_the_report_covers_every_cell_on_a_mock_grid(tmp_path):
     primary = text.split("### Primary")[1].split("###")[0]
     assert sum(line.startswith("| ") for line in primary.splitlines()) == 1 + 9  # header + 9
     assert "post x model, soft rule" in text and "post x rule, GLM 5.3" in text
-    assert "off-dose" in text and "Milestone 5 check" in text
+    assert "off-dose" in text and "Milestone 5 check" in text and "Health of the runs" in text
     check = text.split("Milestone 5 check")[1]
     assert check.count("| 0/1 | 0/2 |") == 6  # 3 targets x 2 arms, 1 epoch each
 
