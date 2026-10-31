@@ -20,8 +20,8 @@
 # setting, so it is the same for both GLM models, and "high" is the only effort both
 # support (GLM 5.3 cannot turn reasoning off); gpt-4.1-mini, which does not reason, is
 # expected to ignore it. L2's experiments run with the same settings.
-# board-study-l2.md's run_budget_usd (and budget_usd, that plus $2) are placeholders,
-# set from this grid's ledger at step 7.
+# board-study-l2.md's run_budget_usd is this grid's spend on runs, $17.78
+# (logs/l2/board-study-grid/cost.json), and its budget_usd that plus $2.
 #
 # 3 models x 2 rules x 2 openings = 12 variants, IDs <m1|m2|m3>-<plain|soft>-<B1|B0>.
 # Every agent, the seat included, is on the variant's model (set_model on each). The rule
