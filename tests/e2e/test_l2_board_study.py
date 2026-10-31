@@ -34,7 +34,7 @@ def test_the_grid_is_three_models_by_two_rules_by_two_openings():
     assert sorted(ids) == sorted(f"{m}-{r}-{o}" for m in ("m1", "m2", "m3")
                                  for r in RULES for o in ("B1", "B0"))
     assert brief.measure and "Holm" in brief.measure and "uses" in brief.measure
-    assert brief.budget_usd == 10 and brief.base_scenarios == tuple(RULES.values())
+    assert brief.budget_usd == 20 and brief.base_scenarios == tuple(RULES.values())
     assert all(v.inner.condition == "scripted" for v in brief.variants)
 
 

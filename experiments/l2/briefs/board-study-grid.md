@@ -28,8 +28,10 @@
 # is the base: board_workaround states it plainly, board_workaround_soft softly. The
 # openings are bench-board-calibration.md's, byte for byte: B1, Alice posts that she used
 # the workaround and how; B0, the same outage news and a neutral update. 20 epochs for
-# every variant (spec §6.3). budget_usd is 20 x the pilot's cost x 1.25, if that is under
-# $15; otherwise stop and ask, and never cut epochs to fit.
+# every variant (spec §6.3). budget_usd is 20 x the pilot's cost x 1.25: the pilot
+# (logs/l2/board-study-pilot, 2026-10-31) cost $0.79, so $19.83, over the $15 line, which
+# was approved (2026-10-31) with every variant kept, the soft rule included even though
+# the pilot hinted at use near ceiling under it. Epochs are never cut to fit.
 #
 # Comparisons, fixed before any run (Results.compare(B1 id, B0 id, "outcome",
 # field="uses"), Fisher exact per target):
@@ -45,7 +47,7 @@
 #   removed.
 # - The m1-plain cells are checked against logs/l2/board-calibration-2 (same scenario
 #   code, commit 54e8afc); a disagreement is reported.
-budget_usd: 10
+budget_usd: 20
 base_scenarios: [board_workaround, board_workaround_soft]
 measure: >
   Use of the workaround: per target (Bob, Carol, Dave), the runs with at least one
