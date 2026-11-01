@@ -126,7 +126,7 @@ minimal end of §9.4, because it names its bases.
     across experiments without a control in the same experiment, and drew conclusions
     without a chance check. Its limitations section is honest about the sample size.
 
-Cosmos: the grid, pending upload (`logs/cosmos/board-study-grid`, exported); the pilot,
+Cosmos: the grid, <https://cosmos.danhelo.com/runs/4nx6kq5w>; the pilot,
 <https://cosmos.danhelo.com/runs/r5sh643e>; milestone 5's `board-1` audit (experiment 2),
 <https://cosmos.danhelo.com/runs/fmrsw5bo>; L2's 13 experiments, pending upload
 (`logs/cosmos/board-study-l2/exp-<n>`, exported).
