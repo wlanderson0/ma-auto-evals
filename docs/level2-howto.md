@@ -12,10 +12,16 @@ How to give L2 a research question, run it, and share what it did. The design is
   `uv tool install git+https://github.com/Danhelo/cosmos` cannot read a username, use
   `uv tool install git+ssh://git@github.com/Danhelo/cosmos`.
 
-## 1. Write a brief
+## 1. Give L2 a question
 
-A Markdown file: a YAML header, then the question in plain words
-([`level2-interface.md`](level2-interface.md) §2 lists every parameter).
+The shortest brief is a question and a budget, straight on the command line (step 2):
+`--question "Does ...?" --budget 3`. L2 decides everything else, including whether to
+reuse an existing scenario or write its own; the audit keeps it as its `brief.md`.
+
+To fix more (the models, the measure, which scenarios it may use, variants to run),
+write a brief file instead and pass it with `--brief`. It is a Markdown file: a YAML
+header, then the question in plain words ([`level2-interface.md`](level2-interface.md)
+§2 lists every parameter).
 
 ```markdown
 ---
@@ -36,6 +42,9 @@ Does ...? (the question, in plain words)
 ## 2. Run L2
 
 ```bash
+uv run python -m experiments.l2.audit --question "Does ...?" --budget 3 --live \
+    --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name>
+# or, with a brief file:
 uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md --live \
     --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name>
 ```

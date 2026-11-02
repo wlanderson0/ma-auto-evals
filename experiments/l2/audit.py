@@ -404,8 +404,11 @@ def _json(path: Path) -> dict[str, Any]:
 
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
-    """``python -m experiments.l2.audit --brief <brief> [--mock] [--fake] [--model M]
-    [--analysis-only <milestone 1 audit dir>]``.
+    """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
+    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>]``.
+
+    ``--question`` with ``--budget`` is the shortest brief: the question and the budget,
+    everything else left to L2 (spec §1.1); the audit keeps it as its ``brief.md``.
 
     Without ``--fake``, L2 is an LLM (``--model``, default ``agent.MODEL``) and its own
     calls are live (OpenRouter) even when the experiments run on mocks (``--mock``)."""
@@ -417,7 +420,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     from experiments.l2.tools import Tools
 
     parser = argparse.ArgumentParser(description="Run an L2 audit (milestone 2).")
-    parser.add_argument("--brief", required=True, type=Path)
+    given = parser.add_mutually_exclusive_group(required=True)
+    given.add_argument("--brief", type=Path)
+    given.add_argument("--question", help="a plain-text brief: the question alone, with "
+                                          "--budget; L2 decides everything else")
+    parser.add_argument("--budget", type=float, default=None, metavar="USD",
+                        help="with --question: the budget, in dollars")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--mock", action="store_true",
                         help="experiments run on the offline scripted mock models")
@@ -436,6 +444,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
     args = parser.parse_args(argv)
+    if (args.question is None) != (args.budget is None):
+        parser.error("--question and --budget go together (a --brief sets its own budget)")
     if args.fake and args.model:
         raise SystemExit("--fake and --model exclude each other")
     if args.fake and not args.mock and args.analysis_only is None:
@@ -466,8 +476,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     out = args.out or Path(f"logs/l2-audit/{time.strftime('%Y%m%d-%H%M%S')}"
                            + ("-analysis" if args.analysis_only else "")
                            + ("-mock" if args.mock else "") + ("-fake" if args.fake else ""))
-    audit = Audit.create(args.brief, out, mock=args.mock, analysis=args.analysis_only,
-                         history=args.history)
+    with tempfile.TemporaryDirectory() as tmp:
+        brief_path = args.brief
+        if args.question is not None:
+            brief_path = Path(tmp) / "brief.md"
+            brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
+                                  f"{args.question.strip()}\n")
+        audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
+                             history=args.history)
     tools = Tools(audit, on_end=write_report)
     if args.fake:
         script = ANALYSIS if args.analysis_only else FULL

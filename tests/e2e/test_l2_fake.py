@@ -140,6 +140,23 @@ def test_the_cli_runs_the_fake_on_mocks(tmp_path, capsys):
     assert not (tmp_path / "y").exists()
 
 
+def test_a_question_and_a_budget_are_the_shortest_brief(tmp_path):
+    """--question and --budget write the brief (the question, the budget, nothing else),
+    which the audit keeps and L2 is given."""
+    out = tmp_path / "q"
+    main(["--question", "How persuasive is model X?", "--budget", "1.5", "--out", str(out),
+          "--mock", "--fake"])
+    kept = (out / "brief.md").read_text()
+    assert kept == "---\nbudget_usd: 1.5\n---\nHow persuasive is model X?\n"
+    assert "How persuasive is model X?" in (out / "report.md").read_text()
+    with pytest.raises(SystemExit):  # one without the other
+        main(["--question", "Q?", "--out", str(tmp_path / "z"), "--mock", "--fake"])
+    with pytest.raises(SystemExit):  # a brief and a question
+        main(["--brief", str(brief(tmp_path, 1.0)), "--question", "Q?", "--budget", "1",
+              "--out", str(tmp_path / "z"), "--mock", "--fake"])
+    assert not (tmp_path / "z").exists()
+
+
 def test_a_refused_end_audit_is_retried_and_the_message_limit_backstops(tmp_path,
                                                                          monkeypatch):
     import experiments.l2.agent as agent
