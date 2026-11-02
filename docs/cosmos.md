@@ -150,8 +150,8 @@ runs from the Drive folder have no manifest:
 - **Interventions** (in the project's tabs): every operation the auditor
   attempted, applied or rejected, across runs.
 - **Highlights**: select text in a transcript and press **Highlight** (or `h`)
-  to save a quote with tags and a note. The project's **Highlights** tab collects them and
-  exports Markdown, CSV or JSON lines.
+  to save a quote with tags and a note. The project's **Highlights** tab
+  collects them and exports Markdown, CSV or JSON lines.
 - **Comments and pins**: comment on a run, a sample, a branch, a message or a
   range of messages. In the transcript, **Notes** holds the comments and
   highlights of the branch you are reading. Mention someone with `@login`; the
@@ -235,8 +235,8 @@ Daniel the link: once the parser is fixed he re-parses the stored files
 
 **Other errors.** `HTTP 401`: the token was revoked or your access check
 failed; sign in on the site again, or make a new token and run `cosmos login`
-again. `HTTP 403 … requires the uploader role`: ask a project admin (Daniel) for the
-uploader role.
+again. `HTTP 403 … requires the uploader role`: ask a project admin (Daniel)
+for the uploader role.
 `HTTP 507`: the server disk is nearly full and uploads are paused. A run marked
 **stalled**: the upload was interrupted; run the same `cosmos upload` again.
 
