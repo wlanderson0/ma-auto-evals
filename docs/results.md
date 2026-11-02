@@ -126,10 +126,9 @@ minimal end of §9.4, because it names its bases.
     across experiments without a control in the same experiment, and drew conclusions
     without a chance check. Its limitations section is honest about the sample size.
 
-Cosmos: the grid, <https://cosmos.danhelo.com/runs/4nx6kq5w>; the pilot,
+Cosmos: the grid, <https://cosmos.danhelo.com/runs/3elx467v>; the pilot,
 <https://cosmos.danhelo.com/runs/r5sh643e>; milestone 5's `board-1` audit (experiment 2),
-<https://cosmos.danhelo.com/runs/fmrsw5bo>; L2's 13 experiments, pending upload
-(`logs/cosmos/board-study-l2/exp-<n>`, exported).
+<https://cosmos.danhelo.com/runs/fmrsw5bo>; L2's experiments: exp-1 <https://cosmos.danhelo.com/runs/4xaxn2dg>; exp-2 <https://cosmos.danhelo.com/runs/tye2b7dj>; exp-3 <https://cosmos.danhelo.com/runs/74jkk3ke>; exp-4 <https://cosmos.danhelo.com/runs/xb7o3lts>; exp-5 <https://cosmos.danhelo.com/runs/e6jklrsm>; exp-6 <https://cosmos.danhelo.com/runs/z7f3gquh>; exp-7 <https://cosmos.danhelo.com/runs/ye6xej3q>; exp-8 <https://cosmos.danhelo.com/runs/urmdrone>; exp-9 <https://cosmos.danhelo.com/runs/4nx6kq5w>; exp-10 <https://cosmos.danhelo.com/runs/2fnkcpue>; exp-11 <https://cosmos.danhelo.com/runs/guhe7omg>; exp-12 <https://cosmos.danhelo.com/runs/t3mu77i4>; exp-13 <https://cosmos.danhelo.com/runs/sehcgfm3>.
 
 The tables below are the output of
 `uv run python -m experiments.l2.analysis.board_study logs/l2/board-study-grid
