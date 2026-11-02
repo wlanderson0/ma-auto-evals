@@ -10,27 +10,32 @@ auditor's branches, diff two branches and check every intervention. It
 replaces the shared Drive folder. The code is in
 [Danhelo/cosmos](https://github.com/Danhelo/cosmos).
 
-**Access.** Sign in with GitHub. Anyone who can read
-[wlanderson0/ma-auto-evals](https://github.com/wlanderson0/ma-auto-evals) gets
-in. cosmos checks this when you sign in and again every hour, so losing access
-to the repository also ends your access to cosmos. Because the repository is
-private, GitHub asks you to grant the `repo` scope; cosmos only uses it to check
-that you can read that repository.
+**Access.** Sign in with GitHub. Runs live in projects, and the team's runs are
+in the `ma-auto-evals` project, which is linked to
+[wlanderson0/ma-auto-evals](https://github.com/wlanderson0/ma-auto-evals):
+anyone who can read the repository is a member. cosmos checks this when you sign
+in and again every hour, so losing access to the repository also ends your
+access to the project. For now GitHub asks you to grant the `repo` scope; cosmos
+only uses it to check that you can read the linked repository. Once the cosmos
+GitHub App is set up, sign-in asks for no scope.
+
+Roles are per project:
 
 | Role | Can |
 | --- | --- |
-| viewer | read everything, comment |
-| uploader | as viewer, plus upload runs, create upload tokens and pin runs |
-| admin | as uploader, plus change roles, disable accounts, delete and restore runs, edit or delete any comment, see disk use (**Admin** page) |
+| viewer | read everything, comment, highlight |
+| uploader | as viewer, plus upload runs, pin runs, make share links and add agents |
+| admin | as uploader, plus manage members and project settings, delete and restore runs, edit or delete any comment |
 
-New accounts start as uploader. Daniel (`Danhelo`) is the admin.
+Members who come from the repository start as uploader. Daniel (`Danhelo`) is a
+project admin and the site admin (server settings, disk use, project requests).
 
 ## First time
 
 1. Open <https://cosmos.danhelo.com>. It sends you to GitHub; approve the
    `cosmos` app.
-2. Create a token: **Tokens** in the top bar (or **API tokens** in your user
-   menu), at `/settings/tokens`. Give it a name such as `laptop`, pick a scope
+2. Create a token: in your user menu, **Settings → API tokens**
+   (`/settings/tokens`). Give it a name such as `laptop`, pick a scope
    and press **Create token**. Copy it at once: it is shown only once. An
    **upload** token can only upload, which is all the CLI needs; a **full**
    token can do anything you can do in the browser. Revoke tokens on the same
@@ -55,7 +60,10 @@ New accounts start as uploader. Daniel (`Danhelo`) is the admin.
    It asks for the token (input hidden), checks it with the server and saves the
    URL and token to `~/.config/cosmos/config.json` (mode 0600). Instead, you can
    set `COSMOS_URL` and `COSMOS_TOKEN`; they override the saved config, and
-   `--url` / `--token` on a command override both.
+   `--url` / `--token` on a command override both. If you can upload to more
+   than one project, add `--project ma-auto-evals` (to `cosmos login`, once, or
+   to each upload). `cosmos doctor` checks the URL, the token and where an
+   upload would go.
 
 ## Share a run
 
@@ -125,37 +133,58 @@ runs from the Drive folder have no manifest:
 
 ## Reading a run
 
-- **Runs** (home page): every upload, newest first, by PR and commit.
-- **Run page**: where the run came from, a grid of its samples, its files,
-  findings and comments.
+- **Runs** (the project's home, `/p/ma-auto-evals`): every upload, newest
+  first, by PR and commit, each with a health badge (clean, notice or dirty).
+- **Run page**: where the run came from, its health and the comparison with
+  its baseline run, a grid of its samples, its files, findings and comments.
 - **Transcript** (a sample's first tab): one branch at a time. Each message is
   marked with who wrote it: the agent, the auditor writing as an agent, or the
   auditor. Auditor operations appear where they happened.
 - **Branches** tab: the tree of the auditor's branches. Click one to read it;
   tick two and press **Diff** to compare them.
 - **Diff** tab: two branches side by side from the fork point.
-- **Interventions** (top bar): every operation the auditor attempted, applied
-  or rejected, across runs.
-- **Comments and pins**: comment on a run, a sample, a branch or a single
-  message. In the transcript, **Comments** opens the panel for the sample, the
-  branch and its messages, and each message has its own comment button.
-  Uploaders can **Pin** a run so it is never compacted.
-- **Permalinks**: **Copy link** on a message opens the transcript at it.
+- **Exposure** tab: which agents saw each post the auditor wrote or rewrote,
+  and at which revision. **Timeline** shows the sample in order of time.
+- **Compare with…** on a sample opens it beside another sample or branch (the
+  baseline run's same cell is offered first).
+- **Interventions** (in the project's tabs): every operation the auditor
+  attempted, applied or rejected, across runs.
+- **Highlights**: select text in a transcript and press **Highlight** (or `h`)
+  to save a quote with tags and a note. The project's **Highlights** tab
+  collects them and exports Markdown, CSV or JSON lines.
+- **Comments and pins**: comment on a run, a sample, a branch, a message or a
+  range of messages. In the transcript, **Notes** holds the comments and
+  highlights of the branch you are reading. Mention someone with `@login`; the
+  bell in the header and `/inbox` show your mentions and replies. Uploaders can
+  **Pin** a run so it is never compacted.
+- **Links**: **Copy link** on a message opens the transcript at it; click a
+  message's `#` and Shift-click another to link a range. **Share** makes an
+  expiring read-only link for someone without an account, if a project admin
+  has turned sharing on.
+- **Search** in the header searches every message, with filters by scenario,
+  condition and author. Press `?` for the keyboard shortcuts.
+- **Agents**: a coding agent (Claude Code, Codex, ChatGPT and others) can read
+  runs through cosmos's MCP server, and agents added on the project's
+  **Settings → Agents** tab answer `@`-mentions in comments. See the
+  [cosmos README](https://github.com/Danhelo/cosmos#readme).
 
 ## CI
 
 Not enabled yet. The plan is a workflow in ma-auto-evals that runs the offline
-mock suite (`experiments.run --mock`) on every PR, uploads it with an upload
-token and comments the run link on the PR. It needs no model key. The setup is
-in `docs/ci-upload.md` in Danhelo/cosmos. Until then, upload by hand and put
-the link in the PR description.
+mock suite (`experiments.run --mock`) on every PR, uploads it and puts the run
+link on the PR. It needs no model key. Once the cosmos GitHub App is installed
+on this repository, the workflow uploads with GitHub's own OIDC token, with no
+secret to store; until then it would need an upload token as a repository
+secret. The setup is in `docs/ci-upload.md` in Danhelo/cosmos. Until then,
+upload by hand and put the link in the PR description.
 
 ## Troubleshooting
 
 **Secret refused.** Before uploading, the CLI scans every file, and `.eval`
 logs member by member after unzipping, for key patterns: `sk-or-v1-`,
 `sk-ant-`, other `sk-…` keys, `AKIA…`, `ghp_`, `github_pat_`,
-`gho_`/`ghs_`/`ghu_`/`ghr_`, `hf_`, `AIza…` and PEM private keys. On a match
+`gho_`/`ghs_`/`ghu_`/`ghr_`, `hf_`, `AIza…`, `css_`, PEM private keys and
+cosmos's own tokens (`cos_`, `cosa_`, `coa_`, `cor_`, `cosw_`). On a match
 it uploads nothing and exits 1. The message names the file, the pattern and,
 for a log, the member inside it, but never the key:
 
@@ -175,9 +204,10 @@ or `.html`, and skipped otherwise:
 error: .env.json: file name looks like a secret (.env*, *.pem, a key file); refusing to upload
 ```
 
-**Can't get in.** `<login> does not have access to this cosmos instance` at
-sign-in means that GitHub account cannot read wlanderson0/ma-auto-evals. Sign
-in with the account that can, or ask William for access. If
+**Can't get in.** If you can sign in but do not see the `ma-auto-evals`
+project (or sign-in says your login has no access to any cosmos project), that
+GitHub account cannot read wlanderson0/ma-auto-evals. Sign in with the account
+that can, or ask William for access. Do not request a new project for it. If
 `uv tool install` fails with `Repository not found` or cannot read a username,
 you have not accepted the Danhelo/cosmos invitation or git has no GitHub
 credentials: run `gh auth setup-git`, or use the ssh form.
@@ -205,7 +235,8 @@ Daniel the link: once the parser is fixed he re-parses the stored files
 
 **Other errors.** `HTTP 401`: the token was revoked or your access check
 failed; sign in on the site again, or make a new token and run `cosmos login`
-again. `HTTP 403 … requires uploader role`: ask Daniel for the uploader role.
+again. `HTTP 403 … requires the uploader role`: ask a project admin (Daniel)
+for the uploader role.
 `HTTP 507`: the server disk is nearly full and uploads are paused. A run marked
 **stalled**: the upload was interrupted; run the same `cosmos upload` again.
 
