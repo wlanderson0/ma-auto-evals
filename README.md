@@ -83,6 +83,11 @@ cosmos upload logs/live/<run>
 
 Install, login, reading runs and troubleshooting: [`docs/cosmos.md`](docs/cosmos.md).
 
+### L2 audits
+
+Giving L2 (the auditor that designs and runs experiments) a research question, running
+it, and sharing its experiments on cosmos: [`docs/level2-howto.md`](docs/level2-howto.md).
+
 ### Inspect scorers
 
 Each measurement is an Inspect scorer, so it shows in the Inspect viewer next to the
