@@ -100,6 +100,19 @@ done
 - An `HTTP 401` means the Cosmos sign-in has lapsed: sign in again on
   <https://cosmos.danhelo.com> (or `cosmos login` with a new token) and rerun.
 - Each upload prints the run's link; put the links in the PR or the write-up.
+- Then link the report to Cosmos. Give each experiment its run's slug (the end of the
+  link the upload printed):
+
+  ```bash
+  uv run python -m experiments.l2.cosmos_links logs/l2-audit/<name> \
+      --run exp-1=<slug> --run exp-2=<slug>
+  ```
+
+  It asks Cosmos (with your `cosmos login`) for each sample's page and each cited
+  message's place, saves them as `cosmos.json` in the audit and writes `report.md`
+  again: each claim then links to every run its counts come from (✓ or ✗ for what the
+  target did there) and to each message it quotes. The report uploaded to Cosmos
+  ("Open report") was made before the links existed, so it has none.
 
 The same export works for a fixed grid run by hand with the milestone 1 CLI
 (`uv run python -m experiments.l2.experiment --brief ... --out <dir>`): pass `<dir>`.

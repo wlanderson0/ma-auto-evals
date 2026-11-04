@@ -32,6 +32,7 @@ RECORD = {
     "launches.jsonl": "every launch L2 asked for and what came of it",
     "trace.jsonl": "every tool call and its (shortened) result, in order",
     "claims.json": "L2's claims, each with its evidence, verdict and the checker's reasons",
+    "cosmos.json": "Cosmos links to the claims' runs and messages (experiments.l2.cosmos_links)",
     "ledger.json": "spend by kind, reserve, remaining",
     "experiments/": "one milestone 1 audit directory per launch (eval logs under logs/)",
     "l2/": "L2's own Inspect log",
@@ -313,6 +314,11 @@ def _claims(tools: Tools) -> list[str]:
             "read again, bear it out (a comparison also needs an accepted measure and no "
             "departure from the reading guidance); a *lead* falls short; the rules are in "
             "spec §6.4. Anything L2 wrote outside its claims is not checked.", ""]
+    links = _cosmos(tools)
+    if links:
+        out += ["Each claim links to its evidence on Cosmos: the messages it quotes, and every "
+                "run its counts come from (✓ the target showed the behaviour, ✗ it did not, "
+                "? unknown).", ""]
     order = {v: i for i, v in enumerate(("contradicted", "invalid", "lead", "unchecked",
                                          "checked"))}
     for i, claim in sorted(enumerate(tools.claims, 1),
@@ -323,6 +329,7 @@ def _claims(tools: Tools) -> list[str]:
                 f": {_inline(claim['text'])}",
                 f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
         out += [f"   - {_inline(reason)}" for reason in claim["reasons"]]
+        out += [f"   - {line}" for line in _claim_links(tools, claim, links)]
     try:
         where = _where(tools)
     except Exception as error:  # the report is still written
@@ -330,6 +337,58 @@ def _claims(tools: Tools) -> list[str]:
                  f"(could not be worked out: {_inline(f'{type(error).__name__}: {error}')})",
                  ""]
     return out + ["", *where]
+
+
+def _cosmos(tools: Tools) -> dict[str, Any]:
+    """The Cosmos links ``experiments.l2.cosmos_links`` saved for this audit, if any."""
+    try:
+        links = json.loads((tools.audit.out / "cosmos.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    url = re.compile(r"https?://[^\s()<>\[\]`]+")
+    return {k: {name: u for name, u in (links.get(k) or {}).items() if url.fullmatch(str(u))}
+            for k in ("runs", "samples", "posts")}
+
+
+def _claim_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> list[str]:
+    """A claim's evidence as Cosmos links: each cited message, and for a rate or a
+    comparison each run of its variants, marked with what the target did there."""
+    if not links:
+        return []
+    out = []
+    posts = [(r, links["posts"].get(f"{r['variant']}/{r['epoch']}/{r['post']}"))
+             for r in claim["evidence"] if "call" not in r]
+    shown = [f"[{_inline(r['variant'])} epoch {r['epoch']} post {_inline(r['post'])}]({u})"
+             for r, u in posts if u]
+    if shown:
+        out.append("On Cosmos: " + ", ".join(shown))
+    if claim["kind"] not in ("rate", "difference", "no_difference"):
+        return out
+    ids = [claim["variant"]] if claim["kind"] == "rate" else [claim["a"], claim["b"]]
+    rows = claims_._scores_rows(tools, claim)
+    results = tools.results()
+    for vid in ids:
+        row = next((r for r in rows if vid in r["args"]["variant_ids"]
+                    or r["args"].get("against") == vid), None)
+        if row is None:
+            continue
+        args = row["args"]
+        cells = []
+        for sample in sorted(results.of(vid), key=lambda s: s.epoch):
+            url = links["samples"].get(f"{vid}/{sample.epoch}")
+            if url is None:
+                continue
+            try:
+                did = results.adopted(sample, claim["target"], args.get("scorer"),
+                                      args.get("rounds"), args.get("field"))
+            except ValueError:
+                did = None
+            mark = "?" if did is None else ("✓" if did else "✗")
+            cells.append(f"[{sample.epoch} {mark}]({url})")
+        if cells:
+            out.append(f"On Cosmos, {_inline(claim['target'])} in each run of "
+                       f"{_inline(vid)} (epoch, then ✓/✗): " + " ".join(cells))
+    return out
 
 
 def _code(value: Any) -> str:
@@ -420,6 +479,9 @@ def _logs(tools: Tools, ids: list[str]) -> list[str]:
                      if matched == set(paths) else
                      f"{len(paths)} logs: " + ", ".join(_code(p) for p in paths))
         built = f"{samples[0].base}--{vid}"
+        run = _cosmos(tools).get("runs", {}).get(tools._where.get(vid, ""))
+        if run:
+            where += f"; [its Cosmos run]({run})"
         lines.append(f"{_code(vid)} ({tools._where.get(vid, '?')}, epochs "
                      f"{_span([s.epoch for s in samples])}): {where}; on Cosmos, "
                      f"{_code(built)} / {_code(samples[0].condition)}")
@@ -434,7 +496,9 @@ def _post_where(tools: Tools, ref: dict[str, Any]) -> str:
         return f"(could not be found: {_inline(error)})"
     text = " ".join(str(post.get("content", "")).split())
     built = f"{sample.base}--{ref['variant']}"
-    return (f"{_code(_rel(tools, sample.log))}, message {_code(post.get('id'))} (turn "
+    url = _cosmos(tools).get("posts", {}).get(f"{ref['variant']}/{ref['epoch']}/{ref['post']}")
+    return ((f"[open the message on Cosmos]({url}); " if url else "")
+            + f"{_code(_rel(tools, sample.log))}, message {_code(post.get('id'))} (turn "
             f"{post.get('turn')}, #{_inline(post.get('channel_id'))}, "
             f"{_inline(post.get('label'))}); on Cosmos, {_code(built)} / "
             f"{_code(sample.condition)} / epoch {ref['epoch']}. It reads: "
@@ -507,6 +571,28 @@ def _again(function: Any, args: dict[str, Any]) -> str:
         return function(**args)
     except Exception as error:  # the report is still written
         return f"(could not be read again: {type(error).__name__}: {error})"
+
+
+def reload(out: Path) -> tuple[Tools, str | None]:
+    """An ended audit's tools, from its directory, to write its report again (e.g. once
+    its Cosmos links are resolved); with why it has no conclusions, if it has none."""
+    from experiments.l2.audit import Audit
+    from experiments.l2.brief import parse_brief
+
+    out = Path(out)
+    audit = Audit(out, parse_brief(out / "brief.md"))
+    tools = Tools(audit)
+    ended = [row for row in tools.trace() if row.get("tool") == "end_audit" and row.get("ok")]
+    if ended:
+        tools.conclusions = (ended[-1].get("args") or {}).get("conclusions")
+    if (out / "claims.json").exists():
+        tools.claims = json.loads((out / "claims.json").read_text())
+    try:
+        audit.notes = list(json.loads((out / "ledger.json").read_text()).get("problems") or [])
+    except (OSError, ValueError):
+        pass
+    audit.ended = True
+    return tools, None if tools.conclusions else "L2 never called end_audit"
 
 
 def write_report(tools: Tools, why_no_conclusions: str | None = None) -> Path:
