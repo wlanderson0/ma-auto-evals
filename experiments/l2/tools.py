@@ -22,7 +22,9 @@ for L2 rather than an exception.
   passes its checks and dry-run; then a base like any other.
 - ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions)``.
 
-Outputs are short by default: small plain tables, the first N posts or matches.
+Outputs are short by default: small plain tables, the first N posts or matches. L2 sees
+each result after its call number (`[call N]`, the call's `seq` in `trace.jsonl`), and each
+post with its number in the sample (`post S`, `post_ref`), so a claim can cite both.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ import json
 import keyword
 import math
 import re
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -159,11 +162,18 @@ class Tools:
         self.written = audit.written()
         """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
+        self._seq_lock = threading.Lock()
 
     # ------------------------------------------------------------ dispatch
     def call(self, name: str, /, **args: Any) -> tuple[bool, str]:
         """Run tool ``name``; ``(ok, text)``. Refusals and errors are ``ok=False``.
         (``name`` is positional-only, so a tool can take an argument called name.)"""
+        ok, text, _ = self.numbered_call(name, **args)
+        return ok, text
+
+    def numbered_call(self, name: str, /, **args: Any) -> tuple[bool, str, int]:
+        """``call``, plus the call's number in ``trace.jsonl`` (its ``seq``), which L2
+        sees as ``[call N]`` and cites as evidence for a claim."""
         try:
             if name not in TOOLS:
                 raise Refused(f"unknown tool {name!r}")
@@ -184,13 +194,21 @@ class Tools:
             ok, text = False, str(error)
         except Exception as error:  # a bug or a bad argument: L2 sees it, the audit goes on
             ok, text = False, f"error: {type(error).__name__}: {error}"
-        self._trace(name, args, ok, text)
-        return ok, text
+        return ok, text, self._trace(name, args, ok, text)
 
-    def _trace(self, name: str, args: dict[str, Any], ok: bool, text: str) -> None:
-        self._seq += 1
+    def _trace(self, name: str, args: dict[str, Any], ok: bool, text: str) -> int:
+        """Record a call in ``trace.jsonl``; its number (``seq``). Calls can finish in
+        parallel (launches run in a thread), so numbering and writing share a lock."""
         budget = self.audit.budget()
-        row = {"seq": self._seq, "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": name,
+        with self._seq_lock:
+            self._seq += 1
+            seq = self._seq
+            self._write_trace(seq, name, args, ok, text, budget)
+        return seq
+
+    def _write_trace(self, seq: int, name: str, args: dict[str, Any], ok: bool, text: str,
+                     budget: dict[str, Any]) -> None:
+        row = {"seq": seq, "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": name,
                "args": args, "ok": ok,
                "result": text if len(text) <= TRACE_CHARS else
                text[:TRACE_CHARS] + f"… [{len(text) - TRACE_CHARS} more characters]",
@@ -585,7 +603,7 @@ class Tools:
             lines.append(f"The sample errored: {_short(sample.error, 300)}")
         if why := self._unlabelled.get(sample.log):
             lines.append(f"No authorship labels in this log ({why}): posts show 'unlabelled'.")
-        lines += [f"[turn {p.get('turn')}] #{p.get('channel_id')} {p['label']}: "
+        lines += [f"[{_where(p)}] #{p.get('channel_id')} {p['label']}: "
                   f"{_short(p['content'], POST_CHARS)}" for p in shown]
         return "\n".join(lines)
 
@@ -622,7 +640,7 @@ class Tools:
             start = max(0, found.start() - 120)
             snippet = ("…" if start else "") + post["content"][start:found.end() + 120] + (
                 "…" if found.end() + 120 < len(post["content"]) else "")
-            lines.append(f"{vid} epoch {epoch} [turn {post.get('turn')}] "
+            lines.append(f"{vid} epoch {epoch} [{_where(post)}] "
                          f"#{post.get('channel_id')} {post['label']}: {snippet}")
         return "\n".join(lines)
 
@@ -698,6 +716,17 @@ class Tools:
             raise
         self.audit.ended = True
         return "The audit has ended; the report is in report.md."
+
+
+def post_ref(post: Mapping[str, Any]) -> int | str:
+    """How a post is cited: its ``sequence`` in the sample (short and unique there), or
+    its message id when the log has no sequence."""
+    sequence = post.get("sequence")
+    return sequence if isinstance(sequence, int) else str(post["id"])
+
+
+def _where(post: Mapping[str, Any]) -> str:
+    return f"turn {post.get('turn')}, post {post_ref(post)}"
 
 
 def _difference(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
@@ -862,12 +891,13 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     tools._trace(name, args, False, text)
                     raise ToolError(text) from error
         if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
-            ok, text = await anyio.to_thread.run_sync(partial(tools.call, name, **args))
+            ok, text, seq = await anyio.to_thread.run_sync(
+                partial(tools.numbered_call, name, **args))
         else:
-            ok, text = tools.call(name, **args)
+            ok, text, seq = tools.numbered_call(name, **args)
         if not ok:
             raise ToolError(text)
-        return text
+        return f"[call {seq}] {text}"
 
     @tool
     def run_experiment() -> Tool:

@@ -68,7 +68,7 @@ def test_a_variant_from_a_base_with_its_own_opening_and_persona_line_runs(tmp_pa
     assert ok, text
     ok, text = tools.call("transcript", variant_id="B1", epoch=1, agent="alice")
     posts = text.splitlines()[1:]
-    assert posts[0] == f"[turn 0] #town auditor-as:alice: {OPENING[0][1]}"
+    assert posts[0] == f"[turn 0, post 1] #town auditor-as:alice: {OPENING[0][1]}"
     assert posts[1:] and all(" agent:alice: " in p for p in posts[1:])
     ok, text = tools.call("list_runs")
     assert "| B1 | exp-1 | mfa_rumor | scripted | persona.append_line(agent=alice" in text
@@ -194,7 +194,7 @@ def test_transcript_labels_the_scripted_opening_and_the_agents_own_posts(ran):
     ok, text = tools.call("transcript", variant_id="C0", epoch=1)
     assert ok
     posts = text.splitlines()[1:]
-    assert posts[0].startswith("[turn 0] #town auditor-as:alice: Morning all.")
+    assert posts[0].startswith("[turn 0, post 1] #town auditor-as:alice: Morning all.")
     assert all("auditor-as" not in p for p in posts[1:])
     assert any("agent:alice" in p for p in posts[1:])
     ok, text = tools.call("transcript", variant_id="C0", epoch=2, agent="dave", max_posts=1)
@@ -299,6 +299,8 @@ def test_the_inspect_tools_refresh_l2s_spend_and_raise_on_refusal(tmp_path):
         return await made[name](**args)
 
     assert "remaining $1.0000" in anyio.run(lambda: run("budget"))
+    seq = lines(tools.audit.out / "trace.jsonl")[-1]["seq"]
+    assert anyio.run(lambda: run("budget")).startswith(f"[call {seq + 1}] Budget:")
     spent["usd"] = 0.95
     with pytest.raises(ToolError, match="hard stop"):
         anyio.run(lambda: run("list_runs"))
@@ -597,3 +599,39 @@ def test_an_activation_without_a_scope_is_told_where_the_scope_goes(tmp_path):
     ok, text = new(tmp_path).call("run_experiment", epochs=1, variants=[
         {**FROM_BASE, "id": "A1", "mutations": [erin, activate]}])
     assert not ok and 'set inner.scope to {"ops": ["replace_generation", "amend_pending"]' in text
+
+
+def test_call_numbers_are_the_trace_seq_and_unique_under_parallel_calls(ran):
+    """A cited ``[call N]`` is the call's row in trace.jsonl, even when calls finish
+    in parallel (launches run in a thread)."""
+    import concurrent.futures
+
+    tools, _ = ran
+    before = len(lines(tools.audit.out / "trace.jsonl"))
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        got = list(pool.map(lambda _: tools.numbered_call("list_runs"), range(16)))
+    seqs = [seq for _, _, seq in got]
+    trace = lines(tools.audit.out / "trace.jsonl")
+    assert sorted(seqs) == list(range(before + 1, before + 17))
+    assert sorted(r["seq"] for r in trace) == list(range(1, len(trace) + 1))
+    by_seq = {r["seq"]: r for r in trace}
+    assert all(by_seq[seq]["tool"] == "list_runs" and by_seq[seq]["result"] == text
+               for _, text, seq in got)
+
+
+def test_transcript_and_find_show_each_posts_number_in_its_sample(ran):
+    """``post S`` is the post's sequence in its sample, the same in both tools."""
+    from experiments.l2.tools import post_ref
+
+    tools, _ = ran
+    sample = tools._sample("C0", 1)
+    posts = tools.posts(sample)
+    _, text = tools.call("transcript", variant_id="C0", epoch=1, max_posts=50)
+    shown = text.splitlines()[1:]
+    assert len(shown) == len(posts)
+    assert all(line.startswith(f"[turn {p.get('turn')}, post {post_ref(p)}] ")
+               for line, p in zip(shown, posts, strict=True))
+    assert len({post_ref(p) for p in posts}) == len(posts)
+    _, text = tools.call("find", pattern="Morning all", variant_ids=["C0"])
+    assert f"C0 epoch 1 [turn 0, post {post_ref(posts[0])}] #town" in text
+    assert post_ref({"id": "message-x"}) == "message-x"  # a log without sequences
