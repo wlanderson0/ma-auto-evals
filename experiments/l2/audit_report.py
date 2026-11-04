@@ -358,8 +358,8 @@ def _cosmos(tools: Tools) -> dict[str, Any]:
              for part in [links.get(k) if isinstance(links.get(k), dict) else {}]}
     runs = links.get("messages") if isinstance(links.get("messages"), dict) else {}
     found["messages"] = {
-        str(name): {"url": run["url"], "seq": {str(m): int(q) for m, q in run["seq"].items()
-                                               if isinstance(q, int)}}
+        str(name): {"url": run["url"], "seq": {str(m): q for m, q in run["seq"].items()
+                                               if type(q) is int}}
         for name, run in runs.items()
         if isinstance(run, dict) and url.fullmatch(str(run.get("url")))
         and isinstance(run.get("seq"), dict)}
@@ -410,30 +410,45 @@ def _counted(tools: Tools, target: str, vid: str, used: dict[str, Any],
              links: dict[str, Any]) -> list[str]:
     """Every message a ``counts`` claim counted, per run: the target's posts that use the
     scenario's name in its own words (copies of others' posts do not count), linked to
-    the message on Cosmos."""
+    the message on Cosmos. A run is listed only when its recorded count shows the
+    behaviour and the posts found add up to that count; otherwise it says so."""
+    from experiments.l2.results import own_uses
     from experiments.measures import own_mentions_by_post
 
     if used["rounds"] is not None:
-        return [f"  - (the messages are not listed for a count up to round {used['rounds']}; "
+        return [f"(the messages are not listed for a count up to round {used['rounds']}; "
                 "open the runs above)"]
-    results = tools.results()
-    runs = []
+    results, runs, off = tools.results(), [], []
     for sample in sorted(results.of(vid), key=lambda s: s.epoch):
-        run = links.get("messages", {}).get(f"{vid}/{sample.epoch}")
-        pattern = results.scenario(sample.base).mention
-        posts = [p for p, hits in own_mentions_by_post(pattern, target, tools.posts(sample))
-                 if hits > 0]
-        if not posts:
+        recorded = own_uses(sample, target)
+        if not recorded:  # no use recorded, or the count is unknown: nothing was counted
             continue
+        try:
+            pattern = results.scenario(sample.base).mention
+            found = [(p, hits) for p, hits in own_mentions_by_post(
+                pattern, target, tools.posts(sample)) if hits > 0]
+        except Exception:  # an unreadable log: this run only
+            off.append(f"epoch {sample.epoch} (its log could not be read)")
+            continue
+        if sum(hits for _, hits in found) != recorded:
+            off.append(f"epoch {sample.epoch} (recorded {recorded} uses; the posts found have "
+                       f"{sum(hits for _, hits in found)})")
+            continue
+        run = links.get("messages", {}).get(f"{vid}/{sample.epoch}")
         cells = []
-        for post in posts:
+        for post, _ in found:
             seq = (run or {}).get("seq", {}).get(str(post.get("id")))
             label = f"post {_inline(post_ref(post))}"
-            cells.append(f"[{label}]({run['url']}#msg-{int(seq)})" if run and seq is not None
+            cells.append(f"[{label}]({run['url']}#msg-{seq})" if run and seq is not None
                          else f"{label} (not on Cosmos)")
         runs.append(f"epoch {sample.epoch}: " + ", ".join(cells))
-    return [f"  - The messages counted in {_inline(vid)} ({_inline(target)}'s own uses): "
-            + "; ".join(runs)] if runs else []
+    out = []
+    if runs:
+        out.append(f"The messages counted in {_inline(vid)} ({_inline(target)}'s own uses of "
+                   "the name): " + "; ".join(runs))
+    if off:
+        out.append(f"Messages not listed in {_inline(vid)}: " + "; ".join(off))
+    return out
 
 
 def _code(value: Any) -> str:

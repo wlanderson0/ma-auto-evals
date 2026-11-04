@@ -83,16 +83,23 @@ def resolve(tools: Any, runs: Mapping[str, str], get: Get, base_url: str) -> dic
             samples[f"{vid}/{epoch}"] = f"{base}/samples/{theirs[key]}"
     refs = {(r["variant"], r["epoch"], r["post"]) for claim in tools.claims or []
             for r in claim["evidence"] if "call" not in r}
-    counted = {vid for claim in tools.claims or [] for vid in _counted_variants(tools, claim)}
-    wanted = sorted({(vid, epoch) for vid, epoch, _ in refs}
-                    | {(vid, s.epoch) for vid in counted for s in results.of(vid)}, key=str)
+    counted: dict[str, set[str]] = {}  # variant -> the targets whose counted posts are linked
+    for claim in tools.claims or []:
+        for vid in _counted_variants(tools, claim):
+            counted.setdefault(vid, set()).add(claim["target"])
+    cited = {(vid, epoch): {str(find_post(tools, {"variant": vid, "epoch": epoch, "post": post})
+                                .get("sender"))}
+             for vid, epoch, post in refs if _found(tools, vid, epoch, post)}
+    wanted = sorted({*cited, *((vid, s.epoch) for vid in counted for s in results.of(vid))},
+                    key=str)
     messages: dict[str, dict[str, Any]] = {}
     for vid, epoch in wanted:
         sid = sample_ids.get((vid, epoch))
         if sid is None:
             continue
+        senders = counted.get(vid, set()) | cited.get((vid, epoch), set())
         try:
-            found = _channel(get, sid)
+            found = _channel(get, sid, senders)
         except Exception as error:  # one run, not the whole command
             problems.append(f"{vid} epoch {epoch}: messages not read: "
                             f"{type(error).__name__}: {error}")
@@ -123,15 +130,24 @@ def resolve(tools: Any, runs: Mapping[str, str], get: Get, base_url: str) -> dic
             "samples": samples, "posts": posts, "messages": messages, "problems": problems}
 
 
+def _found(tools: Any, vid: str, epoch: int, post: Any) -> bool:
+    try:
+        find_post(tools, {"variant": vid, "epoch": epoch, "post": post})
+    except Exception:  # no such post, or its log cannot be read: left unlinked
+        return False
+    return True
+
+
 def _counted_variants(tools: Any, claim: Mapping[str, Any]) -> list[str]:
     """The variants whose counted messages a claim's links show: those of a rate or a
-    comparison read from ``counts``."""
+    comparison read from ``counts`` over the whole run (a count up to a round is not
+    listed message by message)."""
     from experiments.l2.claims import basis
 
     if claim.get("kind") not in ("rate", "difference", "no_difference"):
         return []
     used = basis(tools, claim)
-    if not used or used.get("scorer") != "counts":
+    if not used or used.get("scorer") != "counts" or used.get("rounds") is not None:
         return []
     return [claim["variant"]] if claim["kind"] == "rate" else [claim["a"], claim["b"]]
 
@@ -156,9 +172,10 @@ def _when(stamp: Any) -> datetime | None:
         return None
 
 
-def _channel(get: Get, sid: int) -> tuple[str, dict[str, int]] | None:
+def _channel(get: Get, sid: int, senders: set[str]) -> tuple[str, dict[str, int]] | None:
     """A sample's channel messages on the branch Cosmos shows by default (the last
-    completed one, else the last): the branch key and each message id's ``seq``."""
+    completed one, else the last): the branch key and the ``seq`` of each message id
+    sent by one of ``senders`` (the only ones the report links)."""
     branches = get(f"/api/samples/{sid}").get("branches") or []
     done = [b for b in branches if b.get("status") == "completed"]
     branch = (done or branches or [None])[-1]
@@ -169,7 +186,7 @@ def _channel(get: Get, sid: int) -> tuple[str, dict[str, int]] | None:
         page = get(f"/api/samples/{sid}/branches/{key}/messages?kind=channel&limit={PAGE}"
                    f"&offset={offset}")
         for m in page["items"]:
-            if m.get("source_id"):
+            if m.get("source_id") and str(m.get("sender")) in senders:
                 seqs.setdefault(str(m["source_id"]), int(m["seq"]))
         offset += len(page["items"])
         if not page["items"] or offset >= int(page["total"]):

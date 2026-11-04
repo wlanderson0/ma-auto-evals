@@ -26,8 +26,9 @@ def fake_cosmos(tools, page=3, fail=None):
             samples.append({"id": sid, "scenario": f"{s.base}--{vid}",
                             "condition": s.condition, "epoch": s.epoch})
             posts = tools.posts(s)
-            messages[sid] = [{"seq": 0, "source_id": "cosmos-own"}] + [
-                {"seq": i + 1, "source_id": p["id"]} for i, p in enumerate(posts)]
+            messages[sid] = [{"seq": 0, "source_id": "cosmos-own", "sender": "system"}] + [
+                {"seq": i + 1, "source_id": p["id"], "sender": p["sender"]}
+                for i, p in enumerate(posts)]
     calls = []
     decisions = json.loads(next(tools.audit.out.glob("experiments/exp-1/decisions.json"))
                            .read_text())
@@ -182,7 +183,8 @@ def test_a_malformed_cosmos_json_is_ignored(audit):
 def test_a_count_links_every_message_it_counted(audit, monkeypatch):
     """A claim read from counts lists, per run, each post that counted (the target's own
     uses of the name; a post copying another agent's counts 0), each linked to its
-    message on Cosmos. Here the mock posts' "Status" stands in for the scenario's name."""
+    message on Cosmos, when they add up to the recorded count. The mock posts' "Status"
+    stands in for the scenario's name, and the recorded counts are set to match it."""
     import dataclasses
 
     from experiments.l2.results import Results
@@ -192,6 +194,14 @@ def test_a_count_links_every_message_it_counted(audit, monkeypatch):
     real = Results.scenario
     monkeypatch.setattr(Results, "scenario", lambda self, base: dataclasses.replace(
         real(self, base), mention=r"Status"))
+    samples_v1 = sorted(tools.results().of("V1"), key=lambda s: s.epoch)
+    own = {s.epoch: sum(h for _, h in own_mentions_by_post(r"Status", "bob", tools.posts(s)))
+           for s in samples_v1}
+    assert all(own.values())  # Bob's first status line is his own in each run
+    recorded = {1: own[1], 2: own[2] + 1}  # epoch 2's record disagrees with its posts
+    for s in samples_v1:
+        s.scores["counts"] = {"final": "b", "branches": {"b": {"agents": {
+            "bob": {"own_mentions": recorded[s.epoch]}}}}}
     tools.claims = [{"text": "Bob says it.", "kind": "rate", "variant": "V1", "target": "bob",
                      "k": 2, "n": 2, "evidence": [{"call": 2}], "verdict": "checked",
                      "reasons": [], "basis": {"call": 2, "scorer": "counts", "rounds": None,
@@ -199,19 +209,38 @@ def test_a_count_links_every_message_it_counted(audit, monkeypatch):
     get, samples, messages, _ = fake_cosmos(tools)
     links = resolve(tools, {"exp-1": "abc123"}, get, BASE)
     assert set(links["messages"]) == {"V1/1", "V1/2"} and links["problems"] == []
+    assert all(len(r["seq"]) < len(messages[100]) for r in links["messages"].values())
     (tools.audit.out / "cosmos.json").write_text(json.dumps(links))
-    report = render(tools)
-    line = next(x for x in report.splitlines() if "The messages counted in V1" in x)
-    by_key = {(s["scenario"], s["epoch"]): s["id"] for s in samples}
-    for epoch in (1, 2):
-        sid = by_key[("mfa_rumor--V1", epoch)]
-        posts = tools.posts(tools._sample("V1", epoch))
-        counted = [p for p, hits in own_mentions_by_post(r"Status", "bob", posts) if hits]
-        assert counted  # Bob's first status line is his own
-        for post in counted:
-            seq = next(m["seq"] for m in messages[sid] if m["source_id"] == post["id"])
-            assert f"[post {post_ref(post)}]({BASE}/samples/{sid}?branch=branch-0&kind=channel#msg-{seq})" in line
-        copied = [p for p, hits in own_mentions_by_post(r"Status", "bob", posts)
-                  if not hits and "Status" in p["content"]]
-        assert all(f"post {post_ref(p)}]" not in line.split(f"epoch {epoch}:")[1].split(";")[0]
-                   for p in copied)  # copies of another agent's post are not linked
+    lines = render(tools).splitlines()
+    marks = next(x for x in lines if "bob in each run of V1" in x)
+    listed = next(x for x in lines if "The messages counted in V1" in x)
+    off = next(x for x in lines if "Messages not listed in V1" in x)
+    assert listed.startswith("   - The messages") and off.startswith("   - Messages")
+    assert "[1 ✓]" in marks and "[2 ✓]" in marks
+    sid = next(s["id"] for s in samples if (s["scenario"], s["epoch"]) == ("mfa_rumor--V1", 1))
+    posts = tools.posts(samples_v1[0])
+    for post, hits in own_mentions_by_post(r"Status", "bob", posts):
+        seq = next(m["seq"] for m in messages[sid] if m["source_id"] == post["id"])
+        link = f"[post {post_ref(post)}]({BASE}/samples/{sid}?branch=branch-0&kind=channel#msg-{seq})"
+        assert (link in listed) == bool(hits)  # counted posts only, copies left out
+    assert "epoch 2:" not in listed and f"epoch 2 (recorded {own[2] + 1} uses" in off
+
+
+def test_a_run_with_no_recorded_count_lists_no_messages(audit, monkeypatch):
+    """The commit's first version listed messages for runs whose count is unknown."""
+    import dataclasses
+
+    from experiments.l2.results import Results
+
+    tools, _ = audit
+    real = Results.scenario
+    monkeypatch.setattr(Results, "scenario", lambda self, base: dataclasses.replace(
+        real(self, base), mention=r"Status"))
+    tools.claims = [{"text": "Bob.", "kind": "rate", "variant": "V1", "target": "bob", "k": 0,
+                     "n": 0, "evidence": [{"call": 2}], "verdict": "checked", "reasons": [],
+                     "basis": {"call": 2, "scorer": "counts", "rounds": None, "field": None}}]
+    get, *_ = fake_cosmos(tools)
+    (tools.audit.out / "cosmos.json").write_text(json.dumps(
+        resolve(tools, {"exp-1": "abc123"}, get, BASE)))
+    text = render(tools)
+    assert "[1 ?]" in text and "The messages counted" not in text  # mfa has no recorded count
