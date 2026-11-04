@@ -14,6 +14,7 @@ never fatal.
 
 from __future__ import annotations
 
+import glob
 import json
 import re
 from collections import Counter
@@ -322,7 +323,19 @@ def _claims(tools: Tools) -> list[str]:
                 f": {_inline(claim['text'])}",
                 f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
         out += [f"   - {_inline(reason)}" for reason in claim["reasons"]]
-    return out + ["", *_where(tools)]
+    try:
+        where = _where(tools)
+    except Exception as error:  # the report is still written
+        where = ["### Where the cited evidence is", "",
+                 f"(could not be worked out: {_inline(f'{type(error).__name__}: {error}')})",
+                 ""]
+    return out + ["", *where]
+
+
+def _code(value: Any) -> str:
+    """A value in a code span, or escaped text if it would break one."""
+    text = " ".join(str(value).split())
+    return _inline(text) if "`" in text else f"`{text}`"
 
 
 def _where(tools: Tools) -> list[str]:
@@ -350,7 +363,13 @@ def _where(tools: Tools) -> list[str]:
         out.append(f"- **call {seq}**: `{row.get('tool')}` ({shown}), row {seq} of "
                    "`trace.jsonl`" + (" (its code is in the row's args)"
                                       if row.get("tool") == "run_python" else ""))
-        out += [f"  - {line}" for line in _logs(tools, _variants_read(tools, row))]
+        try:
+            read = _variants_read(tools, row)
+        except Exception as error:
+            out.append(f"  - (the variants it read could not be worked out: "
+                       f"{_inline(error)})")
+            continue
+        out += [f"  - {line}" for line in _logs(tools, read)]
     for variant, epoch, post in posts:
         out.append(f"- **{_inline(variant)} epoch {epoch} post {_inline(post)}**: "
                    + _post_where(tools, {"variant": variant, "epoch": epoch, "post": post}))
@@ -366,7 +385,12 @@ def _variants_read(tools: Tools, row: dict[str, Any]) -> list[str]:
         return [args["variant_id"]] if args.get("variant_id") else []
     if row.get("tool") == "find":
         ids = args.get("variant_ids")
-        return _ids(ids) if ids else sorted(tools.results().runs)
+        if ids:
+            return _ids(ids)
+        # every variant there was when it ran: those launched before this call
+        launched = claims_._launch_seqs(tools)
+        return sorted(v for v in tools.results().runs
+                      if launched.get(v, 0) < row.get("seq", 0))
     return []
 
 
@@ -380,14 +404,25 @@ def _logs(tools: Tools, ids: list[str]) -> list[str]:
     for vid in ids:
         samples = sorted(results.of(vid), key=lambda s: s.epoch)
         if not samples:
-            lines.append(f"`{_inline(vid)}`: no runs found")
+            lines.append(f"{_code(vid)}: no runs found")
             continue
         paths = sorted({_rel(tools, s.log) for s in samples})
-        where = (f"`{paths[0]}`" if len(paths) == 1 else
-                 f"{len(paths)} logs, one per epoch: `{_pattern(paths)}`")
-        lines.append(f"`{vid}` ({tools._where.get(vid, '?')}, epochs "
+        if len(paths) == 1:
+            where = _code(paths[0])
+        else:
+            pattern = _pattern(paths)
+            root = tools.audit.out
+            matched = {_rel(tools, str(m)) for m in root.glob(pattern)} if not Path(
+                pattern).is_absolute() else set(glob.glob(pattern))
+            # a pattern that would also match another variant's logs (e.g. ids V_x and
+            # V-x, which Inspect's file names make the same) is replaced by the list
+            where = (f"{len(paths)} logs, one per epoch: {_code(pattern)}"
+                     if matched == set(paths) else
+                     f"{len(paths)} logs: " + ", ".join(_code(p) for p in paths))
+        built = f"{samples[0].base}--{vid}"
+        lines.append(f"{_code(vid)} ({tools._where.get(vid, '?')}, epochs "
                      f"{_span([s.epoch for s in samples])}): {where}; on Cosmos, "
-                     f"`{samples[0].base}--{vid}` / `{samples[0].condition}`")
+                     f"{_code(built)} / {_code(samples[0].condition)}")
     return lines
 
 
@@ -398,10 +433,11 @@ def _post_where(tools: Tools, ref: dict[str, Any]) -> str:
     except Exception as error:
         return f"(could not be found: {_inline(error)})"
     text = " ".join(str(post.get("content", "")).split())
-    return (f"`{_rel(tools, sample.log)}`, message `{_inline(post.get('id'))}` (turn "
+    built = f"{sample.base}--{ref['variant']}"
+    return (f"{_code(_rel(tools, sample.log))}, message {_code(post.get('id'))} (turn "
             f"{post.get('turn')}, #{_inline(post.get('channel_id'))}, "
-            f"{_inline(post.get('label'))}); on Cosmos, `{sample.base}--{ref['variant']}` / "
-            f"`{sample.condition}` / epoch {ref['epoch']}. It reads: "
+            f"{_inline(post.get('label'))}); on Cosmos, {_code(built)} / "
+            f"{_code(sample.condition)} / epoch {ref['epoch']}. It reads: "
             f"\"{_inline(text[:300])}{'…' if len(text) > 300 else ''}\"")
 
 

@@ -245,3 +245,47 @@ def test_the_report_says_where_each_cited_call_and_post_is(tmp_path):
         assert f"message `{post['id']}`" in line and "agent:bob" in line
         assert str(Path(sample.log).relative_to(tools.audit.out)) in line
         assert "It reads: \"Status update" in line
+
+
+def test_a_pattern_that_would_match_another_variants_logs_becomes_a_list(tmp_path):
+    """Inspect writes V_x and V-x under the same task name, so no glob tells them apart."""
+    tools = tools_for(tmp_path)
+    assert tools.call("run_experiment", epochs=2, variants=[
+        C0, {**V1, "id": "V_x"}, {**V1, "id": "V-x"}])[0]
+    assert tools.call("scores", variant_ids=["V_x"], against="C0", scorer="probe")[0]
+    claims = [{"text": "Dave: 0/2 in V_x.", "kind": "rate", "variant": "V_x",
+               "target": "dave", "k": 0, "n": 2, "evidence": [{"call": 2}]}]
+    assert tools.call("end_audit", conclusions="c", claims=claims)[0]
+    section = (tools.audit.out / "report.md").read_text().split(
+        "### Where the cited evidence is")[1].split("\n## ")[0]
+    line = next(x for x in section.splitlines() if x.startswith("  - `V_x`"))
+    assert "one per epoch" not in line and "2 logs: " in line
+    assert all(f"`{Path(s.log).relative_to(tools.audit.out)}`" in line
+               for s in tools.results().of("V_x"))
+
+
+def test_a_cited_search_lists_only_variants_launched_before_it(tmp_path):
+    tools = tools_for(tmp_path)
+    assert tools.call("run_experiment", variants=[C0], epochs=1)[0]  # call 1
+    assert tools.call("find", pattern="Status")[0]  # call 2
+    assert tools.call("run_experiment", variants=[V1], epochs=1)[0]  # call 3
+    claims = [{"text": "Something I searched for.", "kind": "other",
+               "evidence": [{"call": 2}]}]
+    assert tools.call("end_audit", conclusions="c", claims=claims)[0]
+    section = (tools.audit.out / "report.md").read_text().split(
+        "### Where the cited evidence is")[1].split("\n## ")[0]
+    assert "  - `C0` (exp-1" in section and "`V1`" not in section
+
+
+def test_unreadable_results_never_lose_the_report(tmp_path):
+    tools = tools_for(tmp_path)
+    assert tools.call("run_experiment", variants=[C0], epochs=1)[0]
+    assert tools.call("find", pattern="Status")[0]
+    tools.claims = [{"text": "x", "kind": "other", "evidence": [{"call": 2}],
+                     "verdict": "unchecked", "reasons": []}]
+    tools.conclusions = "c"
+    runs = next(tools.audit.out.glob("experiments/exp-*/runs.jsonl"))
+    runs.write_text(runs.read_text() + "{not json\n")
+    tools._key = None
+    text = render(tools)
+    assert "## Claims, checked against the logs" in text and "## Ledger" in text
