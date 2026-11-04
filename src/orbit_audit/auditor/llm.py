@@ -223,7 +223,8 @@ class LLMAuditor(AuditPolicy):
         if new_branch and view.branch != "branch-0":
             lines.append(f"This is the first boundary of {view.branch}, forked at this "
                          "revision. The agents remember nothing after it; you do.")
-        if view.queries is not None and (roster := view.queries.agents()):
+        several = self.scope is None or self.scope.agents is None or len(self.scope.agents) > 1
+        if several and view.queries is not None and (roster := view.queries.agents()):
             touched = view.queries.touched()
             clean = [agent for agent in roster if agent not in touched]
             lines.append(f"Clean agents (untouched by you in this branch): "

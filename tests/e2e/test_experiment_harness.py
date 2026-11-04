@@ -50,28 +50,47 @@ def roster(scenario):
 
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
-def test_the_l1_auditor_may_write_or_edit_any_agent_but_nothing_else(name):
+def test_the_l1_auditor_may_act_only_through_the_scenarios_allowlist(name):
     scenario = SCENARIOS[name]({})
+    assert scenario.allowed == (scenario.seat,)  # every seed scenario: the seat alone
     for agent in roster(scenario):
-        assert scenario.scope.problem(ReplaceGeneration(agent=agent, content="x")) is None
+        problem = scenario.scope.problem(ReplaceGeneration(agent=agent, content="x"))
+        assert (problem is None) == (agent in scenario.allowed), agent
     problem = scenario.scope.problem(OverrideToolResult(agent=scenario.seat, result="x"))
     assert "outside this audit's scope" in problem  # the operations stay limited
 
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
-def test_the_l1_auditor_is_woken_before_every_agents_generation(name):
+def test_the_l1_auditor_is_woken_only_before_the_generations_it_may_act_on(name):
     scenario = SCENARIOS[name]({})
     policy = make_policy("l1", scenario, "mockllm/auditor")
     for agent in roster(scenario):
         view = BoundaryView(boundary=Boundary.GENERATION, revision=2, turn=0, agent=agent)
-        assert policy.wake(view), agent
+        assert bool(policy.wake(view)) == (agent in scenario.allowed), agent
 
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
-def test_no_seed_instruction_confines_the_auditor_to_one_agent(name):
-    goal = " ".join(SCENARIOS[name]({}).goal.split())
-    assert "ONLY through" not in goal
-    assert "untouched" in goal  # it is told what touching an agent costs
+def test_the_seed_instruction_names_the_agents_the_allowlist_names(name):
+    scenario = SCENARIOS[name]({})
+    goal = " ".join(scenario.goal.split())
+    assert 'ONLY through' in goal and f'agent "{scenario.seat}"' in goal
+
+
+def widened(name, *extra):
+    scenario = SCENARIOS[name]({})
+    return dataclasses.replace(scenario, controllable=(scenario.seat, *extra))
+
+
+def test_widening_the_allowlist_is_the_only_change_needed_to_act_through_another_agent():
+    scenario = widened("mfa_rumor", "bob")
+    assert scenario.allowed == ("alice", "bob")
+    assert scenario.scope.problem(ReplaceGeneration(agent="bob", content="x")) is None
+    assert scenario.scope.problem(ReplaceGeneration(agent="carol", content="x")) is not None
+    policy = make_policy("l1", scenario, "mockllm/auditor")
+    wakes = {agent: bool(policy.wake(BoundaryView(
+        boundary=Boundary.GENERATION, revision=2, turn=0, agent=agent)))
+        for agent in roster(scenario)}
+    assert wakes == {"alice": True, "bob": True, "carol": False, "dave": False}
 
 
 def test_an_l1_auditor_that_acts_through_a_target_leaves_it_unmeasured_and_the_rest_clean(
@@ -93,7 +112,7 @@ def test_an_l1_auditor_that_acts_through_a_target_leaves_it_unmeasured_and_the_r
     models = _mock_models()
     models["probe"] = models["judge"]
     models["auditor"] = get_model("mockllm/auditor", custom_outputs=auditor, memoize=False)
-    [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "l1", 1, tmp_path, models)
+    [row] = run_condition(widened("mfa_rumor", "bob"), "l1", 1, tmp_path, models)
     assert row["status"] == "success" and acted
     assert row["interventions"]["applied"] == {"replace_generation": 1}
     assert row["interventions"]["off_seat"] == ["replace_generation"]  # beyond the seat

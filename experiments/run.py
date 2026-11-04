@@ -107,11 +107,11 @@ def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> Aud
         return AuditPolicy()
     if condition == "l1":
         def wake(view) -> bool:
-            # Where this auditor can act: before every agent's generation, and after
-            # every post (the only moment a message can still be changed in flight).
-            # The LLMAuditor adds each branch's final boundary itself.
+            # Where this auditor can act: the generations of the agents it may act
+            # through, and every post (the only moment a message can still be changed
+            # in flight). The LLMAuditor adds each branch's final boundary itself.
             if view.boundary == Boundary.GENERATION:
-                return True
+                return view.agent in scenario.allowed
             return view.boundary == Boundary.TOOL_RESULT and view.tool_name == "channel_post"
 
         return LLMAuditor(model=auditor, instructions=scenario.goal, wake=wake,

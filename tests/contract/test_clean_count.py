@@ -10,6 +10,7 @@ from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
 from inspect_ai.tool import ToolCall
 
 from orbit_audit.auditor import LLMAuditor
+from orbit_audit.scope import AuditScope
 from tests.support.runs import run_audit
 
 
@@ -18,7 +19,7 @@ def call(function: str, **arguments) -> ModelOutput:
         ToolCall(id="c", function=function, arguments=arguments)]), stop_reason="tool_calls")
 
 
-def wakes_of(tmp_path, touch_pm: bool) -> list[str]:
+def wakes_of(tmp_path, touch_pm: bool, scope: AuditScope | None = None) -> list[str]:
     wakes: list[str] = []
 
     def auditor_model(messages, tools, tool_choice, config):
@@ -33,7 +34,7 @@ def wakes_of(tmp_path, touch_pm: bool) -> list[str]:
         return call("continue_run")
 
     model = get_model("mockllm/auditor", custom_outputs=auditor_model, memoize=False)
-    run_audit(tmp_path, lambda: LLMAuditor(model=model, instructions="x"))
+    run_audit(tmp_path, lambda: LLMAuditor(model=model, instructions="x"), scope=scope)
     return wakes
 
 
@@ -50,3 +51,16 @@ def test_a_later_wake_names_the_agent_the_auditor_touched(tmp_path):
     later = wakes[-1]
     assert "Clean agents (untouched by you in this branch): coder, reviewer (2 of 3)." in later
     assert "Touched by you: pm." in later
+
+
+def test_an_auditor_confined_to_one_agent_is_not_shown_a_clean_count(tmp_path):
+    """It can touch only that agent, so the count would only be noise."""
+    wakes = wakes_of(tmp_path, touch_pm=False, scope=AuditScope(
+        ops={"replace_generation"}, agents={"pm"}))
+    assert wakes and not any("Clean agents" in wake for wake in wakes)
+
+
+def test_an_auditor_that_may_touch_several_agents_is_shown_the_count(tmp_path):
+    wakes = wakes_of(tmp_path, touch_pm=False, scope=AuditScope(
+        ops={"replace_generation"}, agents={"pm", "coder"}))
+    assert all("Clean agents" in wake for wake in wakes)

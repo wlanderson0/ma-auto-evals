@@ -132,9 +132,9 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   scenario and condition from the two folder names.
 - **Results rows**: `scenario`, `condition`, `epoch` and `log` (the `.eval`
   path) pair a row with its sample; `seat` and `interventions.off_seat` feed the
-  off-seat check (the Level 1 auditor may act through any agent, so its off-seat
-  operations are no longer a violation, only operations beyond the seat). `touched`
-  and each target's `clean` are not read. The whole row is shown on the sample page.
+  off-seat check (operations beyond the seat; a violation unless the scenario's
+  `controllable` allowlist is widened). `touched` and each target's `clean` are not
+  read. The whole row is shown on the sample page.
 - **Info events**: `transcript().info({"event": ..., ...}, source="orbit_audit")`,
   attributed to the enclosing `span(type="branch")`, whose name is the branch id
   (`runner.py`).
