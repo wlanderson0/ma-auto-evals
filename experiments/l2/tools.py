@@ -20,7 +20,9 @@ for L2 rather than an exception.
 - ``run_python(code)``: L2's own Python on the audit's logs (``workspace``).
 - ``write_scenario(name, code)``: a scenario module L2 writes (``written``), saved once it
   passes its checks and dry-run; then a base like any other.
-- ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions)``.
+- ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions, claims)``:
+  the claims are checked against the record (``claims``) and saved with their verdicts in
+  ``claims.json``.
 
 Outputs are short by default: small plain tables, the first N posts or matches. L2 sees
 each result after its call number (`[call N]`, the call's `seq` in `trace.jsonl`), and each
@@ -30,11 +32,11 @@ post with its number in the sample (`post S`, `post_ref`), so a claim can cite b
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import keyword
 import math
 import re
-import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -46,6 +48,7 @@ from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
 
+from experiments.l2 import claims as claims_
 from experiments.l2 import workspace
 from experiments.l2 import written as written_
 from experiments.l2.apply import recorded_inner
@@ -152,6 +155,9 @@ class Tools:
         self.on_end = on_end
         """Called once ``end_audit`` has recorded the conclusions (writes the report)."""
         self.conclusions: str | None = None
+        self.claims: list[dict[str, Any]] | None = None
+        """L2's claims with their verdicts (``claims.check_claims``); ``None`` if it gave
+        none."""
         self._results: Results | None = None
         self._where: dict[str, str] = {}
         self._key: Any = None
@@ -162,7 +168,6 @@ class Tools:
         self.written = audit.written()
         """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
-        self._seq_lock = threading.Lock()
 
     # ------------------------------------------------------------ dispatch
     def call(self, name: str, /, **args: Any) -> tuple[bool, str]:
@@ -173,7 +178,11 @@ class Tools:
 
     def numbered_call(self, name: str, /, **args: Any) -> tuple[bool, str, int]:
         """``call``, plus the call's number in ``trace.jsonl`` (its ``seq``), which L2
-        sees as ``[call N]`` and cites as evidence for a claim."""
+        sees as ``[call N]`` and cites as evidence for a claim. The number is taken when
+        the call starts, so records written during it (``proposed.jsonl``) carry it too.
+        (L2's tools are serial: Inspect runs a tool in parallel only if it says so.)"""
+        self._seq += 1
+        seq = self._seq
         try:
             if name not in TOOLS:
                 raise Refused(f"unknown tool {name!r}")
@@ -194,27 +203,25 @@ class Tools:
             ok, text = False, str(error)
         except Exception as error:  # a bug or a bad argument: L2 sees it, the audit goes on
             ok, text = False, f"error: {type(error).__name__}: {error}"
-        return ok, text, self._trace(name, args, ok, text)
+        return ok, text, self._trace(name, args, ok, text, seq)
 
-    def _trace(self, name: str, args: dict[str, Any], ok: bool, text: str) -> int:
-        """Record a call in ``trace.jsonl``; its number (``seq``). Calls can finish in
-        parallel (launches run in a thread), so numbering and writing share a lock."""
-        budget = self.audit.budget()
-        with self._seq_lock:
+    def _trace(self, name: str, args: dict[str, Any], ok: bool, text: str,
+               seq: int | None = None) -> int:
+        """Record a call in ``trace.jsonl``; its number (``seq``, a new one if not given).
+        The row keeps the result's sha256, since a long result is cut in the row."""
+        if seq is None:
             self._seq += 1
             seq = self._seq
-            self._write_trace(seq, name, args, ok, text, budget)
-        return seq
-
-    def _write_trace(self, seq: int, name: str, args: dict[str, Any], ok: bool, text: str,
-                     budget: dict[str, Any]) -> None:
+        budget = self.audit.budget()
         row = {"seq": seq, "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": name,
                "args": args, "ok": ok,
+               "result_sha256": hashlib.sha256(text.encode()).hexdigest(),
                "result": text if len(text) <= TRACE_CHARS else
                text[:TRACE_CHARS] + f"… [{len(text) - TRACE_CHARS} more characters]",
                "spent_usd": budget["spent_usd"], "remaining_usd": budget["remaining_usd"]}
         with (self.audit.out / "trace.jsonl").open("a") as file:
             file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+        return seq
 
     def trace(self) -> list[dict[str, Any]]:
         path = self.audit.out / "trace.jsonl"
@@ -355,7 +362,7 @@ class Tools:
         now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         with (self.audit.out / "proposed.jsonl").open("a") as file:
             for entry, more in zip(entries, info, strict=True):
-                row = {"time": now, "trace_seq": self._seq + 1, "proposed": entry,
+                row = {"time": now, "trace_seq": self._seq, "proposed": entry,
                        "launch": launch,
                        "experiment": experiment, "status": None, "problems": [],
                        "warnings": [], "epochs_done": 0, **more}
@@ -703,19 +710,34 @@ class Tools:
                                                        for k, v in b["by_experiment"].items()))
         return "\n".join(lines)
 
-    def end_audit(self, conclusions: str) -> str:
+    def end_audit(self, conclusions: str, claims: Any = None) -> str:
+        """``claims`` (a list, or its JSON) are checked before anything ends: malformed
+        claims or citations are refused, so L2 can fix them. ``None`` (no claims given)
+        is kept for callers that predate them; the report says nothing was checked."""
         if not isinstance(conclusions, str) or not conclusions.strip():
             raise Refused("conclusions are required: what can and cannot be concluded, the "
                           "search counts, and where you departed from the guidance")
-        self.conclusions = conclusions.strip()
+        checked = None
+        if claims is not None:
+            try:
+                parsed = claims_.parse_claims(claims, self)
+            except claims_.ClaimError as error:
+                raise Refused(str(error)) from error
+            checked = claims_.check_claims(self, parsed)
+        self.conclusions, self.claims = conclusions.strip(), checked
         try:
+            if checked is not None:
+                (self.audit.out / "claims.json").write_text(
+                    json.dumps(checked, indent=2, sort_keys=True, default=str) + "\n")
             if self.on_end is not None:
                 self.on_end(self)
         except Exception:
-            self.conclusions = None  # not ended: L2 can call end_audit again
+            self.conclusions = self.claims = None  # not ended: L2 can call end_audit again
             raise
         self.audit.ended = True
-        return "The audit has ended; the report is in report.md."
+        verdicts = ("no claims given, so nothing was checked" if checked is None
+                    else f"claims: {claims_.summary(checked)} (see claims.json)")
+        return f"The audit has ended; the report is in report.md. {verdicts}."
 
 
 def post_ref(post: Mapping[str, Any]) -> int | str:
@@ -888,15 +910,15 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                 if name != "end_audit":
                     text = (f"refused: L2's own spend cannot be read ({error}); call "
                             "end_audit with your conclusions.")
-                    tools._trace(name, args, False, text)
-                    raise ToolError(text) from error
+                    seq = tools._trace(name, args, False, text)
+                    raise ToolError(f"[call {seq}] {text}") from error
         if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
             ok, text, seq = await anyio.to_thread.run_sync(
                 partial(tools.numbered_call, name, **args))
         else:
             ok, text, seq = tools.numbered_call(name, **args)
-        if not ok:
-            raise ToolError(text)
+        if not ok:  # numbered too: a launch that failed partway still holds runs
+            raise ToolError(f"[call {seq}] {text}")
         return f"[call {seq}] {text}"
 
     @tool
@@ -1078,16 +1100,33 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
     @tool
     def end_audit() -> Tool:
-        async def execute(conclusions: str) -> str:
-            """End the audit with your conclusions; this writes the report and stops you.
+        async def execute(conclusions: str, claims: str) -> str:
+            """End the audit with your conclusions and claims; this writes the report and
+            stops you. Each claim is checked against the logs and gets a verdict (checked,
+            lead, contradicted, invalid or unchecked) in the report. Malformed claims or
+            citations are refused, and nothing ends until they are fixed.
 
             Args:
-                conclusions: What can and cannot be concluded and the evidence for it, your
-                    mode and the measures you chose yourself, the search counts (variants,
-                    scorers and comparisons tried), and where you departed from the reading
-                    guidance.
+                conclusions: What can and cannot be concluded, your mode and the measures
+                    you chose yourself, the search counts (variants, scorers and
+                    comparisons tried), where you departed from the reading guidance, and
+                    limitations. Your findings go in claims; prose here is read as
+                    interpretation, not checked.
+                claims: A JSON list of your findings ([] if you claim nothing). Each is
+                    {"text": the claim in words, "kind", its fields, "evidence": a list
+                    of references}. A reference is {"call": N} (the [call N] before a tool
+                    result) or {"variant", "epoch", "post": S (from "post S"), "quote":
+                    words in that post}. Kinds and fields:
+                    "difference": "a", "b", "target", "direction" ("higher" or "lower":
+                    a's rate against b's), citing the scores call with against that
+                    compared them; "no_difference": "a", "b", "target", citing the same;
+                    "rate": "variant", "target", "k", "n" (k of n runs showing the
+                    behaviour), citing a scores call that read the variant; "existence":
+                    "target", citing that target's own posts, each with a quote (two
+                    epochs of one variant show it recurs); "other": anything else (e.g.
+                    a result from run_python), recorded but not checked.
             """
-            return await call("end_audit", conclusions=conclusions)
+            return await call("end_audit", conclusions=conclusions, claims=claims)
         return execute
 
     made = [list_runs(), scores(), transcript(), find(), run_python(),

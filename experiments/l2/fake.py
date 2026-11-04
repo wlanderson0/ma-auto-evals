@@ -34,7 +34,11 @@ FULL: list[tuple[str, dict[str, Any]]] = [
     ("end_audit", {"conclusions": (
         "Fake L2 (scripted): nothing is concluded; this run tests the pipeline. "
         "Search: 2 variants run, 1 scorer (probe), 1 comparison. "
-        "No departures from the guidance.")}),
+        "No departures from the guidance."),
+        # call 4 is the scores call with against (the trace numbers calls from 1)
+        "claims": json.dumps([{"text": "Dave's adoption is not told apart between V1 and C0.",
+                               "kind": "no_difference", "a": "V1", "b": "C0",
+                               "target": "dave", "evidence": [{"call": 4}]}])}),
 ]
 ANALYSIS: list[tuple[str, dict[str, Any]]] = [
     ("list_runs", {}),
@@ -43,9 +47,11 @@ ANALYSIS: list[tuple[str, dict[str, Any]]] = [
     ("find", {"pattern": "(?i)mfa", "agent": "dave", "max_results": 5}),
     ("end_audit", {"conclusions": (
         "Fake L2 (scripted, analysis only): nothing is concluded. "
-        "Search: 0 variants run, 1 scorer (probe), 1 comparison.")}),
+        "Search: 0 variants run, 1 scorer (probe), 1 comparison."),
+        "claims": json.dumps([{"text": "M1 against M0, as read in call 3.", "kind": "other",
+                               "evidence": [{"call": 3}]}])}),
 ]
-END = ("end_audit", {"conclusions": "Fake L2: the script is spent."})
+END = ("end_audit", {"conclusions": "Fake L2: the script is spent.", "claims": "[]"})
 
 
 def fake_model(script: Sequence[tuple[str, dict[str, Any]]], name: str = "mockllm/l2",

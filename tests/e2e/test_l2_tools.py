@@ -302,11 +302,11 @@ def test_the_inspect_tools_refresh_l2s_spend_and_raise_on_refusal(tmp_path):
     seq = lines(tools.audit.out / "trace.jsonl")[-1]["seq"]
     assert anyio.run(lambda: run("budget")).startswith(f"[call {seq + 1}] Budget:")
     spent["usd"] = 0.95
-    with pytest.raises(ToolError, match="hard stop"):
+    with pytest.raises(ToolError, match=r"^\[call \d+\] refused: .*hard stop"):
         anyio.run(lambda: run("list_runs"))
     assert tools.audit.budget()["by_kind"]["l2"] == 0.95
     with pytest.raises(ToolError, match="conclusions are required"):
-        anyio.run(lambda: run("end_audit", conclusions=""))
+        anyio.run(lambda: run("end_audit", conclusions="", claims="[]"))
 
 
 def test_find_tells_the_seats_scripted_opening_from_its_own_posts(ran):
@@ -485,7 +485,7 @@ def test_an_unreadable_spend_refuses_everything_but_end_audit(tmp_path):
     made = {ToolDef(t).name: t for t in inspect_tools(tools, spend=spend)}
     with pytest.raises(ToolError, match="cannot be read"):
         anyio.run(lambda: made["budget"]())
-    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping"))
+    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims="[]"))
 
 
 def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline_module):
@@ -601,22 +601,24 @@ def test_an_activation_without_a_scope_is_told_where_the_scope_goes(tmp_path):
     assert not ok and 'set inner.scope to {"ops": ["replace_generation", "amend_pending"]' in text
 
 
-def test_call_numbers_are_the_trace_seq_and_unique_under_parallel_calls(ran):
-    """A cited ``[call N]`` is the call's row in trace.jsonl, even when calls finish
-    in parallel (launches run in a thread)."""
-    import concurrent.futures
+def test_call_numbers_match_the_trace_and_the_proposed_variants(tmp_path):
+    """A cited ``[call N]`` is the call's row in trace.jsonl, refused calls included, and
+    proposed.jsonl names the launch by the same number."""
+    import hashlib
 
-    tools, _ = ran
-    before = len(lines(tools.audit.out / "trace.jsonl"))
-    with concurrent.futures.ThreadPoolExecutor(8) as pool:
-        got = list(pool.map(lambda _: tools.numbered_call("list_runs"), range(16)))
-    seqs = [seq for _, _, seq in got]
+    tools = new(tmp_path)
+    assert tools.numbered_call("list_runs")[2] == 1
+    ok, _, seq = tools.numbered_call("run_experiment", variants=[C0], epochs=1)
+    assert ok and seq == 2
+    ok, _, seq = tools.numbered_call("transcript", variant_id="nope", epoch=1)
+    assert not ok and seq == 3
     trace = lines(tools.audit.out / "trace.jsonl")
-    assert sorted(seqs) == list(range(before + 1, before + 17))
-    assert sorted(r["seq"] for r in trace) == list(range(1, len(trace) + 1))
-    by_seq = {r["seq"]: r for r in trace}
-    assert all(by_seq[seq]["tool"] == "list_runs" and by_seq[seq]["result"] == text
-               for _, text, seq in got)
+    assert [r["seq"] for r in trace] == [1, 2, 3] and trace[1]["tool"] == "run_experiment"
+    assert [r["trace_seq"] for r in lines(tools.audit.out / "proposed.jsonl")] == [2]
+    ok, text, seq = tools.numbered_call("list_runs")
+    row = lines(tools.audit.out / "trace.jsonl")[-1]
+    assert row["seq"] == seq and row["result_sha256"] == hashlib.sha256(
+        text.encode()).hexdigest()
 
 
 def test_transcript_and_find_show_each_posts_number_in_its_sample(ran):
