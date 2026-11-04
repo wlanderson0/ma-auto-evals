@@ -1,6 +1,7 @@
 """The L2 audit's final report, ``report.md`` (plan step 3; spec §8, §6.3).
 
-It holds L2's conclusions from ``end_audit`` (quoted, or why there are none), every
+It holds L2's conclusions from ``end_audit`` (quoted, or why there are none), its claims
+with the verdict the checker gave each (``claims``), every
 variant run with what it changed and why, the tables the conclusions rest on
 (every distinct comparison and score table L2 asked for, read again from the
 logs), the search counts (counted from the record, not taken from L2), where L2's
@@ -18,6 +19,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from experiments.l2 import claims as claims_
 from experiments.l2.report import SCORER
 from experiments.l2.tools import Tools, _ids, _jsonl
 
@@ -27,6 +29,7 @@ RECORD = {
     "proposed.jsonl": "every variant L2 proposed, rejected ones too (with the trace seq)",
     "launches.jsonl": "every launch L2 asked for and what came of it",
     "trace.jsonl": "every tool call and its (shortened) result, in order",
+    "claims.json": "L2's claims, each with its evidence, verdict and the checker's reasons",
     "ledger.json": "spend by kind, reserve, remaining",
     "experiments/": "one milestone 1 audit directory per launch (eval logs under logs/)",
     "l2/": "L2's own Inspect log",
@@ -132,7 +135,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
                if brief.run_budget_usd is not None else ""),
             f"- Left to L2: {', '.join(open_) or 'none'}", ""]
 
-    out += ["## Conclusions (L2's own words, quoted)", ""]
+    out += _claims(tools)
+    out += ["## Conclusions (L2's own words, quoted; not checked)", ""]
     if tools.conclusions is not None:
         out += [f"> {line}" if line.strip() else ">" for line in tools.conclusions.splitlines()]
     else:
@@ -272,6 +276,38 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- `{name}`: {what}" for name, what in RECORD.items()
             if (audit.out / name.rstrip("/")).exists() or name in ("trace.jsonl", "report.md")]
     return "\n".join(out) + "\n"
+
+
+def _ref(ref: dict[str, Any]) -> str:
+    if "call" in ref:
+        return f"call {ref['call']}"
+    quote = f' ("{ref["quote"]}")' if ref.get("quote") else ""
+    return f"{ref['variant']} epoch {ref['epoch']} post {ref['post']}{quote}"
+
+
+def _claims(tools: Tools) -> list[str]:
+    """L2's claims, most doubtful verdicts first, each with what it cites and why it got
+    its verdict."""
+    out = ["## Claims, checked against the logs", ""]
+    if tools.claims is None:
+        return out + ["L2 gave no claims, so nothing it concluded was checked against the "
+                      "logs; read its conclusions as unchecked.", ""]
+    if not tools.claims:
+        return out + ["L2 claimed nothing.", ""]
+    out += [f"{claims_.summary(tools.claims)}. A claim is *checked* only if the logs, "
+            "read again, bear it out on an accepted measure with no departure from the "
+            "reading guidance; a *lead* is in the claimed direction but falls short; "
+            "anything L2 wrote outside its claims is not checked.", ""]
+    order = {v: i for i, v in enumerate(("contradicted", "invalid", "lead", "unchecked",
+                                         "checked"))}
+    for i, claim in sorted(enumerate(tools.claims, 1),
+                           key=lambda pair: order.get(pair[1]["verdict"], 0)):
+        fields = ", ".join(f"{name}={claim[name]}" for name in claims_.FIELDS[claim["kind"]])
+        out += [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
+                f": {' '.join(claim['text'].split())}",
+                f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
+        out += [f"   - {' '.join(reason.split())}" for reason in claim["reasons"]]
+    return out + [""]
 
 
 def _score_departures(tools: Tools, ids: list[str]) -> list[str]:

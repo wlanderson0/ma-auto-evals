@@ -60,15 +60,18 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   the machine awake. `--time-limit <seconds>` ends it cleanly earlier.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
-The audit directory holds `report.md` (L2's conclusions, the tables they rest on, every
-variant and experiment), `ledger.json` (spend), `trace.jsonl` (every tool call),
+The audit directory holds `report.md` (L2's claims with their verdicts, its conclusions,
+the tables they rest on, every variant and experiment), `claims.json` (each claim with its
+evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every tool call),
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
 
 ## 3. Read it critically
 
-- Check each claim against the tables in `report.md`: a difference L2 did not check
-  against chance (`scores` with `against`, or its own code), or one the check cannot
-  tell apart from chance, is a lead, not a finding.
+- Start from the claims at the top of `report.md`. Each was read again from the logs
+  (spec §6.4): only *checked* claims are findings; a *lead* falls short (e.g. not told
+  apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
+  ones (kind `other`, e.g. a result of L2's own code) and anything stated only in the
+  prose need reading by hand, against the call or post they cite.
 - Check that a comparison's variants ran in the same experiment, with the same epochs.
 - Read a few transcripts (on Cosmos, below) before trusting a measure.
 

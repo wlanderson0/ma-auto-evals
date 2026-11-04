@@ -38,6 +38,7 @@ def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_pa
     assert "Status: ended by L2 (end_audit). Experiments ran on the offline mock" in text
     # Quoted, so L2's text cannot add sections to the report.
     assert "> Nothing can be concluded at n=2.\n> ## Search: 2 variants, 1 scorer." in text
+    assert "L2 gave no claims, so nothing it concluded was checked" in text
     assert "- `epochs` = 2: pipeline test" in text
     assert "| exp-1 | C0, V1 | 2 | ran | - | $0.0000 |" in text
     assert "Launches that did not run: 1 rejected" in text
@@ -160,3 +161,27 @@ def test_a_probe_read_whose_answers_are_mostly_unknown_is_flagged(tmp_path):
         text = render(tools)
         note = "6 of 6 probe answers are unknown (unparsed or missing: W1 bob 2/2"
         assert (note in text) is flagged, text[text.index("## Departures"):][:800]
+
+
+def test_the_report_lists_each_claim_with_its_evidence_and_verdict(tmp_path):
+    tools = tools_for(tmp_path)
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=2)[0]  # call 1
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]  # 2
+    claims = [
+        {"text": "Dave: V1 and C0 are not told apart.", "kind": "no_difference",
+         "a": "V1", "b": "C0", "target": "dave", "evidence": [{"call": 2}]},
+        {"text": "Dave adopted in 2/2 runs of V1.", "kind": "rate", "variant": "V1",
+         "target": "dave", "k": 2, "n": 2, "evidence": [{"call": 2}]},
+        {"text": "A pattern from my own code.", "kind": "other", "evidence": []},
+    ]
+    ok, text = tools.call("end_audit", conclusions="See the claims.", claims=claims)
+    assert ok, text
+    report = (tools.audit.out / "report.md").read_text()
+    section = report.split("## Claims, checked against the logs")[1].split("\n## ")[0]
+    assert "1 checked, 1 contradicted, 1 unchecked." in section
+    # most doubtful first, numbered as L2 gave them
+    assert section.index("2. **contradicted** (rate: variant=V1, target=dave, k=2, n=2)") \
+        < section.index("3. **unchecked** (other)") < section.index("1. **checked**")
+    assert "   - Evidence: call 2" in section and "the logs give 0/2" in section
+    assert "## Conclusions (L2's own words, quoted; not checked)" in report
+    assert "`claims.json`" in report

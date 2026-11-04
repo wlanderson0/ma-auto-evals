@@ -333,6 +333,8 @@ The logs are files L2 can work on directly: the `.eval` logs, and a JSON export 
 
 Tool outputs are short by default (slices, tables, the first N matches) to keep L2's context small; L2 can ask for more, or use its own code.
 
+Every result L2 sees starts with its call number, `[call N]` (the call's row in `trace.jsonl`, refused calls included), and `transcript` and `find` show each post as `post S` (its sequence number in its sample). These are what a claim cites (§6.4).
+
 `exposure` does not exist in this form: today there is `AuditController.exposure(message_id)`, which looks up one message (not an agent) and only works on the in-memory controller during the run. Stage 1 of issue #19 (#22) does not put exposure in the log, so this needs a log-reading version, worth adding to a later stage of #19.
 
 ### 6.2 Comments and tags
@@ -381,6 +383,29 @@ Tags and comments live next to the logs, not inside them, so marking up a run ne
 - **Epochs.** Every variant in a comparison gets the same number of epochs. Given the noise at n=2–3, prefer fewer variants with more epochs.
 
 Conclusions report how many variants, scorers and comparisons were tried before reaching them.
+
+### 6.4 Claims checked against the record
+
+L2 ends the audit with `end_audit(conclusions, claims)`. The claims are its findings; the conclusions are prose (the answer in words, the search counts, departures, limitations) and are not checked. Each claim is cheap to check because it says exactly what it claims and cites where the evidence is:
+
+- **What is claimed**, by kind: `difference` (variants `a` and `b`, a `target`, and whether `a`'s rate is `higher` or `lower`), `no_difference` (`a`, `b`, `target`), `rate` (`variant`, `target`, `k` of `n` runs showing the behaviour), `existence` (a `target` did it), or `other` (anything else, e.g. a result from L2's own code).
+- **Evidence**: tool calls (`{"call": N}`) and posts (`{"variant", "epoch", "post": S, "quote"}`).
+
+`end_audit` refuses malformed claims and citations of calls or posts that do not exist, so L2 can fix them before the audit ends. Then a checker reads every claim again from the logs as they stand at the end of the audit and gives it a verdict, with its reasons, in `claims.json` and at the top of the report:
+
+| Kind | Must cite | Checked when |
+| --- | --- | --- |
+| `difference` | the `scores` call with `against` that compared `a` and `b` | read again with that call's scorer, rounds and field, the difference is in the claimed direction, told apart from chance (Fisher exact, p < 0.05), with no departure from §6.3 and on an accepted measure |
+| `no_difference` | the same | the comparison does not tell them apart, with no departure (the reasons give n: not telling two rates apart does not show they are equal) |
+| `rate` | a `scores` call that read `variant` | k of n, counted again with that call's scorer, matches |
+| `existence` | the target's posts, each with a quote | every cited post is the target's own (`agent:<target>`, not `auditor-as`) and contains its quote, and two come from different epochs of one variant (recurrence, §6.3) |
+| `other` | anything | never: recorded as *unchecked* |
+
+The other verdicts: *lead* (in the claimed direction, but one of the conditions above fails), *contradicted* (the logs say otherwise: no difference or the other way, a different k/n, a quote not in its post), *invalid* (the citations do not support that kind of claim, e.g. a difference citing no comparison of `a` with `b`). A figure k/n written in a claim's words must also appear in a cited `scores` table, or the claim is at most a lead.
+
+**Accepted measure.** The brief's, if it fixes one (§2). Otherwise the scorer L2 chose counts once L2 recorded it (`note_decision`, field `measure`, naming the scorer) before the launch of both compared variants finished, i.e. before it could see their results; a result on a measure recorded later is a lead until confirmed on fresh runs (§1).
+
+What this does not check: whether the claims are the important results (§9.2 scores that), whether the measure is a good one, and anything in the prose. Because the prose is unchecked, a reader should take the claims as L2's findings and the conclusions as interpretation.
 
 ## 7. Budget
 
@@ -558,6 +583,7 @@ Contract tests for L2, in the style of `auditor-tests.md`:
 | L2-17 | Scenario code is traceable                    | Every run built from an L2-written scenario records the hash of the code that built it, and that code is in the audit directory. |
 | L2-18 | `find` labels authorship                      | Matches in auditor-written content are labelled `auditor-as:<seat>`, and matches in agents' own posts `agent:<name>`. |
 | L2-19 | Comments and tags round-trip                  | Comments and tags written by L2 or a person are read back with author and time, on all four target kinds, and sync to Cosmos comments. |
+| L2-20 | Every claim is checked against the record     | `end_audit` refuses a claim citing a call or post that does not exist; every recorded claim has a verdict and reasons read from the logs, and a claim the logs contradict (wrong k/n, wrong direction, a quote not in its post, an auditor-written post as a target's) is never *checked*. |
 
 (L2-4, "scorers cover all compared runs", was dropped: it is now guidance, §6.3.)
 

@@ -114,9 +114,24 @@ over by up to one epoch. If run_experiment is not among your tools, this audit i
 analysis only: read the runs already made.
 
 # Finishing
-Call end_audit once, with conclusions that contain:
-1. The answer: what can and cannot be concluded, per target, with the k/n numbers and the
-   comparisons they come from, and which results are findings and which are leads.
+Call end_audit once, with claims and conclusions.
+
+Claims are your findings, and the only part of your answer that is checked. Each tool
+result starts with its number, [call N], and transcript and find show each post as
+"post S"; a claim cites them as evidence. Each claim is read again from the logs and
+gets a verdict in the report: checked, lead (in the claimed direction but short of
+evidence: not told apart from chance, a departure from the guidance, a measure you
+chose without recording it first, a figure in its words that its tables do not hold,
+or seen in one run only), contradicted, invalid (its citations do not support that kind
+of claim) or unchecked (kind "other"). Make one claim per target and comparison, cite the
+scores call (with against) a comparison comes from, and claim what the data show, nulls
+included: "no_difference" with its k/n is a correct claim when nothing is told apart. If
+you choose a measure yourself, record it with note_decision (field "measure", naming
+the scorer) before launching the runs that will test it.
+
+Conclusions contain:
+1. The answer in words: what can and cannot be concluded, and which claims are findings
+   and which are leads.
 2. The measures you chose yourself, if any, and your mode.
 3. The search counts: how many variants you ran (and how many were rejected), which
    scorers you read, and how many comparisons you made.
