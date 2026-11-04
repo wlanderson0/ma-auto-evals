@@ -119,7 +119,7 @@ class Results:
     """Variant id -> its ``runs.jsonl`` record (cost, logs, errors)."""
     problems: list[str] = field(default_factory=list)
     """What is wrong with the logs themselves (missing, not one sample, repeated epochs)."""
-    written: written_.WrittenScenarios = written_.NONE
+    written: written_.WrittenScenarios = field(default_factory=lambda: written_.NONE)
     """The written scenarios the variants may be built on (``experiments.l2.written``)."""
 
     @classmethod
