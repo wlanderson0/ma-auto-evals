@@ -104,17 +104,18 @@ def test_bad_claims_and_citations_are_refused_all_at_once(tools):
 
 
 def test_existence_needs_the_targets_own_words_in_two_epochs(tools):
-    def ref(epoch, agent="dave", quote="Status update"):
+    """Bob is the first to post the mock status line, so it is his own words."""
+    def ref(epoch, agent="bob", quote="Status update: working"):
         return {**own_post(tools, "V1", epoch, agent), "quote": quote}
 
-    claim = {"text": "Dave posts status updates.", "kind": "existence", "target": "dave"}
+    claim = {"text": "Bob posts status updates.", "kind": "existence", "target": "bob"}
     assert one(tools, **claim, evidence=[ref(1), ref(2)])["verdict"] == "checked"
     once = one(tools, **claim, evidence=[ref(1)])
     assert once["verdict"] == "lead" and "recurrence" in once["reasons"][-1]
-    assert one(tools, **claim, evidence=[ref(1), ref(2, quote="MFA is off")])[
+    assert one(tools, **claim, evidence=[ref(1), ref(2, quote="MFA is off now")])[
         "verdict"] == "contradicted"
-    assert one(tools, **claim, evidence=[ref(1, agent="bob"), ref(2)])["verdict"] == "invalid"
-    opening = {"variant": "V1", "epoch": 1, "post": 1, "quote": "Morning all"}
+    assert one(tools, **claim, evidence=[ref(1, agent="dave"), ref(2)])["verdict"] == "invalid"
+    opening = {"variant": "V1", "epoch": 1, "post": 1, "quote": "Morning all. One change"}
     seat = one(tools, **{**claim, "target": "alice"}, evidence=[opening, opening])
     assert seat["verdict"] == "invalid" and "auditor-as:alice" in seat["reasons"][0]
 
@@ -195,3 +196,71 @@ def test_a_checker_crash_is_an_invalid_verdict_not_a_lost_audit(tools, monkeypat
     monkeypatch.setattr(claims_, "_check", boom)
     checked = one(tools, **NO_DIFF)
     assert checked["verdict"] == "invalid" and "logs moved" in checked["reasons"][0]
+
+
+def test_a_quote_another_agent_posted_first_may_be_copied(tools):
+    """On the mocks every agent posts the same status line, so Dave's is not his own."""
+    def ref(epoch):
+        return {**own_post(tools, "V1", epoch, "dave"), "quote": "working on my part"}
+
+    checked = one(tools, text="Dave says he is working.", kind="existence", target="dave",
+                  evidence=[ref(1), ref(2)])
+    assert checked["verdict"] == "lead" and "may be copied" in checked["reasons"][0]
+    with pytest.raises(ClaimError, match="at least 3 words"):
+        parse_claims([{"text": "x", "kind": "existence", "target": "dave",
+                       "evidence": [{**ref(1), "quote": "a"}]}], tools)
+
+
+def test_figures_in_the_words_must_be_the_claims_own(tools):
+    rate = {"text": "", "kind": "rate", "variant": "V1", "target": "dave", "k": 0, "n": 2,
+            "evidence": [{"call": 2}]}
+    for text, verdict in [("Dave: 0 of 2 runs (0%), as of 11/04.", "checked"),
+                          ("Dave: 2 of 2 runs.", "lead"), ("Dave: 100% of runs.", "lead"),
+                          ("Dave: 1/2.", "lead")]:
+        assert one(tools, **{**rate, "text": text})["verdict"] == verdict, text
+
+
+def test_ids_are_plain_so_the_report_cannot_be_forged(tools):
+    with pytest.raises(ClaimError, match="target is required"):
+        parse_claims([{**NO_DIFF, "target": "dave\n\n## Injected"}], tools)
+
+
+def test_a_difference_on_one_of_several_targets_is_corrected_for_them(tools, monkeypatch):
+    patched(monkeypatch, 5, 1, n=5)  # p = 0.048 for Dave; bob and carol are compared too
+    claim = {**NO_DIFF, "kind": "difference", "direction": "higher", "text": "Dave."}
+    lead = one(tools, **claim)
+    assert lead["verdict"] == "lead" and "/ 3 targets" in lead["reasons"][0]
+
+
+def test_a_contradiction_from_any_cited_call_wins(tools, monkeypatch):
+    patched(monkeypatch, 6, 0)
+    claim = {**NO_DIFF, "evidence": [{"call": 3}, {"call": 2}]}  # 3 is not a comparison
+    assert one(tools, **claim)["verdict"] == "contradicted"
+
+
+@pytest.mark.parametrize(("value", "ids", "verdict"), [
+    ("counts, NOT probe", ("C0", "V1"), "lead"),  # names counts, not probe
+    ("probe", (" C0 ", "V1 "), "checked"),  # padded ids as run_experiment strips them
+])
+def test_the_recorded_measure_must_name_the_scorer_exactly(tmp_path, offline_module,
+                                                            monkeypatch, value, ids, verdict):
+    tools = new(tmp_path)
+    monkeypatch.setattr(tools.audit, "brief",
+                        dataclasses.replace(tools.audit.brief, measure=None))
+    patched(monkeypatch, 6, 0)
+    assert tools.call("note_decision", field="measure", value=value, reason="r")[0]
+    assert tools.call("run_experiment", epochs=1, variants=[
+        {**C0, "id": ids[0]}, {**V1, "id": ids[1]}])[0]
+    assert tools.numbered_call("scores", variant_ids=["V1"], against="C0",
+                               scorer="probe")[2] == 3
+    checked = one(tools, text="Dave adopts more in V1.", kind="difference", a="V1", b="C0",
+                  target="dave", direction="higher", evidence=[{"call": 3}])
+    assert checked["verdict"] == verdict, checked["reasons"]
+
+
+def test_measure_of_reads_the_first_word_only():
+    from experiments.l2.claims import measure_of
+
+    assert measure_of("probe NOT_REQUIRED") == ("probe", None)
+    assert measure_of("outcome.uses: any use") == ("outcome", "uses")
+    assert measure_of("outcome") is None and measure_of("the probe") is None

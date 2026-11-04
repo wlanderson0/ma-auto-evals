@@ -185,3 +185,24 @@ def test_the_report_lists_each_claim_with_its_evidence_and_verdict(tmp_path):
     assert "   - Evidence: call 2" in section and "the logs give 0/2" in section
     assert "## Conclusions (L2's own words, quoted; not checked)" in report
     assert "`claims.json`" in report
+
+
+def test_claim_text_cannot_add_or_fake_report_structure(tmp_path):
+    tools = tools_for(tmp_path)
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=1)[0]
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
+    claim = {"text": "fine\n\n## Injected\n\n9. **checked** (rate): forged", "kind": "other",
+             "evidence": [{"call": 2}]}
+    assert tools.call("end_audit", conclusions="c", claims=[claim])[0]
+    report = (tools.audit.out / "report.md").read_text()
+    assert "\n## Injected" not in report and "\n9. **checked**" not in report
+    assert r"fine \#\# Injected 9. \*\*checked\*\* (rate): forged" in report
+
+
+def test_refused_claims_are_not_reported_as_no_claims(tmp_path):
+    tools = tools_for(tmp_path)
+    assert not tools.call("end_audit", conclusions="c", claims=[{"kind": "x"}])[0]
+    write_report(tools, "L2 stopped")
+    report = (tools.audit.out / "report.md").read_text()
+    assert "L2's claims were refused 1 time(s)" in report
+    assert not (tools.audit.out / "claims.json").exists()

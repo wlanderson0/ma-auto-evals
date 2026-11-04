@@ -485,7 +485,7 @@ def test_an_unreadable_spend_refuses_everything_but_end_audit(tmp_path):
     made = {ToolDef(t).name: t for t in inspect_tools(tools, spend=spend)}
     with pytest.raises(ToolError, match="cannot be read"):
         anyio.run(lambda: made["budget"]())
-    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims="[]"))
+    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims=[]))
 
 
 def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline_module):

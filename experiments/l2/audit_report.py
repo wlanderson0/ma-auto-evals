@@ -15,6 +15,7 @@ never fatal.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -278,11 +279,19 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     return "\n".join(out) + "\n"
 
 
+def _inline(value: Any) -> str:
+    """L2's text on one line, its markdown escaped, so it cannot add or fake report
+    structure (a heading, a list item, a bold verdict)."""
+    text = " ".join(str(value).split())
+    return re.sub(r"([\\`*_\[\]<>#|])", r"\\\1", text)
+
+
 def _ref(ref: dict[str, Any]) -> str:
     if "call" in ref:
         return f"call {ref['call']}"
-    quote = f' ("{ref["quote"]}")' if ref.get("quote") else ""
-    return f"{ref['variant']} epoch {ref['epoch']} post {ref['post']}{quote}"
+    quote = f' ("{_inline(ref["quote"])}")' if ref.get("quote") else ""
+    return (f"{_inline(ref['variant'])} epoch {ref['epoch']} post "
+            f"{_inline(ref['post'])}{quote}")
 
 
 def _claims(tools: Tools) -> list[str]:
@@ -290,23 +299,29 @@ def _claims(tools: Tools) -> list[str]:
     its verdict."""
     out = ["## Claims, checked against the logs", ""]
     if tools.claims is None:
-        return out + ["L2 gave no claims, so nothing it concluded was checked against the "
-                      "logs; read its conclusions as unchecked.", ""]
+        refused = sum(row.get("tool") == "end_audit" and not row.get("ok")
+                      and (row.get("args") or {}).get("claims") is not None
+                      for row in tools.trace())
+        why = (f"L2's claims were refused {refused} time(s) (see trace.jsonl) and none were "
+               "recorded" if refused else "L2 gave no claims")
+        return out + [f"{why}, so nothing it concluded was checked against the logs; read "
+                      "its conclusions as unchecked.", ""]
     if not tools.claims:
         return out + ["L2 claimed nothing.", ""]
     out += [f"{claims_.summary(tools.claims)}. A claim is *checked* only if the logs, "
-            "read again, bear it out on an accepted measure with no departure from the "
-            "reading guidance; a *lead* is in the claimed direction but falls short; "
-            "anything L2 wrote outside its claims is not checked.", ""]
+            "read again, bear it out (a comparison also needs an accepted measure and no "
+            "departure from the reading guidance); a *lead* falls short; the rules are in "
+            "spec §6.4. Anything L2 wrote outside its claims is not checked.", ""]
     order = {v: i for i, v in enumerate(("contradicted", "invalid", "lead", "unchecked",
                                          "checked"))}
     for i, claim in sorted(enumerate(tools.claims, 1),
                            key=lambda pair: order.get(pair[1]["verdict"], 0)):
-        fields = ", ".join(f"{name}={claim[name]}" for name in claims_.FIELDS[claim["kind"]])
+        fields = ", ".join(f"{name}={_inline(claim[name])}"
+                           for name in claims_.FIELDS[claim["kind"]])
         out += [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
-                f": {' '.join(claim['text'].split())}",
+                f": {_inline(claim['text'])}",
                 f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
-        out += [f"   - {' '.join(reason.split())}" for reason in claim["reasons"]]
+        out += [f"   - {_inline(reason)}" for reason in claim["reasons"]]
     return out + [""]
 
 

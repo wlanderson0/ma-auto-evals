@@ -725,14 +725,16 @@ class Tools:
                 raise Refused(str(error)) from error
             checked = claims_.check_claims(self, parsed)
         self.conclusions, self.claims = conclusions.strip(), checked
+        saved = self.audit.out / "claims.json"
         try:
             if checked is not None:
-                (self.audit.out / "claims.json").write_text(
-                    json.dumps(checked, indent=2, sort_keys=True, default=str) + "\n")
+                saved.write_text(json.dumps(checked, indent=2, sort_keys=True, default=str)
+                                 + "\n")
             if self.on_end is not None:
                 self.on_end(self)
         except Exception:
             self.conclusions = self.claims = None  # not ended: L2 can call end_audit again
+            saved.unlink(missing_ok=True)  # no verdicts left behind for unrecorded claims
             raise
         self.audit.ended = True
         verdicts = ("no claims given, so nothing was checked" if checked is None
@@ -1100,7 +1102,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
     @tool
     def end_audit() -> Tool:
-        async def execute(conclusions: str, claims: str) -> str:
+        async def execute(conclusions: str, claims: str | list[dict[str, Any]]) -> str:
             """End the audit with your conclusions and claims; this writes the report and
             stops you. Each claim is checked against the logs and gets a verdict (checked,
             lead, contradicted, invalid or unchecked) in the report. Malformed claims or
@@ -1116,7 +1118,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     {"text": the claim in words, "kind", its fields, "evidence": a list
                     of references}. A reference is {"call": N} (the [call N] before a tool
                     result) or {"variant", "epoch", "post": S (from "post S"), "quote":
-                    words in that post}. Kinds and fields:
+                    words in that post, at least 3}. Kinds and fields:
                     "difference": "a", "b", "target", "direction" ("higher" or "lower":
                     a's rate against b's), citing the scores call with against that
                     compared them; "no_difference": "a", "b", "target", citing the same;
@@ -1124,7 +1126,9 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     behaviour), citing a scores call that read the variant; "existence":
                     "target", citing that target's own posts, each with a quote (two
                     epochs of one variant show it recurs); "other": anything else (e.g.
-                    a result from run_python), recorded but not checked.
+                    a result from run_python), recorded but not checked. Figures in a
+                    claim's text must be its own counts (e.g. the two sides of its
+                    comparison for its target).
             """
             return await call("end_audit", conclusions=conclusions, claims=claims)
         return execute
