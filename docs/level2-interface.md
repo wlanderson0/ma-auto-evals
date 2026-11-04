@@ -405,6 +405,8 @@ The other verdicts: *lead* (a condition above fails short of a contradiction, e.
 
 **Accepted measure (comparisons).** The brief's, if it fixes one; when no scorer is known to read it on the scenario, a comparison that passes everything else is *unchecked*, for a reader to confirm the measure. If the brief fixes none, the scorer L2 chose counts on a variant when the last measure L2 recorded before that variant's launch (`note_decision`, field `measure`, the value starting with the scorer, e.g. `probe` or `outcome.uses`) names exactly that scorer and field. A measure recorded after seeing results therefore counts only on variants launched after it: confirming it means new variants on fresh runs (§1).
 
+**Checking by hand.** Under the claims, the report says where each cited call and post is: the call's row in `trace.jsonl` and the eval logs it read, and each post's log, message id, sender and text, with the names their samples have on Cosmos. A reader can check any claim without the checker, which is a faster first pass, not the only one.
+
 What this does not check: whether the claims are the important results (§9.2 scores that), whether the measure is a good one, and anything in the prose. Because the prose is unchecked, a reader should take the claims as L2's findings and the conclusions as interpretation.
 
 ## 7. Budget

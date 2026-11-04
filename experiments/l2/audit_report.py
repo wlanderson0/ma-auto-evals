@@ -322,7 +322,109 @@ def _claims(tools: Tools) -> list[str]:
                 f": {_inline(claim['text'])}",
                 f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
         out += [f"   - {_inline(reason)}" for reason in claim["reasons"]]
+    return out + ["", *_where(tools)]
+
+
+def _where(tools: Tools) -> list[str]:
+    """Where each cited call and post is, once each, so a reader can check a claim by
+    hand: the trace row, the eval logs it read (paths from the audit directory), and
+    the name its sample has on Cosmos (the run of that experiment, once uploaded)."""
+    refs = [r for claim in tools.claims or [] for r in claim["evidence"]]
+    calls = sorted({r["call"] for r in refs if "call" in r})
+    posts = list(dict.fromkeys((r["variant"], r["epoch"], r["post"]) for r in refs
+                               if "call" not in r))
+    if not calls and not posts:
+        return []
+    out = ["### Where the cited evidence is", "",
+           "Paths are from the audit directory. Open a log with `inspect view` or on Cosmos, "
+           "where each experiment is one run (`python -m experiments.l2.cosmos`) and each "
+           "sample is filed under its variant's built name, condition and epoch. Cosmos "
+           "numbers messages itself, so find a post there by its text (or its message id "
+           "in the log), not by its post number here.", ""]
+    rows = {row.get("seq"): row for row in tools.trace()}
+    for seq in calls:
+        row = rows.get(seq) or {}
+        args = row.get("args") or {}
+        shown = ", ".join(f"{k}={_inline(json.dumps(v, default=str))}"
+                          for k, v in sorted(args.items()) if v is not None and k != "code")
+        out.append(f"- **call {seq}**: `{row.get('tool')}` ({shown}), row {seq} of "
+                   "`trace.jsonl`" + (" (its code is in the row's args)"
+                                      if row.get("tool") == "run_python" else ""))
+        out += [f"  - {line}" for line in _logs(tools, _variants_read(tools, row))]
+    for variant, epoch, post in posts:
+        out.append(f"- **{_inline(variant)} epoch {epoch} post {_inline(post)}**: "
+                   + _post_where(tools, {"variant": variant, "epoch": epoch, "post": post}))
     return out + [""]
+
+
+def _variants_read(tools: Tools, row: dict[str, Any]) -> list[str]:
+    args = row.get("args") or {}
+    if row.get("tool") == "scores":
+        return list(dict.fromkeys([*_ids(args.get("variant_ids") or []),
+                                   *([args["against"]] if args.get("against") else [])]))
+    if row.get("tool") == "transcript":
+        return [args["variant_id"]] if args.get("variant_id") else []
+    if row.get("tool") == "find":
+        ids = args.get("variant_ids")
+        return _ids(ids) if ids else sorted(tools.results().runs)
+    return []
+
+
+def _logs(tools: Tools, ids: list[str]) -> list[str]:
+    """For each variant: its experiment, its eval logs and its name on Cosmos."""
+    lines = []
+    try:
+        results = tools.results()
+    except Exception as error:  # the report is still written
+        return [f"(the logs could not be read: {error})"]
+    for vid in ids:
+        samples = sorted(results.of(vid), key=lambda s: s.epoch)
+        if not samples:
+            lines.append(f"`{_inline(vid)}`: no runs found")
+            continue
+        paths = sorted({_rel(tools, s.log) for s in samples})
+        where = (f"`{paths[0]}`" if len(paths) == 1 else
+                 f"{len(paths)} logs, one per epoch: `{_pattern(paths)}`")
+        lines.append(f"`{vid}` ({tools._where.get(vid, '?')}, epochs "
+                     f"{_span([s.epoch for s in samples])}): {where}; on Cosmos, "
+                     f"`{samples[0].base}--{vid}` / `{samples[0].condition}`")
+    return lines
+
+
+def _post_where(tools: Tools, ref: dict[str, Any]) -> str:
+    try:
+        post = claims_.find_post(tools, ref)
+        sample = tools._sample(ref["variant"], ref["epoch"])
+    except Exception as error:
+        return f"(could not be found: {_inline(error)})"
+    text = " ".join(str(post.get("content", "")).split())
+    return (f"`{_rel(tools, sample.log)}`, message `{_inline(post.get('id'))}` (turn "
+            f"{post.get('turn')}, #{_inline(post.get('channel_id'))}, "
+            f"{_inline(post.get('label'))}); on Cosmos, `{sample.base}--{ref['variant']}` / "
+            f"`{sample.condition}` / epoch {ref['epoch']}. It reads: "
+            f"\"{_inline(text[:300])}{'…' if len(text) > 300 else ''}\"")
+
+
+def _rel(tools: Tools, path: str) -> str:
+    try:
+        return str(Path(path).resolve().relative_to(tools.audit.out.resolve()))
+    except ValueError:  # an analysis-only audit reads another audit's logs
+        return str(path)
+
+
+def _pattern(paths: list[str]) -> str:
+    """One glob for a variant's per-epoch logs: ``…/logs/epoch-*/<time>_<task>_<id>.eval``
+    becomes ``…/logs/epoch-*/*_<task>_*.eval``."""
+    first = Path(paths[0])
+    task = first.name.split("_", 1)[1].rsplit("_", 1)[0] if first.name.count("_") >= 2 else "*"
+    return str(first.parent.parent / "epoch-*" / f"*_{task}_*.eval")
+
+
+def _span(epochs: list[int]) -> str:
+    epochs = sorted(set(epochs))
+    if epochs == list(range(epochs[0], epochs[-1] + 1)) and len(epochs) > 2:
+        return f"{epochs[0]}–{epochs[-1]}"
+    return ", ".join(map(str, epochs))
 
 
 def _score_departures(tools: Tools, ids: list[str]) -> list[str]:

@@ -72,6 +72,11 @@ evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every
   apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
   ones (kind `other`, e.g. a result of L2's own code) and anything stated only in the
   prose need reading by hand, against the call or post they cite.
+- To check a claim yourself, use "Where the cited evidence is" under the claims: for
+  each cited call, its row in `trace.jsonl` and the eval logs it read (a path pattern
+  per variant); for each cited post, its log, message id, sender and text. On Cosmos,
+  samples are filed by the variant's built name (`<base>--<variant>`), condition and
+  epoch; find a post there by its text, since Cosmos numbers messages itself.
 - Check that a comparison's variants ran in the same experiment, with the same epochs.
 - Read a few transcripts (on Cosmos, below) before trusting a measure.
 

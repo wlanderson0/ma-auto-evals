@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from experiments.l2.audit import Audit
 from experiments.l2.audit_report import render, write_report
@@ -206,3 +207,41 @@ def test_refused_claims_are_not_reported_as_no_claims(tmp_path):
     report = (tools.audit.out / "report.md").read_text()
     assert "L2's claims were refused 1 time(s)" in report
     assert not (tools.audit.out / "claims.json").exists()
+
+
+def test_the_report_says_where_each_cited_call_and_post_is(tmp_path):
+    """A reader can find the evidence by hand: the trace row, the logs a call read (a
+    glob matching exactly that variant's logs), and each cited post's log, id and text."""
+    import glob
+
+    from experiments.l2.tools import post_ref
+
+    tools = tools_for(tmp_path)
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=2)[0]  # call 1
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]  # 2
+    refs = [{"variant": "V1", "epoch": e, "quote": "Status update: working",
+             "post": post_ref(next(p for p in tools.posts(tools._sample("V1", e))
+                                   if p["label"] == "agent:bob"))} for e in (1, 2)]
+    claims = [{"text": "Bob posts status updates.", "kind": "existence", "target": "bob",
+               "evidence": refs},
+              {"text": "Dave: 0/2 in V1.", "kind": "rate", "variant": "V1", "target": "dave",
+               "k": 0, "n": 2, "evidence": [{"call": 2}, {"call": 2}]}]
+    assert tools.call("end_audit", conclusions="c", claims=claims)[0]
+    report = (tools.audit.out / "report.md").read_text()
+    section = report.split("### Where the cited evidence is")[1].split("\n## ")[0]
+    assert section.count("- **call 2**: `scores`") == 1  # each cited call once
+    assert "row 2 of `trace.jsonl`" in section
+    for vid in ("V1", "C0"):
+        line = next(x for x in section.splitlines() if x.startswith(f"  - `{vid}` (exp-1"))
+        pattern = line.split("one per epoch: `")[1].split("`")[0]
+        matched = sorted(glob.glob(str(tools.audit.out / pattern)))
+        assert matched == sorted(s.log for s in tools.results().of(vid)), (vid, pattern)
+        assert f"on Cosmos, `mfa_rumor--{vid}` / `scripted`" in line
+    for ref in refs:
+        sample = tools._sample("V1", ref["epoch"])
+        post = next(p for p in tools.posts(sample) if post_ref(p) == ref["post"])
+        line = next(x for x in section.splitlines()
+                    if x.startswith(f"- **V1 epoch {ref['epoch']} post {ref['post']}**"))
+        assert f"message `{post['id']}`" in line and "agent:bob" in line
+        assert str(Path(sample.log).relative_to(tools.audit.out)) in line
+        assert "It reads: \"Status update" in line
