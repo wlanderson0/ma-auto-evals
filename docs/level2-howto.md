@@ -112,7 +112,10 @@ done
   message's place, saves them as `cosmos.json` in the audit and writes the claims
   section of `report.md` again (the rest is kept as it is): each claim then links to
   every run its counts come from (✓ or ✗ for what the target did there, read as the
-  claim's checked call read it) and to each message it quotes. A slug that is not its
+  claim's checked call read it) and to each message it quotes. A claim on a count of
+  posts (`counts`: a target's uses of a name in its own words) also links, run by run,
+  every message that was counted. A claim on probe answers links to the runs only: the
+  answer is given in a private interview after the run, not in a message. A slug that is not its
   experiment's run (another commit, start time or set of samples) is refused. The
   report uploaded to Cosmos ("Open report") was made before the links existed, so it
   has none.

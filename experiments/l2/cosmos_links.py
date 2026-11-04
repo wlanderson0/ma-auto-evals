@@ -15,8 +15,12 @@ again with them (the rest of ``report.md`` is kept as it is):
 - every sample of a variant a claim rests on: ``<server>/samples/<id>``, so a rate or a
   comparison links to each run behind its count, marked with what that run showed;
 - every post a claim cites: ``<server>/samples/<id>?branch=<b>&kind=channel#msg-<seq>``,
-  the message itself, matched by its message id (Cosmos's ``source_id``) on the sample's
-  adopted branch.
+  the message itself, matched by its message id (Cosmos's ``source_id``) on the branch
+  Cosmos shows;
+- every message a count was made from: for a claim read from ``counts`` (a target's uses
+  of the scenario's name in its own words), each run's channel messages are looked up, so
+  the report can link every post that counted (``messages``: per run, the branch and each
+  message id's place on Cosmos).
 
 Each slug is checked against its experiment: the run's manifest must name the commit and
 start time in the experiment's ``decisions.json``, and its samples must be exactly the
@@ -77,24 +81,59 @@ def resolve(tools: Any, runs: Mapping[str, str], get: Get, base_url: str) -> dic
         for key, (vid, epoch) in ours.items():
             sample_ids[(vid, epoch)] = theirs[key]
             samples[f"{vid}/{epoch}"] = f"{base}/samples/{theirs[key]}"
-    posts: dict[str, str] = {}
     refs = {(r["variant"], r["epoch"], r["post"]) for claim in tools.claims or []
             for r in claim["evidence"] if "call" not in r}
-    for vid, epoch, post in sorted(refs, key=str):
+    counted = {vid for claim in tools.claims or [] for vid in _counted_variants(tools, claim)}
+    wanted = sorted({(vid, epoch) for vid, epoch, _ in refs}
+                    | {(vid, s.epoch) for vid in counted for s in results.of(vid)}, key=str)
+    messages: dict[str, dict[str, Any]] = {}
+    for vid, epoch in wanted:
         sid = sample_ids.get((vid, epoch))
         if sid is None:
             continue
         try:
-            url = _message(tools, get, base, sid, vid, epoch, post)
-        except Exception as error:  # one message, not the whole command
-            problems.append(f"{vid} epoch {epoch} post {post}: {type(error).__name__}: {error}")
+            found = _channel(get, sid)
+        except Exception as error:  # one run, not the whole command
+            problems.append(f"{vid} epoch {epoch}: messages not read: "
+                            f"{type(error).__name__}: {error}")
             continue
-        if url is None:
+        if found is None:
+            problems.append(f"{vid} epoch {epoch}: no branch to read messages from")
+            continue
+        key, seqs = found
+        messages[f"{vid}/{epoch}"] = {"url": f"{base}/samples/{sid}?"
+                                      + urlencode({"branch": key, "kind": "channel"}),
+                                      "seq": seqs}
+    posts: dict[str, str] = {}
+    for vid, epoch, post in sorted(refs, key=str):
+        run = messages.get(f"{vid}/{epoch}")
+        if run is None:
+            continue
+        try:
+            message = find_post(tools, {"variant": vid, "epoch": epoch, "post": post})
+        except LookupError as error:
+            problems.append(f"{vid} epoch {epoch} post {post}: {error}")
+            continue
+        seq = run["seq"].get(str(message.get("id")))
+        if seq is None:
             problems.append(f"{vid} epoch {epoch} post {post}: not found on Cosmos")
         else:
-            posts[f"{vid}/{epoch}/{post}"] = url
+            posts[f"{vid}/{epoch}/{post}"] = f"{run['url']}#msg-{seq}"
     return {"base_url": base, "runs": {name: f"{base}/runs/{slug}" for name, slug in runs.items()},
-            "samples": samples, "posts": posts, "problems": problems}
+            "samples": samples, "posts": posts, "messages": messages, "problems": problems}
+
+
+def _counted_variants(tools: Any, claim: Mapping[str, Any]) -> list[str]:
+    """The variants whose counted messages a claim's links show: those of a rate or a
+    comparison read from ``counts``."""
+    from experiments.l2.claims import basis
+
+    if claim.get("kind") not in ("rate", "difference", "no_difference"):
+        return []
+    used = basis(tools, claim)
+    if not used or used.get("scorer") != "counts":
+        return []
+    return [claim["variant"]] if claim["kind"] == "rate" else [claim["a"], claim["b"]]
 
 
 def _same_run(name: str, slug: str, manifest: Mapping[str, Any],
@@ -117,27 +156,24 @@ def _when(stamp: Any) -> datetime | None:
         return None
 
 
-def _message(tools: Any, get: Get, base: str, sid: int, vid: str, epoch: int,
-             post: Any) -> str | None:
-    """A cited post's link: on the branch Cosmos shows by default (the last completed
-    one, else the last), the message whose ``source_id`` is the post's message id."""
-    message = find_post(tools, {"variant": vid, "epoch": epoch, "post": post})
+def _channel(get: Get, sid: int) -> tuple[str, dict[str, int]] | None:
+    """A sample's channel messages on the branch Cosmos shows by default (the last
+    completed one, else the last): the branch key and each message id's ``seq``."""
     branches = get(f"/api/samples/{sid}").get("branches") or []
     done = [b for b in branches if b.get("status") == "completed"]
     branch = (done or branches or [None])[-1]
     if branch is None or not SLUG.fullmatch(str(branch.get("key"))):
         return None
-    key, offset = str(branch["key"]), 0
+    key, offset, seqs = str(branch["key"]), 0, {}
     while True:
         page = get(f"/api/samples/{sid}/branches/{key}/messages?kind=channel&limit={PAGE}"
                    f"&offset={offset}")
         for m in page["items"]:
-            if m.get("source_id") == message.get("id"):
-                query = urlencode({"branch": key, "kind": "channel"})
-                return f"{base}/samples/{sid}?{query}#msg-{int(m['seq'])}"
+            if m.get("source_id"):
+                seqs.setdefault(str(m["source_id"]), int(m["seq"]))
         offset += len(page["items"])
         if not page["items"] or offset >= int(page["total"]):
-            return None
+            return key, seqs
 
 
 def http_get(base_url: str, token: str | None) -> Get:
@@ -198,8 +234,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(str(error)) from error
     (args.audit / "cosmos.json").write_text(json.dumps(links, indent=2) + "\n")
     path = relink(args.audit)
-    print(f"{len(links['samples'])} sample links and {len(links['posts'])} message links; "
-          f"report: {path}")
+    print(f"{len(links['samples'])} run links, {len(links['posts'])} cited messages and "
+          f"{len(links['messages'])} runs' messages; report: {path}")
     for problem in links["problems"]:
         print(f"not linked: {problem}")
 

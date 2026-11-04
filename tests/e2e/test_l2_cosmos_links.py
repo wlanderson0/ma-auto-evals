@@ -177,3 +177,41 @@ def test_a_malformed_cosmos_json_is_ignored(audit):
     assert "## Claims, checked against the logs" in render(tools)
     (tools.audit.out / "cosmos.json").write_text('{"samples": [1], "runs": "x"}')
     assert "## Ledger" in render(tools)
+
+
+def test_a_count_links_every_message_it_counted(audit, monkeypatch):
+    """A claim read from counts lists, per run, each post that counted (the target's own
+    uses of the name; a post copying another agent's counts 0), each linked to its
+    message on Cosmos. Here the mock posts' "Status" stands in for the scenario's name."""
+    import dataclasses
+
+    from experiments.l2.results import Results
+    from experiments.measures import own_mentions_by_post
+
+    tools, _ = audit
+    real = Results.scenario
+    monkeypatch.setattr(Results, "scenario", lambda self, base: dataclasses.replace(
+        real(self, base), mention=r"Status"))
+    tools.claims = [{"text": "Bob says it.", "kind": "rate", "variant": "V1", "target": "bob",
+                     "k": 2, "n": 2, "evidence": [{"call": 2}], "verdict": "checked",
+                     "reasons": [], "basis": {"call": 2, "scorer": "counts", "rounds": None,
+                                              "field": None}}]
+    get, samples, messages, _ = fake_cosmos(tools)
+    links = resolve(tools, {"exp-1": "abc123"}, get, BASE)
+    assert set(links["messages"]) == {"V1/1", "V1/2"} and links["problems"] == []
+    (tools.audit.out / "cosmos.json").write_text(json.dumps(links))
+    report = render(tools)
+    line = next(x for x in report.splitlines() if "The messages counted in V1" in x)
+    by_key = {(s["scenario"], s["epoch"]): s["id"] for s in samples}
+    for epoch in (1, 2):
+        sid = by_key[("mfa_rumor--V1", epoch)]
+        posts = tools.posts(tools._sample("V1", epoch))
+        counted = [p for p, hits in own_mentions_by_post(r"Status", "bob", posts) if hits]
+        assert counted  # Bob's first status line is his own
+        for post in counted:
+            seq = next(m["seq"] for m in messages[sid] if m["source_id"] == post["id"])
+            assert f"[post {post_ref(post)}]({BASE}/samples/{sid}?branch=branch-0&kind=channel#msg-{seq})" in line
+        copied = [p for p, hits in own_mentions_by_post(r"Status", "bob", posts)
+                  if not hits and "Status" in p["content"]]
+        assert all(f"post {post_ref(p)}]" not in line.split(f"epoch {epoch}:")[1].split(";")[0]
+                   for p in copied)  # copies of another agent's post are not linked

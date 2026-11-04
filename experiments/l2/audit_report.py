@@ -23,7 +23,7 @@ from typing import Any
 
 from experiments.l2 import claims as claims_
 from experiments.l2.report import SCORER
-from experiments.l2.tools import Tools, _ids, _jsonl
+from experiments.l2.tools import Tools, _ids, _jsonl, post_ref
 
 RECORD = {
     "brief.md": "the brief as given",
@@ -350,10 +350,20 @@ def _cosmos(tools: Tools) -> dict[str, Any]:
         return {}
     if not isinstance(links, dict):
         return {}
-    url = re.compile(r"https?://[^\s()<>\[\]`]+")
-    return {k: {str(name): u for name, u in part.items() if url.fullmatch(str(u))}
-            for k in ("runs", "samples", "posts")
-            for part in [links.get(k) if isinstance(links.get(k), dict) else {}]}
+    url = re.compile(r"https?://[^\s()<>\[\]`#]+")
+    found = {k: {str(name): u for name, u in part.items()
+                 if url.fullmatch(str(u).split("#msg-", 1)[0])
+                 and re.fullmatch(r"\d*", str(u).partition("#msg-")[2])}
+             for k in ("runs", "samples", "posts")
+             for part in [links.get(k) if isinstance(links.get(k), dict) else {}]}
+    runs = links.get("messages") if isinstance(links.get("messages"), dict) else {}
+    found["messages"] = {
+        str(name): {"url": run["url"], "seq": {str(m): int(q) for m, q in run["seq"].items()
+                                               if isinstance(q, int)}}
+        for name, run in runs.items()
+        if isinstance(run, dict) and url.fullmatch(str(run.get("url")))
+        and isinstance(run.get("seq"), dict)}
+    return found
 
 
 def _claim_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> list[str]:
@@ -391,7 +401,39 @@ def _claim_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> 
             out.append(f"On Cosmos, {_inline(claim['target'])} in each run of "
                        f"{_inline(vid)}, as call {used['call']} read it (epoch, then ✓/✗): "
                        + " ".join(cells))
+        if used["scorer"] == "counts":
+            out += _counted(tools, claim["target"], vid, used, links)
     return out
+
+
+def _counted(tools: Tools, target: str, vid: str, used: dict[str, Any],
+             links: dict[str, Any]) -> list[str]:
+    """Every message a ``counts`` claim counted, per run: the target's posts that use the
+    scenario's name in its own words (copies of others' posts do not count), linked to
+    the message on Cosmos."""
+    from experiments.measures import own_mentions_by_post
+
+    if used["rounds"] is not None:
+        return [f"  - (the messages are not listed for a count up to round {used['rounds']}; "
+                "open the runs above)"]
+    results = tools.results()
+    runs = []
+    for sample in sorted(results.of(vid), key=lambda s: s.epoch):
+        run = links.get("messages", {}).get(f"{vid}/{sample.epoch}")
+        pattern = results.scenario(sample.base).mention
+        posts = [p for p, hits in own_mentions_by_post(pattern, target, tools.posts(sample))
+                 if hits > 0]
+        if not posts:
+            continue
+        cells = []
+        for post in posts:
+            seq = (run or {}).get("seq", {}).get(str(post.get("id")))
+            label = f"post {_inline(post_ref(post))}"
+            cells.append(f"[{label}]({run['url']}#msg-{int(seq)})" if run and seq is not None
+                         else f"{label} (not on Cosmos)")
+        runs.append(f"epoch {sample.epoch}: " + ", ".join(cells))
+    return [f"  - The messages counted in {_inline(vid)} ({_inline(target)}'s own uses): "
+            + "; ".join(runs)] if runs else []
 
 
 def _code(value: Any) -> str:
