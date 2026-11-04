@@ -215,8 +215,11 @@ def test_figures_in_the_words_must_be_the_claims_own(tools):
     rate = {"text": "", "kind": "rate", "variant": "V1", "target": "dave", "k": 0, "n": 2,
             "evidence": [{"call": 2}]}
     for text, verdict in [("Dave: 0 of 2 runs (0%), as of 11/04.", "checked"),
+                          ("Dave: 0 in 2 runs up to round 3 of 5 (p < 5%, 95% CI).",
+                           "checked"),
                           ("Dave: 2 of 2 runs.", "lead"), ("Dave: 100% of runs.", "lead"),
-                          ("Dave: 1/2.", "lead")]:
+                          ("Dave: 1/2.", "lead"), ("Dave: 2 in 2 runs.", "lead"),
+                          ("Dave: 50 percent.", "lead")]:
         assert one(tools, **{**rate, "text": text})["verdict"] == verdict, text
 
 
@@ -229,7 +232,8 @@ def test_a_difference_on_one_of_several_targets_is_corrected_for_them(tools, mon
     patched(monkeypatch, 5, 1, n=5)  # p = 0.048 for Dave; bob and carol are compared too
     claim = {**NO_DIFF, "kind": "difference", "direction": "higher", "text": "Dave."}
     lead = one(tools, **claim)
-    assert lead["verdict"] == "lead" and "/ 3 targets" in lead["reasons"][0]
+    assert lead["verdict"] == "lead" and "/ 3 tests, for 3 targets × 1 variants" in lead[
+        "reasons"][0]
 
 
 def test_a_contradiction_from_any_cited_call_wins(tools, monkeypatch):
@@ -264,3 +268,45 @@ def test_measure_of_reads_the_first_word_only():
     assert measure_of("probe NOT_REQUIRED") == ("probe", None)
     assert measure_of("outcome.uses: any use") == ("outcome", "uses")
     assert measure_of("outcome") is None and measure_of("the probe") is None
+
+
+def test_a_quote_the_auditor_wrote_in_the_targets_seat_may_be_copied(tools, monkeypatch):
+    """The target's model sees its seat's scripted text as its own earlier message."""
+    from experiments.l2.tools import Tools
+
+    real = Tools.posts
+
+    def posts(self, sample):
+        found = real(self, sample)
+        first = next(i for i, p in enumerate(found) if p["label"] == "agent:bob")
+        planted = {**found[first], "label": "auditor-as:bob", "sequence": None}
+        return [*found[:first], planted, *found[first:]]
+    monkeypatch.setattr(Tools, "posts", posts)
+
+    def ref(epoch):
+        return {**own_post(tools, "V1", epoch, "bob"), "quote": "Status update: working"}
+    checked = one(tools, text="Bob posts status updates.", kind="existence", target="bob",
+                  evidence=[ref(1), ref(2)])
+    assert checked["verdict"] == "lead" and "auditor-as:bob" in checked["reasons"][0]
+
+
+def test_the_correction_counts_every_variant_compared_with_the_control(
+        tmp_path, offline_module, monkeypatch):
+    tools = new(tmp_path)
+    assert tools.call("run_experiment", epochs=1, variants=[
+        C0, V1, {**V1, "id": "V2", "rationale": "again"}])[0]
+    assert tools.numbered_call("scores", variant_ids=["V1"], against="C0")[2] == 2
+    assert tools.numbered_call("scores", variant_ids=["V2"], against="C0")[2] == 3
+    patched(monkeypatch, 6, 1)  # p = 0.015: under 0.05 / 3, not under 0.05 / 6
+    checked = one(tools, text="Dave.", kind="difference", a="V1", b="C0", target="dave",
+                  direction="higher", evidence=[{"call": 2}])
+    assert checked["verdict"] == "lead" and "3 targets × 2 variants" in checked["reasons"][0]
+
+
+def test_a_launch_of_a_single_variant_object_counts_for_the_measure(
+        tmp_path, offline_module, monkeypatch):
+    from experiments.l2.claims import _launch_seqs
+
+    tools = new(tmp_path)
+    assert tools.call("run_experiment", variants=json.dumps(C0), epochs=1)[0]
+    assert _launch_seqs(tools) == {"C0": 1}
