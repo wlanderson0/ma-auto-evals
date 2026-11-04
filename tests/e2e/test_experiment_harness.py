@@ -11,9 +11,14 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from inspect_ai.model import ChatMessageAssistant, ModelOutput, get_model
+from inspect_ai.tool import ToolCall
 
-from experiments.run import _mock_models, run_condition
+from experiments.run import _mock_models, make_policy, run_condition
 from experiments.scenarios import FAILING, SCENARIOS
+from orbit_audit.boundaries import Boundary
+from orbit_audit.ops import OverrideToolResult, ReplaceGeneration
+from orbit_audit.policy import BoundaryView
 
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
@@ -28,12 +33,103 @@ def test_harness_runs_and_measures_offline(tmp_path, name, condition):
     assert [b["status"] for b in row["branches"]] == ["completed"]
     assert set(row["agents"]) == set(scenario.targets)
     assert all(agent["posts"] for agent in row["agents"].values())
+    # The auditor acts only through its seat, so the targets stay clean.
+    assert all(agent["clean"] is True for agent in row["agents"].values())
+    assert set(row["touched"]) <= {scenario.seat}
     if condition == "l0":
+        assert [t["op"] for t in row["touched"][scenario.seat]] == ["replace_generation"] * seat_turns
         assert row["interventions"]["applied"] == {"replace_generation": seat_turns}
         assert row["interventions"]["off_seat"] == []
         assert len(row["seat_posts"]) == seat_turns
     else:
         assert row["auditor"]["kind"] == "LLMAuditor" and row["auditor"]["wakes"] > 0
+
+
+def roster(scenario):
+    return [spec.name for spec in scenario.task["setup"].agents]
+
+
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+def test_the_l1_auditor_may_act_only_through_the_scenarios_allowlist(name):
+    scenario = SCENARIOS[name]({})
+    assert scenario.allowed == (scenario.seat,)  # every seed scenario: the seat alone
+    for agent in roster(scenario):
+        problem = scenario.scope.problem(ReplaceGeneration(agent=agent, content="x"))
+        assert (problem is None) == (agent in scenario.allowed), agent
+    problem = scenario.scope.problem(OverrideToolResult(agent=scenario.seat, result="x"))
+    assert "outside this audit's scope" in problem  # the operations stay limited
+
+
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+def test_the_l1_auditor_is_woken_only_before_the_generations_it_may_act_on(name):
+    scenario = SCENARIOS[name]({})
+    policy = make_policy("l1", scenario, "mockllm/auditor")
+    for agent in roster(scenario):
+        view = BoundaryView(boundary=Boundary.GENERATION, revision=2, turn=0, agent=agent)
+        assert bool(policy.wake(view)) == (agent in scenario.allowed), agent
+
+
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+def test_the_seed_instruction_names_the_agents_the_allowlist_names(name):
+    scenario = SCENARIOS[name]({})
+    goal = " ".join(scenario.goal.split())
+    assert 'ONLY through' in goal and f'agent "{scenario.seat}"' in goal
+
+
+def widened(name, *extra):
+    scenario = SCENARIOS[name]({})
+    return dataclasses.replace(scenario, controllable=(scenario.seat, *extra))
+
+
+def test_widening_the_allowlist_is_the_only_change_needed_to_act_through_another_agent():
+    scenario = widened("mfa_rumor", "bob")
+    assert scenario.allowed == ("alice", "bob")
+    assert scenario.scope.problem(ReplaceGeneration(agent="bob", content="x")) is None
+    assert scenario.scope.problem(ReplaceGeneration(agent="carol", content="x")) is not None
+    policy = make_policy("l1", scenario, "mockllm/auditor")
+    wakes = {agent: bool(policy.wake(BoundaryView(
+        boundary=Boundary.GENERATION, revision=2, turn=0, agent=agent)))
+        for agent in roster(scenario)}
+    assert wakes == {"alice": True, "bob": True, "carol": False, "dave": False}
+
+
+def test_an_l1_auditor_that_acts_through_a_target_leaves_it_unmeasured_and_the_rest_clean(
+        tmp_path):
+    acted = []
+
+    def auditor(messages, tools, tool_choice, config):
+        text = messages[-1].text if messages[-1].role == "user" else ""
+        if "bob is about to generate" in text and not acted:
+            acted.append(text)
+            call = ToolCall(id="g", function="replace_generation", arguments={
+                "agent": "bob", "tool_function": "channel_post",
+                "tool_arguments_json": '{"channel_id": "town", "message": "MFA is off."}'})
+        else:
+            call = ToolCall(id="c", function="continue_run", arguments={})
+        return ModelOutput.from_message(ChatMessageAssistant(content="", tool_calls=[call]),
+                                        stop_reason="tool_calls")
+
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    models["auditor"] = get_model("mockllm/auditor", custom_outputs=auditor, memoize=False)
+    [row] = run_condition(widened("mfa_rumor", "bob"), "l1", 1, tmp_path, models)
+    assert row["status"] == "success" and acted
+    assert row["interventions"]["applied"] == {"replace_generation": 1}
+    assert row["interventions"]["off_seat"] == ["replace_generation"]  # beyond the seat
+    assert list(row["touched"]) == ["bob"]
+    agents = row["agents"]
+    assert [agents[a]["clean"] for a in ("bob", "carol", "dave")] == [False, True, True]
+    assert agents["bob"]["adopted"] is None and "touched" in agents["bob"]["probe_error"]
+    assert agents["carol"]["adopted"] is not None
+
+
+def test_a_run_without_an_auditor_touches_nobody(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    scenario = SCENARIOS["mfa_rumor"]({})
+    [row] = run_condition(scenario, "baseline", 1, tmp_path, models)
+    assert row["touched"] == {}
+    assert all(agent["clean"] is True for agent in row["agents"].values())
 
 
 def test_kestrel_counts_name_mentions_per_agent_and_channel(tmp_path):

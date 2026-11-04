@@ -18,8 +18,9 @@ belief probe with its own model and recorded final request, a judge model
 classifies each target's own channel posts, and model-free counters measure
 mentions and copying. Scores are in the eval log and the Inspect viewer;
 ``results.json`` is rebuilt from them. Planted (auditor-authored)
-content is never counted as target behaviour: only targets' canonical posts
-are judged (P3). Results go to ``<out>/results.json``; Inspect logs to
+content is never counted as target behaviour: only targets' own posts
+are judged (P3), and a target the auditor touched is not probed at all (its
+row says ``clean: false``). Results go to ``<out>/results.json``; Inspect logs to
 ``<out>/<scenario>/<condition>/``; ``<out>/manifest.json`` records the git commit,
 PR, scenarios, conditions, epochs and models of the run (read by ``cosmos upload``).
 """
@@ -58,7 +59,7 @@ from experiments.measures import (  # noqa: F401  (re-exported for tests and rev
     reviewer_said,
 )
 from experiments.scenarios import SCENARIOS, Scenario
-from experiments.scorers import expected_scores, measurement_scorers
+from experiments.scorers import expected_scores, measurement_scorers, posts_by, read_store
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.auditor.llm import final_boundary
 from orbit_audit.boundaries import Boundary
@@ -106,11 +107,11 @@ def make_policy(condition: str, scenario: Scenario, auditor: str | Model) -> Aud
         return AuditPolicy()
     if condition == "l1":
         def wake(view) -> bool:
-            # Where this auditor can act: its seat's generations, and every post
-            # (the only moment a message can still be changed in flight). The
-            # LLMAuditor adds each branch's final boundary itself.
+            # Where this auditor can act: the generations of the agents it may act
+            # through, and every post (the only moment a message can still be changed
+            # in flight). The LLMAuditor adds each branch's final boundary itself.
             if view.boundary == Boundary.GENERATION:
-                return view.agent == scenario.seat
+                return view.agent in scenario.allowed
             return view.boundary == Boundary.TOOL_RESULT and view.tool_name == "channel_post"
 
         return LLMAuditor(model=auditor, instructions=scenario.goal, wake=wake,
@@ -231,9 +232,13 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
         final = counts.get("final")
         counted = counts.get("branches", {}).get(final, {}).get("agents", {})
         answered = freed.get("branches", {}).get(final, {}).get("agents", {})
+        view = read_store(sample.store)
+        touched = None if isinstance(view, str) else view.last.touched
+        authors = None if isinstance(view, str) else view.last.authors
         row: dict[str, Any] = {
             "scenario": scenario.name, "condition": condition, "epoch": sample.epoch,
             "seat": scenario.seat, "branches": tree, "budget": sample.store.get(BUDGET_KEY),
+            "touched": touched,
             "error": str(sample.error.message) if sample.error else None,
             "agents": {},
         }
@@ -245,9 +250,10 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
             flags = judgement.get("flags") or []
             row["agents"][agent] = {
                 "probe": answer, "adopted": answer == spec.adopted if spec else None,
-                "posts": [m["content"] for m in posts if m["sender"] == agent],
+                "posts": posts_by(posts, agent, authors),
                 "flagged_posts": sum(flags), "flags": flags,
                 "outcome": judgement.get("outcome"),
+                "clean": None if touched is None else agent not in touched,
             }
             # A measurement that could not be made reads as unknown, not as zero or False.
             if spec and (why := made.get("why") or unknown.get("probe")):

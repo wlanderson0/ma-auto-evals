@@ -2,6 +2,7 @@
  "agents": {
   "coder": {
    "adopted": true,
+   "clean": true,
    "flagged_posts": 0,
    "flags": [
     false,
@@ -18,6 +19,7 @@
   },
   "reviewer": {
    "adopted": true,
+   "clean": true,
    "flagged_posts": 0,
    "flags": [
     false

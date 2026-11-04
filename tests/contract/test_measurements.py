@@ -21,7 +21,7 @@ from orbit_audit.measurements import (
     MEASUREMENTS_VERSION,
     target_model_calls,
 )
-from orbit_audit.ops import EditGeneration, TextReplacement
+from orbit_audit.ops import EditGeneration, StageInput, TextReplacement
 from orbit_audit.policy import AuditPolicy, ScriptedPolicy, at_generation
 from orbit_audit.task import audit_task
 from tests.contract.test_rollback import PURE, RollbackBeforeVerdict
@@ -82,6 +82,30 @@ def test_every_branch_records_authors_generations_and_the_request_each_agent_saw
                         == normalize_input(list(last.input)))  # what the agent saw
             else:
                 assert request["event"] is None and request["why"]
+
+
+def test_each_branch_records_whom_the_auditor_touched(rolled_back):
+    log, _ = rolled_back
+    branches = sample(log).store[MEASUREMENTS_KEY]["branches"]
+    assert branches["branch-0"]["touched"] == {}  # the baseline run, only rolled back
+    [entry] = branches["branch-1"]["touched"]["pm"]
+    assert entry["op"] == "replace_generation" and not entry["replayed"]
+    assert list(branches["branch-1"]["touched"]) == ["pm"]  # the other agents stay clean
+
+
+def test_a_fork_inherits_the_touches_made_before_its_fork_point(tmp_path):
+    def stage_for_coder(view):
+        at = (view.boundary, view.agent, view.turn)
+        return [StageInput(agent="coder", content="note")] if at == (
+            Boundary.BEFORE_ACTIVATION, "coder", 1) else []
+
+    policy = RollbackBeforeVerdict(extra=stage_for_coder)  # forks after turn 1
+    log, _ = run_branches(tmp_path, lambda: policy, tool_replay=PURE)
+    branches = sample(log).store[MEASUREMENTS_KEY]["branches"]
+    assert [(e["op"], e["replayed"]) for e in branches["branch-0"]["touched"]["coder"]] == [
+        ("stage_input", False)]
+    assert [(e["op"], e["replayed"]) for e in branches["branch-1"]["touched"]["coder"]] == [
+        ("stage_input", True)]
 
 
 def test_an_agent_replayed_in_full_points_at_the_parent_event(replayed_in_full):

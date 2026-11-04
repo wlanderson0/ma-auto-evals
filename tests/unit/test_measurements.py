@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+from orbit_audit.boundaries import Boundary
 from orbit_audit.controller import GenerationTrace
+from orbit_audit.evidence import InterventionRecord
 from orbit_audit.measurements import (
     Alignment,
     Gen,
@@ -15,6 +17,7 @@ from orbit_audit.measurements import (
     failed_model_calls,
     stored_requests,
     target_model_calls,
+    touched_agents,
 )
 from orbit_audit.timeline import AUDITOR_SPAN
 
@@ -151,9 +154,9 @@ def trace(agent, index, *, exposed=True, replayed=False):
 RUNTIME = object()
 
 
-def fake(branch, generations, authors=lambda: {}, runtime=RUNTIME):
+def fake(branch, generations, authors=lambda: {}, runtime=RUNTIME, records=()):
     return SimpleNamespace(branch=branch, generations=generations, authors=authors,
-                           runtime=runtime)
+                           runtime=runtime, ledger=SimpleNamespace(records=tuple(records)))
 
 
 def test_the_recorder_keeps_each_branch_and_threads_the_parents_lists_to_children():
@@ -178,6 +181,48 @@ def test_the_recorder_keeps_each_branch_and_threads_the_parents_lists_to_childre
     assert payload["branches"]["branch-0"]["requests"]["bob"]["event"] == "p0"
     assert payload["branches"]["branch-1"]["requests"]["bob"] == {
         "event": "p0", "via": "branch-0", "why": ""}
+
+
+def test_the_recorder_keeps_who_was_touched_in_each_branch():
+    recorder = MeasurementRecorder()
+    recorder.record(fake("branch-0", [], records=[record("edit_generation", ("bob",), revision=4)]),
+                    None, [])
+    recorder.record(fake("branch-1", []), "branch-0", [])
+    branches = recorder.payload()["branches"]
+    assert branches["branch-0"]["touched"] == {
+        "bob": [{"op": "edit_generation", "revision": 4, "replayed": False}]}
+    assert branches["branch-1"]["touched"] == {}  # recorded, and nobody was touched
+
+
+def test_a_branch_whose_record_failed_has_unknown_touches_not_none_touched():
+    class Broken:
+        branch = "branch-0"
+        runtime = RUNTIME
+
+        @property
+        def generations(self):
+            raise RuntimeError("bad trace")
+
+    recorder = MeasurementRecorder()
+    recorder.record(Broken(), None, [])
+    assert recorder.payload()["branches"]["branch-0"]["touched"] is None
+
+
+def test_a_failing_ledger_is_recorded_and_logged_not_raised(caplog):
+    class BrokenLedger:
+        @property
+        def records(self):
+            raise RuntimeError("no ledger")
+
+    controller = fake("branch-0", [])
+    controller.ledger = BrokenLedger()
+    recorder = MeasurementRecorder()
+    with caplog.at_level(logging.WARNING, logger="orbit_audit.measurements"):
+        recorder.record(controller, None, [])
+    record_ = recorder.payload()["branches"]["branch-0"]
+    assert record_["touched"] is None and "RuntimeError" in record_["touched_error"]
+    assert "record_error" not in record_
+    assert any("branch-0" in r.getMessage() for r in caplog.records)
 
 
 def test_a_branch_without_a_runtime_records_unknown_authors():
@@ -259,3 +304,47 @@ def test_errored_target_calls_are_found_apart_from_the_auditors_and_the_ok_ones(
     ]
     assert target_model_calls(events) == [ModelCall("ok", "bob", "branch-0")]
     assert failed_model_calls(events) == [ModelCall("broken", "bob", "branch-0")]
+
+
+def record(op, agents, *, outcome="applied", revision=1, replayed=False):
+    return InterventionRecord(
+        sequence=0, op=op, op_version=1, boundary=Boundary.GENERATION, actor="auditor",
+        agents=agents, revision=revision, outcome=outcome, replayed=replayed)
+
+
+def test_writing_editing_or_forcing_an_agents_output_touches_it():
+    touched = touched_agents([
+        record("replace_generation", ("bob",), revision=3),
+        record("edit_generation", ("bob",), revision=5),
+        record("force_tool_call", ("carol",), revision=7)])
+    assert touched == {
+        "bob": [{"op": "replace_generation", "revision": 3, "replayed": False},
+                {"op": "edit_generation", "revision": 5, "replayed": False}],
+        "carol": [{"op": "force_tool_call", "revision": 7, "replayed": False}]}
+
+
+def test_staging_input_or_deciding_a_tool_call_touches_the_agent():
+    ops = ["stage_input", "block_tool_call", "simulate_tool_result", "override_tool_result"]
+    touched = touched_agents([record(op, ("bob",)) for op in ops])
+    assert [t["op"] for t in touched["bob"]] == ops
+
+
+def test_a_rejected_operation_touches_nobody():
+    assert touched_agents([record("replace_generation", ("bob",), outcome="rejected")]) == {}
+
+
+def test_message_operations_touch_nobody_even_though_they_name_agents():
+    """Reading an auditor-authored or rewritten message is the stimulus, not a touch."""
+    assert touched_agents([record("rewrite_message", ("alice", "bob")),
+                           record("drop_message", ("bob",)),
+                           record("inject_message", ("alice", "bob"))]) == {}
+
+
+def test_operations_that_name_no_agent_touch_nobody():
+    assert touched_agents([record("rollback", ()), record("halt", ())]) == {}
+
+
+def test_a_replayed_operation_still_touches_and_says_so():
+    """A fork inherits its parent's prefix, so the agent was touched in this timeline too."""
+    assert touched_agents([record("edit_generation", ("bob",), replayed=True)]) == {
+        "bob": [{"op": "edit_generation", "revision": 1, "replayed": True}]}

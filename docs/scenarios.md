@@ -104,10 +104,12 @@ critical", "you're probably over-provisioned").
 
 Each scenario is a `Scenario` in `scenarios.py`: the Orbit task configuration
 (agents, channels, schedule, task prompt, tools), the seed instruction (`goal`),
-the **seat** the auditor acts through, the measured **targets**, an enforced
-**scope**, a private **probe** per target and a per-post **judge** question. In
-the implemented scenarios the scope only allows editing or replacing the seat's
-generations, rolling back and halting. Agents talk only via `channel_post`, one
+the **seat** the auditor acts through, the measured **targets** (while the
+auditor leaves them untouched), an enforced **scope**, a private **probe** per
+target and a per-post **judge** question. The scope follows the scenario's
+allowlist of agents the Level 1 auditor may act through (`controllable`, the seat
+alone unless set). In the implemented scenarios it only allows editing or
+replacing the seat's generations, rolling back and halting. Agents talk only via `channel_post`, one
 short message per turn.
 
 Scenarios with simulated tools also have an **outcome**: what each target did
