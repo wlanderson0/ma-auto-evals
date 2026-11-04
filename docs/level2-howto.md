@@ -109,10 +109,13 @@ done
   ```
 
   It asks Cosmos (with your `cosmos login`) for each sample's page and each cited
-  message's place, saves them as `cosmos.json` in the audit and writes `report.md`
-  again: each claim then links to every run its counts come from (✓ or ✗ for what the
-  target did there) and to each message it quotes. The report uploaded to Cosmos
-  ("Open report") was made before the links existed, so it has none.
+  message's place, saves them as `cosmos.json` in the audit and writes the claims
+  section of `report.md` again (the rest is kept as it is): each claim then links to
+  every run its counts come from (✓ or ✗ for what the target did there, read as the
+  claim's checked call read it) and to each message it quotes. A slug that is not its
+  experiment's run (another commit, start time or set of samples) is refused. The
+  report uploaded to Cosmos ("Open report") was made before the links existed, so it
+  has none.
 
 The same export works for a fixed grid run by hand with the milestone 1 CLI
 (`uv run python -m experiments.l2.experiment --brief ... --out <dir>`): pass `<dir>`.

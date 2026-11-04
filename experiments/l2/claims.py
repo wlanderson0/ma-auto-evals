@@ -370,49 +370,71 @@ def _figures(text: str, own: Sequence[tuple[int, int]]) -> list[str]:
 def check_claim(tools: Tools, claim: Mapping[str, Any]) -> dict[str, Any]:
     """The claim with its ``verdict`` and the ``reasons`` for it."""
     try:
-        verdict, reasons, own = _check(tools, claim)
+        verdict, reasons, own, used = _check(tools, claim)
     except Exception as error:  # a verdict for every claim, whatever breaks
-        verdict, reasons, own = "invalid", [f"could not be checked: "
-                                            f"{type(error).__name__}: {error}"], None
+        verdict, reasons, own, used = "invalid", [f"could not be checked: "
+                                                  f"{type(error).__name__}: {error}"], None, None
     if own is not None and verdict in ("checked", "unchecked"):
         if wrong := _figures(claim["text"], own):
             verdict = "lead"
             reasons.append("figures in the claim's words that are not its own (the "
                            f"report shows its fields, which were checked): {', '.join(wrong)}")
-    return {**claim, "verdict": verdict, "reasons": reasons}
+    return {**claim, "verdict": verdict, "reasons": reasons,
+            **({"basis": used} if used is not None else {})}
+
+
+def basis(tools: Tools, claim: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The cited call a rate's or a comparison's verdict was read from: ``{"call", "scorer",
+    "rounds", "field"}`` (recorded by ``check_claim``, else worked out again)."""
+    if claim.get("basis") is not None:
+        return dict(claim["basis"])
+    try:
+        return _check(tools, claim)[3]
+    except Exception:
+        return None
+
+
+def _used(seq: int, args: Mapping[str, Any]) -> dict[str, Any]:
+    return {"call": seq, "scorer": args.get("scorer"), "rounds": args.get("rounds"),
+            "field": args.get("field")}
 
 
 RANK = {"checked": 0, "unchecked": 1, "lead": 2, "invalid": 3, "contradicted": 4}
 
 
-def _best(found: list[tuple[str, list[str], Any]]) -> tuple[str, list[str], Any]:
+def _best(found: list[tuple[str, list[str], Any, Any]]) -> tuple[str, list[str], Any, Any]:
     """Over the claim's usable citations: a contradiction wins; else the best verdict."""
     if bad := [f for f in found if f[0] == "contradicted"]:
         return bad[0]
     return min(found, key=lambda f: RANK[f[0]])
 
 
-def _check(tools: Tools, claim: Mapping[str, Any]) -> tuple[str, list[str], Any]:
+def _check(tools: Tools, claim: Mapping[str, Any]) -> tuple[str, list[str], Any, Any]:
+    """The verdict, its reasons, the claim's own counts (for its figures) and the call the
+    verdict was read from (``_used``; ``None`` for kinds not read from a call)."""
     kind = claim["kind"]
     if kind == "other":
-        return "unchecked", ["kind other: not checked mechanically; read its evidence"], None
+        return ("unchecked", ["kind other: not checked mechanically; read its evidence"],
+                None, None)
     if kind == "existence":
-        return _check_existence(tools, claim)
+        return (*_check_existence(tools, claim), None)
     rows = _scores_rows(tools, claim)
     if kind == "rate":
         vid = claim["variant"]
         usable = [r for r in rows if vid in r["args"]["variant_ids"]
                   or r["args"].get("against") == vid]
         if not usable:
-            return "invalid", [f"no cited scores call read {vid}"], None
-        return _best([_rate(tools, claim, r["seq"], r["args"]) for r in usable])
+            return "invalid", [f"no cited scores call read {vid}"], None, None
+        return _best([(*_rate(tools, claim, r["seq"], r["args"]), _used(r["seq"], r["args"]))
+                      for r in usable])
     a, b = claim["a"], claim["b"]
     usable = [r for r in rows if r["args"].get("against") in (a, b)
               and {a, b} <= {*r["args"]["variant_ids"], r["args"]["against"]}]
     if not usable:
         return "invalid", [f"no cited scores call compared {a} with {b} (scores with "
-                           "against)"], None
-    return _best([_comparison(tools, claim, r["seq"], r["args"]) for r in usable])
+                           "against)"], None, None
+    return _best([(*_comparison(tools, claim, r["seq"], r["args"]), _used(r["seq"], r["args"]))
+                  for r in usable])
 
 
 def _rate(tools: Tools, claim: Mapping[str, Any], seq: int,
@@ -425,10 +447,12 @@ def _rate(tools: Tools, claim: Mapping[str, Any], seq: int,
     results = tools.results()
     if target not in results.targets(vid):
         return "invalid", [f"{target} is not a target of {vid}"], None
-    known = [results.adopted(s, target, scorer, field=field) for s in results.of(vid)]
+    rounds = args.get("rounds")  # the table the call showed: up to these rounds, if any
+    known = [results.adopted(s, target, scorer, rounds, field) for s in results.of(vid)]
     k, n = sum(x for x in known if x), sum(x is not None for x in known)
     unknown = len(known) - n
-    what = f"{vid}, {target}, {scorer}" + (f".{field}" if field else "") + f", call {seq}"
+    what = (f"{vid}, {target}, {scorer}" + (f".{field}" if field else "")
+            + (f" up to round {rounds}" if rounds is not None else "") + f", call {seq}")
     if (k, n) != (claim["k"], claim["n"]):
         return "contradicted", [f"the logs give {k}/{n} ({what}), not "
                                 f"{claim['k']}/{claim['n']}"
