@@ -119,8 +119,9 @@ class Results:
     """Variant id -> its ``runs.jsonl`` record (cost, logs, errors)."""
     problems: list[str] = field(default_factory=list)
     """What is wrong with the logs themselves (missing, not one sample, repeated epochs)."""
-    written: written_.WrittenScenarios = written_.NONE
-    """The written scenarios the variants may be built on (``experiments.l2.written``)."""
+    written: written_.WrittenScenarios = field(default_factory=lambda: written_.NONE)
+    """The written scenarios the variants may be built on (``experiments.l2.written``). A
+    factory, since Python 3.11 refuses a mapping as a dataclass default."""
 
     @classmethod
     def load(cls, audit: str | Path,
