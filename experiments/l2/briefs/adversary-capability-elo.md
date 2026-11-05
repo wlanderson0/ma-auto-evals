@@ -1,5 +1,5 @@
 ---
-budget_usd: 25
+budget_usd: 10
 base_scenarios: []
 mode: characterise
 ---
