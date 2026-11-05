@@ -1,4 +1,4 @@
-"""L2's claims, checked against the record (spec §6.4; ``experiments.l2.claims``).
+"""L2's claims, checked against the record (spec §6.4, L2-20; ``experiments.l2.claims``).
 
 One mock audit: the brief's control M0 (C0) and M0 with Dave on #town (V1), two
 epochs each, in one experiment (call 1), then a comparison (call 2), a transcript
