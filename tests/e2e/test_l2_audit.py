@@ -303,21 +303,23 @@ def test_the_ledger_counts_every_model_call_in_the_logs(tmp_path, monkeypatch):
 def test_no_epoch_starts_after_l2s_time_is_up(tmp_path):
     """The epoch in progress finishes; the next one does not start, and the stop is
     recorded like a budget stop."""
+    now = [0.0]
+
     class TimeUpAfterEpoch1(InProcess):
         def __call__(self, brief_path, ids, epoch, out, mock, scenarios=None):
             paths = super().__call__(brief_path, ids, epoch, out, mock, scenarios)
-            a.deadline = 0.0  # the deadline passes while epoch 1 runs
+            now[0] = 95.0  # the held-back time is reached while epoch 1 runs
             return paths
 
     launch = TimeUpAfterEpoch1()
-    a, path = audit(tmp_path, launch=launch)
-    a.deadline = float("inf")
+    a, path = audit(tmp_path, launch=launch, clock=lambda: now[0])
+    a.start_clock(100)
     result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3, rationale="a test launch")
     assert result["status"] == "ran" and [e for _, e in launch.calls] == [1]
     assert {v["epochs_done"] for v in result["variants"]} == {1}
-    assert result["stopped"] == "before epoch 2: L2's time limit is reached"
+    assert result["stopped"].startswith("before epoch 2: the time limit: 1.6 of 1.7 min gone")
     again = a.launch([variant(path, "M0", "V2")], 1, rationale="a test launch")
-    assert again["status"] == "refused" and "time limit is reached" in again["reason"]
+    assert again["status"] == "refused" and "the time limit" in again["reason"]
 
 
 def test_the_run_budget_stops_runs_but_not_the_audit(tmp_path):

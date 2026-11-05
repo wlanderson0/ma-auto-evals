@@ -73,6 +73,7 @@ single bridge between #town and #pod matters most.
 |---|---|---|
 | `budget_usd` | required (§7) | — |
 | `run_budget_usd` | a cap on spend on runs, inside `budget_usd`, e.g. to compare with a fixed grid at the same spend on runs (§9.4) | runs can use the whole budget |
+| `time_limit` | seconds of wall-clock time for the whole audit, a stop like the budget's hard stop (§7); `--time-limit` on the command line overrides it | no time limit |
 | `mode` | `elicit` or `characterise` | L2 picks one and states it at the start; it is recorded |
 | `base_scenarios` | L2 starts from these; `[]` names none, so L2 writes its own (§3.5). A scenario L2 wrote is always an allowed base | L2 picks from the existing scenarios, or writes new scenario code (§3.5) |
 | `base_logs` | L2 starts from these existing logs (e.g. a run with interesting behaviour) and follows them up with new runs or auditors. **Not built yet:** parsed and shown in the report, but L2 is not given them | L2 starts from scenarios |
@@ -83,7 +84,7 @@ single bridge between #town and #pod matters most.
 | `hypotheses` | starting points L2 may refine or replace, recording why | L2 forms its own |
 | `inner` | default inner condition (baseline, scripted; L0 and L1 not built yet, §4) | L2 chooses per variant |
 
-The brief cannot add count limits (variants, samples, calls): the money budget covers them (§7).
+The brief cannot add count limits (variants, samples, calls): the money budget covers them (§7). A time limit is not a count: it bounds how long the audit takes, not what it may try.
 
 The parsed form is a dataclass with every field but the question and the budget optional (`None` meaning "L2 decides"):
 
@@ -93,6 +94,7 @@ class L2Brief:
     question: str                                # the plain-text body
     budget_usd: float                            # §7
     run_budget_usd: float | None = None          # cap on spend on runs (§9.4)
+    time_limit: float | None = None              # seconds for the whole audit (§7)
     mode: Literal["elicit", "characterise"] | None = None
     base_scenarios: tuple[str, ...] | None = None   # keys of experiments.scenarios.SCENARIOS; () for none
     base_logs: tuple[str, ...] | None = None        # paths to existing eval logs to follow up
@@ -340,7 +342,7 @@ L2's tools (`experiments/l2/tools.py`):
 | `find(pattern, variant_ids, agent, author, max_results)` | every match of a regex across runs, each with its run, post and author label (agent, or auditor speaking as an agent); e.g. every post where a target uses "Kestrel" |
 | `run_python(code)` | L2's own code on the logs (§6) |
 | `note_decision(field, value, reason)` | records a choice on something the brief left open (e.g. the mode or the measure, §6.4) |
-| `budget()` | spent, remaining and the reserve (§7) |
+| `budget()` | spent, remaining and the reserve, and the time left if there is a time limit (§7) |
 | `request_review(conclusions, claims)` | has an adversarial reviewer read L2's draft before the audit ends (§6.5) |
 | `end_audit(conclusions, claims, response)` | ends the audit with its claims, which are checked (§6.4); after the review, `response` says how L2 answered it |
 
@@ -447,7 +449,12 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 - During a run: the budget is checked between epochs. Once spent plus the reserve reaches the budget (the **hard stop**), no new epoch or experiment starts, and L2's tools refuse everything but `budget`, `request_review` and `end_audit` (test L2-11). A launched epoch runs to completion, so spending can go over by up to one epoch; `ledger.json` records it. Samples run one epoch at a time across variants, so a stop leaves the variants balanced (§5, test L2-12). **Not built yet:** stopping a sample in progress (`budget_exhausted`).
 - **Reserve for the report:** part of the budget (10%) is held back from runs for L2's own final calls (confirming results and writing its conclusions), so it is never left unable to report. **Not built yet:** L2 choosing or changing the amount; today it is fixed per audit.
 
-**L2 sees what's left.** `budget()` returns spent, remaining and the reserve, broken down by kind of call. The remaining amount is also appended to the result of every launch.
+**L2 sees what's left.** `budget()` returns spent, remaining and the reserve, broken down by kind of call, and with a time limit the time left and the time held back. The remaining amount is also appended to the result of every launch.
+
+**Stopping early, by hand or by time.** One mechanism stops an audit before its budget is spent: the stop. Once it is reached, it works like the hard stop: no new experiment starts, L2's tools refuse everything but `budget`, `request_review` and `end_audit`, the result of the call that was running when it came says so, and L2 is told to conclude. Its reason is recorded in `ledger.json` and the report. There are two ways to reach it:
+
+- **By hand.** Ctrl-C once stops the audit: the experiment running now finishes all its epochs, then L2 concludes (the review, §6.5, and its report). Ctrl-C twice stops at once: the running epoch is stopped, L2 is stopped, and the record (ledger and report, saying it was stopped by hand) is still written; the command exits with code 130. Epochs run in a session of their own, so the terminal's Ctrl-C reaches only the audit, which decides what happens to them.
+- **By time.** A time limit (`time_limit` in the brief, or `--time-limit`, in seconds) holds back its last 10% for L2's review and report, as the budget holds back its reserve. Once only that is left, the audit stops, and a running experiment also stops before its next epoch (an epoch already running finishes, so the time can go over by up to one epoch, as spending can). The reviewer may use half of the time left when it starts. If the whole time limit passes before L2 ends the audit (e.g. an epoch ran long), L2 is stopped at its next turn and the record is written with the reason. The limit is the audit's own: Inspect's time limit, which cut L2 off without a report, is no longer used.
 
 **API keys.** L2's code workspace has no provider keys (§6), so it cannot make calls the ledger doesn't see. Scenario code L2 writes is the exception until it is sandboxed: it is checked without keys but runs with them (§3.5). As a backstop, each audit can use its own provider key with a credit limit set to the budget (§12).
 
@@ -555,7 +562,7 @@ The LLM L2 is an agent working with tools (§6.1) and doesn't need to fit this i
 - rebuilding an incident from a brief, against a calibration (`level2-milestone5.md`);
 - sharing on Cosmos and a first study (`level2-milestone6.md`);
 - claims checked against the record, and linked to Cosmos (§6.4, §8.1);
-- an adversarial review of L2's draft before the audit ends (§6.5).
+- an adversarial review of L2's draft before the audit ends (§6.5), a rationale for every experiment (§5), and stopping early by hand or by time (§7).
 
 **Next:**
 
@@ -598,6 +605,7 @@ Contract tests for L2, in the style of `auditor-tests.md`. Each is cited by numb
 | L2-20 | Every claim is checked against the record     | `end_audit` refuses a claim citing a call or post that does not exist; every recorded claim has a verdict and reasons read from the logs, and a claim the logs contradict (wrong k/n, wrong direction, a quote not in its post, an auditor-written post as a target's) is never *checked*. |
 | L2-21 | The review comes before the end               | With a reviewer, `end_audit` is refused until `request_review` has run, then needs a `response`; the reviewer is offered only the query tools and its calls are refused otherwise; after the review no experiment, scenario or second review starts; the reviewer stops at half of what was left; the draft, critique and response are in `review.json` and the report. |
 | L2-22 | Every experiment has a rationale              | A launch without a rationale is refused, and recorded; a launch's rationale, refused or rejected ones included, is in `launches.jsonl`, and a run experiment's in its `brief.md` and in the report above its variants. |
+| L2-23 | Stopping early by hand or by time             | Past the time limit less its held-back share, the audit stops like at the hard stop and `budget()` shows the time left; a running experiment stops before its next epoch, its variants balanced; one Ctrl-C lets the running experiment finish, then only `budget`, `request_review` and `end_audit` work and L2 concludes; a second stops the running epochs and L2 at once, and the ledger and report are still written; L2 past the whole limit is stopped with the reason recorded. |
 
 (L2-4, "scorers cover all compared runs", was dropped: it is now guidance, §6.3.)
 

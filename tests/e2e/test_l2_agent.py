@@ -179,11 +179,13 @@ def test_a_baseline_copy_of_its_control_is_one_change():
 
 
 def test_a_time_limit_ends_l2_cleanly_with_a_record(tmp_path):
+    """The time limit is the audit's own (spec §7), not Inspect's, which would cut L2 off
+    without a report."""
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
     tools = Tools(audit, on_end=write_report)
     log = run_l2(tools, fake_model(FULL[-1:]), SYSTEM_PROMPT, time_limit=150)
-    assert read_eval_log(log.location).eval.config.time_limit in (150, None)
-    assert (audit.out / "report.md").exists()
+    assert read_eval_log(log.location).eval.config.time_limit is None
+    assert tools.conclusions is not None and (audit.out / "report.md").exists()
 
 
 def test_openrouter_tools_are_sent_without_strict_mode(tmp_path, monkeypatch):
@@ -202,14 +204,14 @@ def test_openrouter_tools_are_sent_without_strict_mode(tmp_path, monkeypatch):
     assert str(model) == MODEL and model.api.strict_tools is False
 
 
-def test_a_time_limit_sets_the_experiments_deadline(tmp_path):
+def test_a_time_limit_starts_the_audit_s_clock(tmp_path):
     import time
 
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
     before = time.monotonic()
     run_l2(Tools(audit, on_end=write_report), fake_model(FULL[-1:]), SYSTEM_PROMPT,
            time_limit=150)
-    assert before + 150 <= audit.deadline <= time.monotonic() + 150
+    assert audit.time_limit == 150 and before <= audit.started <= time.monotonic()
 
 
 def test_the_first_message_shows_the_run_budget(tmp_path):

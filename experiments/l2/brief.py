@@ -43,8 +43,9 @@ from orbit_audit.branches import AuditLimits
 from orbit_audit.scope import AuditScope
 
 HEADER = re.compile(r"\A---[ \t]*\n(.*?)^---[ \t]*(?:\n|\Z)", re.S | re.M)
-BRIEF_KEYS = {"budget_usd", "run_budget_usd", "mode", "base_scenarios", "base_logs", "measure",
-              "allowed_changes", "variants", "controls", "hypotheses", "inner"}
+BRIEF_KEYS = {"budget_usd", "run_budget_usd", "time_limit", "mode", "base_scenarios",
+              "base_logs", "measure", "allowed_changes", "variants", "controls", "hypotheses",
+              "inner"}
 VARIANT_KEYS = {"id", "base", "mutations", "inner", "rationale"}
 MUTATION_KEYS = {"axis", "op", "args", "at"}
 INNER_KEYS = {"condition", "brief", "opening", "scope", "limits"}
@@ -107,6 +108,12 @@ def parse_brief(path: str | Path,
                              or not math.isfinite(runs) or not 0 < runs <= budget):
         raise BriefError(f"{path}: run_budget_usd must be a positive number no larger than "
                          f"budget_usd ({budget}), got {runs!r}")
+    time_limit = header.get("time_limit")
+    if time_limit is not None and (isinstance(time_limit, bool)
+                                   or not isinstance(time_limit, int | float)
+                                   or not math.isfinite(time_limit) or time_limit <= 0):
+        raise BriefError(f"{path}: time_limit must be a positive number of seconds, got "
+                         f"{time_limit!r}")
     question = body.strip()
     if not question:
         raise BriefError(f"{path}: the question (the text after the header) is empty")
@@ -141,7 +148,9 @@ def parse_brief(path: str | Path,
             raise BriefError(f"{path}: ids {both} name both a variant and a control")
     return L2Brief(
         question=question, budget_usd=float(budget),
-        run_budget_usd=None if runs is None else float(runs), mode=mode, base_scenarios=bases,
+        run_budget_usd=None if runs is None else float(runs),
+        time_limit=None if time_limit is None else float(time_limit), mode=mode,
+        base_scenarios=bases,
         base_logs=_strings(header, "base_logs"), measure=measure, allowed_changes=allowed,
         variants=variants, controls=controls, hypotheses=_strings(header, "hypotheses"),
         inner=inner)

@@ -21,7 +21,9 @@ import ast
 import contextlib
 import inspect
 import json
-import time
+import signal
+import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -35,8 +37,9 @@ from inspect_ai.tool import ToolDef
 from inspect_ai.util import message_limit as limit_messages
 
 from experiments import scenarios as seed
+from experiments.l2 import experiment as m1
 from experiments.l2.apply import describe_ops, recorded_inner
-from experiments.l2.audit import EPSILON
+from experiments.l2.audit import EPSILON, TIME_RESERVE
 from experiments.l2.audit_report import write_report
 from experiments.l2.cost import PRICES, UnknownPrice, log_cost, price
 from experiments.l2.describe import describe_scenario
@@ -115,8 +118,10 @@ reserve is held back for your final calls. Check budget before planning an exper
 and plan so that you can still read the results and conclude. Once what is spent plus
 the reserve reaches the budget (the hard stop), no new experiment or epoch starts and
 only budget, request_review and end_audit work; an epoch already running finishes, so
-spending can go over by up to one epoch. If run_experiment is not among your tools, this audit is
-analysis only: read the runs already made.
+spending can go over by up to one epoch. A time limit, if the first message gives one,
+stops the audit the same way once only its held-back share is left, and so can the person
+running the audit. If run_experiment is not among your tools, this audit is analysis
+only: read the runs already made.
 
 # Finishing
 When you have your answer, call request_review with your draft claims and conclusions:
@@ -197,6 +202,11 @@ def brief_message(tools: Tools) -> str:
                      "(your own calls are not counted in it); once it is reached no new "
                      "experiment or epoch starts (an epoch already running finishes), but "
                      "the query tools still work")
+    if audit.time_limit is not None:
+        lines.append(f"- time limit: {audit.time_limit / 60:.1f} minutes for the whole audit; "
+                     f"the last {TIME_RESERVE:.0%} is held back for your report: once only "
+                     "that is left, no new experiment or epoch starts and only budget, "
+                     "request_review and end_audit work (budget shows the time left)")
     if audit.analysis is not None:
         lines += ["", "This audit is analysis only: you cannot run experiments. Read the "
                   "runs already made with the query tools."]
@@ -390,14 +400,14 @@ The reading guidance L2 was given:
 
 {GUIDANCE}"""
 REVIEW_SHARE = 0.5
-"""The reviewer may spend up to this share of what is left of the budget when it starts,
-so L2 can still revise."""
+"""The reviewer may spend up to this share of what is left of the budget, and of the
+time, when it starts, so L2 can still revise."""
 REVIEW_MESSAGES = 60
 """A backstop on the reviewer's conversation length."""
 REVIEW_CONTINUE = ("Check what matters with the tools, then call submit_review with your "
                    "critique.")
-REVIEW_LAST = ("You have reached your share of the budget: call submit_review now with your "
-               "critique of what you have checked.")
+REVIEW_LAST = ("You have reached your share of the budget or time: call submit_review now "
+               "with your critique of what you have checked.")
 
 
 def review_message(tools: Tools, draft: Mapping[str, Any]) -> str:
@@ -423,7 +433,10 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
     async def review(tools: Tools, draft: dict[str, Any]) -> dict[str, Any]:
         audit = tools.audit
         start, first = audit.l2["usd"], tools._seq
-        cap = REVIEW_SHARE * audit.budget()["remaining_usd"]
+        b = audit.budget()
+        cap = REVIEW_SHARE * b["remaining_usd"]
+        began = audit.clock()
+        time_cap = None if b["time_left_s"] is None else REVIEW_SHARE * max(b["time_left_s"], 0)
         why: list[str] = []
 
         def spend() -> dict[str, Any]:
@@ -435,11 +448,15 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
             except Exception as error:
                 why.append(f"its spend could not be read: {error}")
                 return False
-            if audit.l2["usd"] - start >= cap - EPSILON:
+            share = (f"its share of the budget (${cap:.4f}, half of what was left when it "
+                     "started)" if audit.l2["usd"] - start >= cap - EPSILON else
+                     f"its share of the time ({time_cap:.0f} s, half of what was left when "
+                     "it started)" if time_cap is not None
+                     and audit.clock() - began >= time_cap else None)
+            if share is not None:
                 if why:  # it had its last turn
                     return False
-                why.append(f"it reached its share of the budget (${cap:.4f}, half of what "
-                           "was left when it started)")
+                why.append(f"it reached {share}")
                 return REVIEW_LAST
             return True if state.output.message.tool_calls else REVIEW_CONTINUE
 
@@ -473,7 +490,6 @@ def _model(model: str | Model | None) -> str | Model | None:
 
 def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, float]] = PRICES,
             token_limit: int | None = None, message_limit: int | None = None,
-            time_limit: int | None = None,
             review: Callable[..., Any] | None = None) -> Task:
     """L2's task. ``review`` (``reviewer(...)``) gives L2 ``request_review``, and
     ``end_audit`` then waits for it."""
@@ -496,51 +512,96 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
             return False
         if audit.ended:
             return False
-        if audit.budget()["remaining_usd"] <= EPSILON:
+        b = audit.budget()
+        if b["remaining_usd"] <= EPSILON:
             tools.stop_reason = "L2 spent the whole budget before calling end_audit"
             return False
-        return True if state.output.message.tool_calls else CONTINUE
+        if b["time_left_s"] is not None and b["time_left_s"] <= 0:
+            tools.stop_reason = (f"the time limit ({b['time_limit_s']:g} s) was reached "
+                                 "before L2 ended the audit")
+            return False
+        if state.output.message.tool_calls:
+            return True
+        return (f"The audit is stopping ({b['stopped']}): conclude now." if b["stopped"]
+                else CONTINUE)
 
     agent = react(name="l2", prompt=prompt, tools=others,
                   submit=AgentSubmit(tool=end, answer_only=True, keep_in_messages=True),
                   on_continue=on_continue)
     return Task(dataset=[Sample(input=brief_message(tools), id="l2")], solver=agent,
                 token_limit=token_limit, message_limit=message_limit or MESSAGE_LIMIT,
-                time_limit=time_limit,
                 metadata={"l2_audit": str(audit.out)}, name="l2-audit")
+
+
+INTERRUPT_NOTICE = ("\nInterrupted: the experiment running now (if any) finishes, then L2 "
+                    "concludes and the report is written. Press Ctrl-C again to stop at "
+                    "once (the record is still written).")
+
+
+def interrupt_handler(tools: Tools) -> Callable[[int, Any], None]:
+    """The SIGINT handler while L2 runs: the first Ctrl-C stops the audit by hand (the
+    running experiment finishes, then L2 concludes); the second stops the running epochs
+    and raises ``KeyboardInterrupt``."""
+    def handle(signum: int, frame: Any) -> None:
+        if tools.audit.interrupted is None:
+            tools.audit.interrupt()
+            print(INTERRUPT_NOTICE, file=sys.stderr, flush=True)
+            return
+        m1.stop_running()
+        raise KeyboardInterrupt
+    return handle
 
 
 def run_l2(tools: Tools, model: str | Model, prompt: str, *,
            prices: Mapping[str, tuple[float, float]] = PRICES,
-           token_limit: int | None = None, time_limit: int | None = None) -> EvalLog:
+           token_limit: int | None = None, time_limit: float | None = None) -> EvalLog:
     """Run L2 over ``tools.audit`` to the end, then ``finalize``. Without a
     ``token_limit``, the backstop is the budget's worth of the model's tokens. The
-    reviewer runs on L2's model."""
+    reviewer runs on L2's model. ``time_limit`` (seconds; default the brief's) starts the
+    audit's clock. Ctrl-C stops the audit (``interrupt_handler``); after a second one the
+    record is still written, then ``KeyboardInterrupt`` is raised again."""
+    audit = tools.audit
     if token_limit is None:
         try:
-            token_limit = token_backstop(tools.audit.brief.budget_usd, str(model), prices)
+            token_limit = token_backstop(audit.brief.budget_usd, str(model), prices)
         except UnknownPrice:
             token_limit = None  # the ledger then stops L2 at its first tool call
+    audit.start_clock(time_limit if time_limit is not None else audit.brief.time_limit)
     task = l2_task(tools, prompt, prices=prices, token_limit=token_limit,
-                   time_limit=time_limit, review=reviewer(prices))
+                   review=reviewer(prices))
     model = _model(model)
     tools.stop_reason = None
-    if time_limit is not None:  # experiments stop starting epochs when L2's time is up
-        tools.audit.deadline = time.monotonic() + time_limit
-    [log] = inspect_eval(task, model=model, log_dir=str(tools.audit.out / "l2"),
-                         display="none", fail_on_error=False)
+    main = threading.current_thread() is threading.main_thread()
+    previous = signal.signal(signal.SIGINT, interrupt_handler(tools)) if main else None
+    try:
+        [log] = inspect_eval(task, model=model, log_dir=str(audit.out / "l2"),
+                             display="none", fail_on_error=False)
+    except KeyboardInterrupt:
+        tools.stop_reason = "stopped by hand (Ctrl-C twice)"
+        finalize(tools, None, prices)
+        raise
+    finally:
+        if main:
+            signal.signal(signal.SIGINT, previous)
     finalize(tools, log, prices)
     return log
 
 
-def finalize(tools: Tools, log: EvalLog, prices: Mapping[str, tuple[float, float]] = PRICES
-             ) -> None:
+def finalize(tools: Tools, log: EvalLog | None,
+             prices: Mapping[str, tuple[float, float]] = PRICES) -> None:
     """Price L2's calls from its saved log, write the final ledger and the report. Never
-    raises on a bad log: the record is written whatever happened."""
+    raises on a bad log: the record is written whatever happened. With no ``log`` (L2
+    was stopped at once), the newest log in ``<audit>/l2`` is read, if any."""
     audit = tools.audit
     notes = []
     try:
-        saved = read_eval_log(log.location) if log.location else log
+        if log is None:
+            found = sorted((audit.out / "l2").glob("*.eval"), key=lambda p: p.stat().st_mtime)
+            if not found:
+                raise FileNotFoundError("no log was written")
+            saved = read_eval_log(str(found[-1]))
+        else:
+            saved = read_eval_log(log.location) if log.location else log
     except Exception as error:
         saved, notes = log, [f"L2's saved log could not be read ({error})"]
     try:
@@ -556,15 +617,15 @@ def finalize(tools: Tools, log: EvalLog, prices: Mapping[str, tuple[float, float
                      "keeps the figure seen during the run")
     why = None
     if tools.conclusions is None:
-        sample = (saved.samples or [None])[0]
+        sample = (saved.samples or [None])[0] if saved is not None else None
         if tools.stop_reason:
             why = tools.stop_reason
         elif sample is not None and sample.limit is not None:
             why = f"the {sample.limit.type} limit ({sample.limit.limit:g}) stopped L2"
         elif sample is not None and sample.error is not None:
             why = f"L2's run errored: {sample.error.message[:500]}"
-        elif saved.status != "success":
-            why = f"L2's run ended with status {saved.status}"
+        elif saved is None or saved.status != "success":
+            why = f"L2's run ended with status {getattr(saved, 'status', 'unknown')}"
         else:
             why = "L2 stopped without calling end_audit"
     audit.notes.extend(notes)

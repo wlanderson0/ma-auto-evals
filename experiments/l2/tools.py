@@ -207,6 +207,11 @@ class Tools:
             ok, text = True, getattr(self, name)(**args)
         except Exception as error:
             ok, text = False, _failure(error)
+        stopped = self.audit.stopped
+        if ok and by == "l2" and stopped and name not in FREE:  # e.g. during a launch
+            text += (f"\n\nThe audit is stopping: {stopped}. No new experiment starts; "
+                     "conclude: call " + ("request_review, then end_audit."
+                                          if self.needs_review else "end_audit."))
         return ok, text, self._trace(name, args, ok, text, seq, by)
 
     async def reviewed_call(self, reviewer: Callable[[Tools, dict[str, Any]], Any], /,
@@ -458,6 +463,9 @@ class Tools:
                 + (f" Run budget: ${b['by_kind']['experiments']:.4f} of "
                    f"${b['run_budget_usd']:.2f} spent on runs." if b["run_budget_usd"]
                    is not None else "")
+                + (f" Time: {max(b['time_left_s'], 0) / 60:.1f} min left of "
+                   f"{b['time_limit_s'] / 60:.1f} min ({b['time_reserve_s'] / 60:.1f} min "
+                   "held back for your report)." if b.get("time_limit_s") else "")
                 + (f" STOPPED: {b['stopped']}." if b["stopped"] else ""))
 
     def variant_rows(self) -> list[dict[str, Any]]:

@@ -24,6 +24,12 @@ runs, so milestone 1's between-epoch check stops it exactly at the audit-wide
 limit. A launched epoch runs to completion, so spending can exceed the budget by
 up to one epoch (recorded in ``ledger.json``).
 
+**Stopping early.** A stop asked for by hand (``interrupt``, Ctrl-C) or the time limit
+(``start_clock``; ``TIME_RESERVE`` of it held back for L2's report) is a stop like the
+hard stop: ``stopped`` gives its reason, no new experiment starts and the tools refuse
+everything but ``budget``, ``request_review`` and ``end_audit``. The time limit also
+stops a running experiment before its next epoch; an interrupt lets it finish.
+
 **Run budget.** A brief's ``run_budget_usd`` caps spend on runs inside the budget
 (spec §9.4). It stops runs the same way: what is available for experiments is capped
 by what is left of it, so the between-epoch check stops at it, and once it is spent
@@ -52,6 +58,10 @@ from experiments.l2.model import SCENARIO, L2Brief, Problems, Variant
 
 RESERVE = 0.10
 """Share of the budget held back from experiments for L2's final calls (spec §7)."""
+TIME_RESERVE = 0.10
+"""Share of the time limit held back for L2's report: once only this is left, the audit
+stops like at the hard stop (spec §7)."""
+INTERRUPTED = "interrupted by hand (Ctrl-C)"
 CONDITIONS = ("baseline", "scripted")
 """Inner conditions milestone 2 runs (no inner L0/L1 auditor yet)."""
 OVERRUN = ("a launched epoch runs to completion, so spending can exceed the budget by up "
@@ -68,7 +78,8 @@ class Audit:
                  analysis: Path | None = None, reserve: float = RESERVE,
                  history: Sequence[Path] = (), launch: m1.Launch = m1.launch_subprocess,
                  cost_of: m1.CostOf = log_cost,
-                 estimator: Callable[..., dict[str, Any]] = m1.estimate) -> None:
+                 estimator: Callable[..., dict[str, Any]] = m1.estimate,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         if not 0 <= reserve < 1:
             raise ValueError(f"reserve must be a share of the budget in [0, 1), not {reserve}")
         self.out = Path(out)
@@ -82,9 +93,12 @@ class Audit:
         self.estimator = estimator
         self.l2: dict[str, Any] = {"usd": 0.0, "by_model": {}}
         self.ended = False
-        self.deadline: float | None = None
-        """``time.monotonic()`` after which no experiment or epoch starts (L2's time
-        limit); an epoch already running finishes."""
+        self.clock = clock
+        self.time_limit: float | None = None
+        """Seconds for the whole audit (``start_clock``), or ``None``."""
+        self.started: float | None = None
+        self.interrupted: str | None = None
+        """Why the audit was stopped by hand (``interrupt``), if it was."""
         self.notes: list[str] = []
         """Problems with the ledger itself (e.g. L2's log could not be priced)."""
 
@@ -173,10 +187,38 @@ class Audit:
         self.l2 = {"usd": float(max(usd, self.l2["usd"])), "by_model": spend.get("by_model", {})}
         self.write_ledger()
 
+    def start_clock(self, time_limit: float | None) -> None:
+        """Start the audit's clock; ``time_limit`` seconds for the whole audit, if any."""
+        self.time_limit, self.started = time_limit, self.clock()
+
+    def time(self) -> dict[str, float | None]:
+        """Elapsed and left of the time limit, and the share held back for L2's report."""
+        if self.time_limit is None or self.started is None:
+            return {"time_limit_s": None, "elapsed_s": None, "time_left_s": None,
+                    "time_reserve_s": None}
+        elapsed = self.clock() - self.started
+        return {"time_limit_s": self.time_limit, "elapsed_s": elapsed,
+                "time_left_s": self.time_limit - elapsed,
+                "time_reserve_s": TIME_RESERVE * self.time_limit}
+
+    def time_up(self) -> str | None:
+        """Why no experiment or epoch may start now for lack of time, if so."""
+        t = self.time()
+        if t["time_left_s"] is None or t["time_left_s"] > t["time_reserve_s"] + EPSILON:
+            return None
+        return (f"the time limit: {t['elapsed_s'] / 60:.1f} of {t['time_limit_s'] / 60:.1f} "
+                f"min gone, and the last {t['time_reserve_s'] / 60:.1f} min are held back "
+                "for L2's report")
+
+    def interrupt(self) -> None:
+        """Stop by hand: no new experiment starts (one running finishes), and L2 concludes."""
+        self.interrupted = INTERRUPTED
+
     def budget(self) -> dict[str, Any]:
-        """Spent, remaining (budget − ledger total) and the reserve, by kind (spec §7).
-        With a run budget, what is available for experiments is also capped by what is
-        left of it."""
+        """Spent, remaining (budget − ledger total) and the reserve, by kind (spec §7),
+        and the time left. With a run budget, what is available for experiments is also
+        capped by what is left of it. ``stopped``: the hard stop, the time limit or an
+        interrupt, whichever came first in that order."""
         experiments = self.experiment_spend()
         runs = sum(experiments.values())
         spent = runs + self.l2["usd"]
@@ -194,7 +236,9 @@ class Audit:
             "run_budget_usd": cap, "run_budget_left_usd": None if cap is None else cap - runs,
             "by_kind": {"experiments": sum(experiments.values()), "l2": self.l2["usd"]},
             "by_experiment": experiments, "l2_by_model": self.l2["by_model"],
-            "stopped": self.stop_reason(spent, reserve, total)}
+            **self.time(),
+            "stopped": (self.stop_reason(spent, reserve, total) or self.time_up()
+                        or self.interrupted)}
 
     @staticmethod
     def stop_reason(spent: float, reserve: float, total: float) -> str | None:
@@ -354,11 +398,6 @@ class Audit:
         return ("rationale is required: what the last results showed (or, for the first "
                 "experiment, what you start from) and why this experiment comes next")
 
-    def time_up(self) -> str | None:
-        if self.deadline is None or time.monotonic() < self.deadline:
-            return None
-        return "L2's time limit is reached"
-
     def _refusal(self, variants: Sequence[Variant], epochs: int,
                  rationale: Any) -> str | None:
         if self.ended:
@@ -372,8 +411,6 @@ class Audit:
             return (f"the run budget is spent (${b['by_kind']['experiments']:.4f} of "
                     f"${b['run_budget_usd']:.2f} on runs); no new experiment starts, but the "
                     "query tools still work")
-        if why := self.time_up():
-            return f"{why}; no new experiment starts"
         if isinstance(epochs, bool) or not isinstance(epochs, int) or epochs < 1:
             return f"epochs must be a whole number >= 1, not {epochs!r}"
         if not variants:
@@ -449,9 +486,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                         help="L2 is the scripted fake (experiments.l2.fake), not an LLM")
     parser.add_argument("--model", default=None,
                         help="L2's model (default: experiments.l2.agent.MODEL)")
-    parser.add_argument("--time-limit", type=int, default=None, metavar="SECONDS",
-                        help="end L2 cleanly after this much wall-clock time (the record "
-                             "is still written)")
+    parser.add_argument("--time-limit", type=float, default=None, metavar="SECONDS",
+                        help="wall-clock time for the whole audit, overriding the brief's "
+                             "time_limit: once only the last 10%% is left, no new experiment "
+                             "or epoch starts and L2 writes its report")
     parser.add_argument("--live", action="store_true",
                         help="allow OpenRouter calls (an LLM L2, or experiments without "
                              "--mock); without it, anything that would spend money stops")
@@ -504,14 +542,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
                              history=args.history)
     tools = Tools(audit, on_end=write_report)
-    if args.fake:
-        script = ANALYSIS if args.analysis_only else FULL
-        agent.run_l2(tools, fake_model(script), PROMPT)
-    else:
-        model = args.model or agent.MODEL
-        print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls included); "
-              f"audit: {out}", flush=True)
-        agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
+    try:
+        if args.fake:
+            script = ANALYSIS if args.analysis_only else FULL
+            agent.run_l2(tools, fake_model(script), PROMPT, time_limit=args.time_limit)
+        else:
+            model = args.model or agent.MODEL
+            print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
+                  f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "
+                  "then L2 concludes; twice: stop at once.", flush=True)
+            agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
+    except KeyboardInterrupt:  # a second Ctrl-C: the record is written all the same
+        print(f"stopped by hand; report: {out / 'report.md'}")
+        raise SystemExit(130) from None
     budget = audit.budget()
     print(f"spent ${budget['spent_usd']:.4f} of ${budget['budget_usd']:.2f}")
     print(f"report: {out / 'report.md'}")

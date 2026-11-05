@@ -138,6 +138,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- Budget: ${brief.budget_usd:.2f}"
             + (f", of which at most ${brief.run_budget_usd:.2f} on runs (the run budget)"
                if brief.run_budget_usd is not None else ""),
+            *([f"- Time limit: {audit.time_limit / 60:.1f} min for the whole audit"]
+              if audit.time_limit is not None else []),
             f"- Left to L2: {', '.join(open_) or 'none'}", ""]
 
     out += _claims(tools)

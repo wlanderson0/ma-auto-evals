@@ -57,7 +57,13 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   puts them on several different models, which run without them; each experiment's
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
-  the machine awake. `--time-limit <seconds>` ends it cleanly earlier.
+  the machine awake.
+- To stop it early with a report, press Ctrl-C once: the experiment running now
+  finishes, then L2 has its draft reviewed and writes its report. Ctrl-C twice stops at
+  once (the ledger and report are still written).
+- `--time-limit <seconds>` (or `time_limit` in the brief) bounds the whole audit: once
+  only its last 10% is left, no new experiment or epoch starts and L2 concludes in that
+  time. A long audit can take hours, so set one when it matters.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
 The audit directory holds `report.md` (L2's claims with their verdicts, its conclusions,
