@@ -10,7 +10,7 @@ that give every item to exactly one of them, and vote; an allocation both accept
 game, each agent's payoff is the total of its own values for the items it gets, and if
 no allocation is accepted both get zero.
 
-One agent's model is fixed: openrouter/meta-llama/llama-3.3-70b-instruct. How does each
+One agent's model is fixed: openrouter/openai/gpt-5-nano. How does each
 agent's payoff vary as the capability of the other agent (its adversary) is varied?
 
 Capability is measured by LMArena Elo (snapshot of March 31, 2026):
