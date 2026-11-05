@@ -1,10 +1,11 @@
 """Stopping an audit early, by hand or by time (spec §7, "Stopping early"; L2-23).
 
 One mechanism: a stop (Ctrl-C, or the time limit's held-back share reached) means no new
-experiment starts, L2's tools refuse everything but budget, request_review and end_audit,
-and L2 is told to conclude. The time limit also stops a running experiment before its
-next epoch; a first Ctrl-C lets it finish. A second Ctrl-C stops at once, and the record
-is still written. Offline; the clock is the audit's own, set by hand.
+experiment starts and L2 is told to conclude; the query tools still work, so it can read
+what ran. The time limit, or a second Ctrl-C, also stops a running experiment before its
+next epoch; a first Ctrl-C lets it finish. A second Ctrl-C stops the running epoch and L2
+at once, and the record is still written. Offline; the clock is the audit's own, set by
+hand.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -35,6 +37,7 @@ V1 = {"id": "V1", "control": "M0", "rationale": "Dave on #town", "mutations": [
 WHY = "a test launch"
 END = [("request_review", {"conclusions": "Stopped.", "claims": "[]"}),
        ("end_audit", {"conclusions": "Stopped.", "claims": "[]", "response": "Kept."})]
+FREE = {"mockllm/l2": (0.0, 0.0)}
 
 
 class Clock:
@@ -49,14 +52,18 @@ def lines(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def subprocesses(before=None):
+def subprocesses(before=None, after=None):
     """Epochs in real subprocesses (no eval may start inside L2's own), with ``before``
-    called with the number of epochs already launched."""
+    and ``after`` called with the epoch's index (0, 1, ...)."""
     def launch(*args, **kwargs):
-        if before is not None:
-            before(launch.calls)
+        n = launch.calls
         launch.calls += 1
-        return m1.launch_subprocess(*args, **kwargs)
+        if before is not None:
+            before(n)
+        paths = m1.launch_subprocess(*args, **kwargs)
+        if after is not None:
+            after(n)
+        return paths
     launch.calls = 0
     return launch
 
@@ -64,6 +71,16 @@ def subprocesses(before=None):
 def ctrl_c() -> None:
     os.kill(os.getpid(), signal.SIGINT)
     time.sleep(0.5)  # two signals sent at once would be handled as one
+
+
+def ctrl_c_once_running() -> None:
+    """Ctrl-C as soon as an epoch subprocess is running (from another thread)."""
+    def wait_then_press():
+        until = time.monotonic() + 60
+        while not m1.RUNNING and time.monotonic() < until:
+            time.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGINT)
+    threading.Thread(target=wait_then_press, daemon=True).start()
 
 
 def audit_with(tmp_path, launch=None, **options):
@@ -83,24 +100,24 @@ def test_the_brief_can_set_a_time_limit(tmp_path):
 
 
 # ------------------------------------------------------------------- the time limit
-def test_the_time_limit_is_a_hard_stop_with_time_held_back(tmp_path):
+def test_the_time_limit_stops_new_runs_with_time_held_back(tmp_path):
     audit, clock = audit_with(tmp_path)
     audit.start_clock(1000)
     tools = Tools(audit)
     b = audit.budget()
     assert (b["time_limit_s"], b["time_left_s"], b["time_reserve_s"]) == (1000, 1000,
                                                                           TIME_RESERVE * 1000)
-    assert b["stopped"] is None
+    assert b["halted"] is None and b["stopped"] is None
     ok, text = tools.call("budget")
     assert ok and "Time: 16.7 min left of 16.7 min (1.7 min held back for your report)" in text
     clock.now += 1000 * (1 - TIME_RESERVE)  # only the held-back time is left
-    assert "the time limit" in audit.stopped
-    for name, args in (("run_experiment", {"variants": [C0], "epochs": 1, "rationale": WHY}),
-                       ("list_runs", {})):
-        ok, text = tools.call(name, **args)
-        assert not ok and "the time limit" in text and "conclude" in text, name
+    assert "the time limit" in audit.halted and audit.stopped is None
+    ok, text = tools.call("run_experiment", variants=[C0], epochs=1, rationale=WHY)
+    assert not ok and "the time limit" in text and "no new experiment starts" in text
+    ok, text = tools.call("list_runs")  # the query tools still work, and say to conclude
+    assert ok and "The audit is stopping: the time limit" in text and "conclude" in text
     ok, text = tools.call("budget")
-    assert ok and "STOPPED: the time limit" in text
+    assert ok and "STOPPING: the time limit" in text
     assert tools.call("end_audit", conclusions="Out of time.")[0]
     assert audit.write_ledger()["time_left_s"] == pytest.approx(TIME_RESERVE * 1000)
 
@@ -146,8 +163,8 @@ def test_one_interrupt_lets_the_running_experiment_finish_then_l2_concludes(tmp_
     ok, text = tools.call("run_experiment", variants=[{**V1, "id": "V2"}], epochs=1,
                           rationale=WHY)
     assert not ok and "interrupted by hand" in text
-    assert not tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
-    assert tools.call("budget")[0] and tools.call("end_audit", conclusions="Stopped.")[0]
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
+    assert tools.call("end_audit", conclusions="Stopped.")[0]
 
 
 def test_the_first_ctrl_c_interrupts_and_the_second_stops_now(tmp_path, capsys):
@@ -159,53 +176,94 @@ def test_the_first_ctrl_c_interrupts_and_the_second_stops_now(tmp_path, capsys):
     try:
         handle(signal.SIGINT, None)
         assert audit.interrupted and "Press Ctrl-C again" in capsys.readouterr().err
-        assert child.poll() is None  # the running epoch is left to finish
+        assert child.poll() is None and audit.epoch_stop() is None  # it may finish
         with pytest.raises(KeyboardInterrupt):
             handle(signal.SIGINT, None)
         assert child.wait(timeout=10) is not None  # the epoch was stopped too
+        assert audit.epoch_stop() == "stopped by hand (Ctrl-C twice)"  # and no next one
     finally:
         m1.RUNNING.discard(child)
         if child.poll() is None:
             child.kill()
 
 
-def test_a_second_ctrl_c_stops_l2_and_the_record_is_still_written(tmp_path):
-    """Two real SIGINTs during an experiment: run_l2 raises KeyboardInterrupt, after writing
-    the report and the final ledger."""
-    audit, _ = audit_with(tmp_path, launch=subprocesses(lambda n: (ctrl_c(), ctrl_c())))
+def run_stopped(tmp_path, launch, epochs):
+    audit, _ = audit_with(tmp_path, launch=launch)
     tools = Tools(audit, on_end=write_report)
-    script = [("run_experiment", {"variants": json.dumps([C0]), "epochs": 1,
+    script = [("run_experiment", {"variants": json.dumps([C0]), "epochs": epochs,
                                   "rationale": WHY}), *END]
     before = signal.getsignal(signal.SIGINT)
     with pytest.raises(KeyboardInterrupt):
-        run_l2(tools, fake_model(script), PROMPT, prices={"mockllm/l2": (0.0, 0.0)})
+        run_l2(tools, fake_model(script), PROMPT, prices=FREE)
     assert signal.getsignal(signal.SIGINT) is before  # put back
+    assert not audit.launching and not m1.RUNNING
     report = (audit.out / "report.md").read_text()
     assert "not ended by L2: stopped by hand (Ctrl-C twice)" in report
-    assert json.loads((audit.out / "ledger.json").read_text())["final"]
+    ledger = json.loads((audit.out / "ledger.json").read_text())
+    assert ledger["final"]
+    # the launch's record was written before the audit's
+    assert (audit.out / "launches.jsonl").stat().st_mtime <= \
+        (audit.out / "report.md").stat().st_mtime
+    return audit
 
 
-def test_an_interrupted_fake_audit_concludes_with_a_report(tmp_path):
-    """One SIGINT during the experiment: it finishes, L2's next query is refused, and the
-    fake goes on to the review and the end."""
+def test_a_second_ctrl_c_during_an_epoch_stops_it_and_the_record_is_written(tmp_path):
+    def press_during_the_epoch(n):
+        ctrl_c()  # the first: the experiment would finish
+        ctrl_c_once_running()  # the second, while the epoch runs
+
+    audit = run_stopped(tmp_path, subprocesses(before=press_during_the_epoch), epochs=2)
+    [launch] = lines(audit.out / "launches.jsonl")
+    assert launch["status"] == "failed" and "stopped by signal" in launch["reason"]
+    assert [r["epochs_done"] for r in lines(audit.experiments()[0] / "runs.jsonl")] == [0]
+
+
+def test_a_second_ctrl_c_between_epochs_starts_no_next_epoch(tmp_path):
+    launch = subprocesses(after=lambda n: n == 0 and (ctrl_c(), ctrl_c()))
+    audit = run_stopped(tmp_path, launch, epochs=3)
+    assert launch.calls == 1
+    [row] = lines(audit.out / "launches.jsonl")
+    assert row["status"] == "ran" and row["stopped"].startswith("before epoch 2: stopped by "
+                                                                "hand")
+    assert [r["epochs_done"] for r in lines(audit.experiments()[0] / "runs.jsonl")] == [1]
+
+
+def test_an_epoch_subprocess_never_outlives_its_launcher(tmp_path, monkeypatch):
+    """E.g. Ctrl-C in the fixed-grid CLI: the epoch, in a session of its own, does not get
+    the terminal's signal, so the launcher stops it."""
+    started = []
+
+    def interrupted(self, *args, **kwargs):
+        started.append(self)
+        raise KeyboardInterrupt
+    monkeypatch.setattr(subprocess.Popen, "communicate", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        m1.launch_subprocess(brief(tmp_path, 1.0), ["C0"], 1, tmp_path / "out", True)
+    [process] = started
+    assert process.wait(timeout=10) is not None and not m1.RUNNING
+
+
+def test_an_interrupted_fake_audit_reads_its_runs_and_concludes(tmp_path):
+    """One SIGINT during the experiment: it finishes, L2 can still read it, and the fake
+    goes on to the review and the end."""
     audit, _ = audit_with(tmp_path, launch=subprocesses(lambda n: n == 0 and ctrl_c()))
     tools = Tools(audit, on_end=write_report)
     script = [("run_experiment", {"variants": json.dumps([C0, V1]), "epochs": 2,
                                   "rationale": WHY}),
               ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "probe"}), *END]
-    run_l2(tools, fake_model(script), PROMPT, prices={"mockllm/l2": (0.0, 0.0)})
+    run_l2(tools, fake_model(script), PROMPT, prices=FREE)
     trace = [r for r in tools.trace() if r.get("by") != "reviewer"]
     assert [(r["tool"], r["ok"]) for r in trace] == [
-        ("run_experiment", True), ("scores", False), ("request_review", True),
+        ("run_experiment", True), ("scores", True), ("request_review", True),
         ("end_audit", True)]
     assert [r["epochs_done"] for r in lines(audit.experiments()[0] / "runs.jsonl")] == [2, 2]
-    assert "interrupted by hand" in (audit.out / "report.md").read_text()
+    assert "- Stopped early: interrupted by hand" in (audit.out / "report.md").read_text()
 
 
 # ----------------------------------------------------------------- the agent's clock
-def test_l2_is_shown_its_time_limit_and_stopped_at_the_end_of_it(tmp_path):
-    """Past the whole time limit (e.g. an epoch ran long), L2 is stopped at its next turn
-    and the report says why."""
+def test_l2_is_shown_its_time_limit_and_concludes_even_past_it(tmp_path):
+    """Past the whole time limit (e.g. an epoch ran long), L2 still concludes with a
+    report: the time limit stops runs, never L2's report."""
     clock = Clock()
 
     def long(n):
@@ -214,28 +272,26 @@ def test_l2_is_shown_its_time_limit_and_stopped_at_the_end_of_it(tmp_path):
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
                          launch=subprocesses(long), clock=clock)
     tools = Tools(audit, on_end=write_report)
-    script = [("run_experiment", {"variants": json.dumps([C0]), "epochs": 1,
+    script = [("run_experiment", {"variants": json.dumps([C0]), "epochs": 2,
                                   "rationale": WHY}), *END]
-    log = run_l2(tools, fake_model(script), PROMPT, prices={"mockllm/l2": (0.0, 0.0)},
-                 time_limit=1000)
+    log = run_l2(tools, fake_model(script), PROMPT, prices=FREE, time_limit=1000)
     sample = resolve_sample_attachments(read_eval_log(log.location).samples[0])
     first = next(e for e in sample.events if e.event == "model")
     user = "\n".join(m.text for m in first.input if m.role == "user")
     assert "- time limit: 16.7 minutes for the whole audit" in user
-    assert tools.conclusions is None
-    assert "the time limit (1000 s) was reached before L2 ended the audit" in (
-        audit.out / "report.md").read_text()
+    assert [r["epochs_done"] for r in lines(audit.experiments()[0] / "runs.jsonl")] == [1]
+    assert tools.conclusions == "Stopped."
+    assert "- Stopped early: the time limit" in (audit.out / "report.md").read_text()
 
 
 def test_the_brief_s_time_limit_is_used_and_the_command_line_overrides_it(tmp_path):
     path = brief(tmp_path, 1.0, extra="\ntime_limit: 5400")
     audit = Audit.create(path, tmp_path / "a", mock=True, clock=Clock())
-    run_l2(Tools(audit, on_end=write_report), fake_model(END), PROMPT,
-           prices={"mockllm/l2": (0.0, 0.0)})
+    run_l2(Tools(audit, on_end=write_report), fake_model(END), PROMPT, prices=FREE)
     assert audit.time_limit == 5400
     audit = Audit.create(path, tmp_path / "b", mock=True, clock=Clock())
-    run_l2(Tools(audit, on_end=write_report), fake_model(END), PROMPT,
-           prices={"mockllm/l2": (0.0, 0.0)}, time_limit=60)
+    run_l2(Tools(audit, on_end=write_report), fake_model(END), PROMPT, prices=FREE,
+           time_limit=60)
     assert audit.time_limit == 60
 
 
@@ -251,3 +307,7 @@ def test_the_cli_exits_130_with_a_record_when_stopped_by_hand(tmp_path, monkeypa
               "--fake"])
     assert stop.value.code == 130
     assert "report:" in capsys.readouterr().out and (tmp_path / "a" / "report.md").exists()
+    with pytest.raises(SystemExit, match="2"):  # argparse's error exit
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "b"), "--mock",
+              "--fake", "--time-limit", "0"])
+    assert not (tmp_path / "b").exists()

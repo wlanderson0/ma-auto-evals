@@ -288,6 +288,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         out.append(f"- Of L2's own calls, the reviewer's: ${tools.review.get('cost_usd') or 0:.4f}")
     if b["stopped"]:
         out.append(f"- Stopped: {b['stopped']}")
+    if b["halted"]:
+        out.append(f"- Stopped early: {b['halted']}")
     out += [f"- Problem: {note}" for note in audit.notes]
     if b["spent_usd"] > b["budget_usd"]:
         out.append(f"- Over budget by ${b['spent_usd'] - b['budget_usd']:.4f}: a launched "

@@ -244,12 +244,17 @@ def launch_subprocess(brief_path: Path, ids: list[str], epoch: int, out: Path,
         RUNNING.add(process)
         try:
             _, stderr = process.communicate()
+        except BaseException:  # e.g. Ctrl-C in the fixed-grid CLI: never leave it running
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGTERM)
+            raise
         finally:
             RUNNING.discard(process)
     record = out / f"epoch-{epoch}.json"
     if process.returncode != 0 or not record.exists():
-        raise RuntimeError(f"epoch {epoch} failed (exit {process.returncode}):\n"
-                           f"{stderr[-3000:]}")
+        how = (f"stopped by signal {-process.returncode}" if process.returncode < 0
+               else f"exit {process.returncode}")
+        raise RuntimeError(f"epoch {epoch} failed ({how}):\n{stderr[-3000:]}")
     return json.loads(record.read_text())
 
 

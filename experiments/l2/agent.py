@@ -24,6 +24,7 @@ import json
 import signal
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -119,9 +120,9 @@ and plan so that you can still read the results and conclude. Once what is spent
 the reserve reaches the budget (the hard stop), no new experiment or epoch starts and
 only budget, request_review and end_audit work; an epoch already running finishes, so
 spending can go over by up to one epoch. A time limit, if the first message gives one,
-stops the audit the same way once only its held-back share is left, and so can the person
-running the audit. If run_experiment is not among your tools, this audit is analysis
-only: read the runs already made.
+stops new runs once only its held-back share is left, and so can the person running the
+audit; then read what ran and conclude. If run_experiment is not among your tools, this
+audit is analysis only: read the runs already made.
 
 # Finishing
 When you have your answer, call request_review with your draft claims and conclusions:
@@ -205,8 +206,8 @@ def brief_message(tools: Tools) -> str:
     if audit.time_limit is not None:
         lines.append(f"- time limit: {audit.time_limit / 60:.1f} minutes for the whole audit; "
                      f"the last {TIME_RESERVE:.0%} is held back for your report: once only "
-                     "that is left, no new experiment or epoch starts and only budget, "
-                     "request_review and end_audit work (budget shows the time left)")
+                     "that is left, no new experiment or epoch starts and you conclude "
+                     "(the query tools still work; budget shows the time left)")
     if audit.analysis is not None:
         lines += ["", "This audit is analysis only: you cannot run experiments. Read the "
                   "runs already made with the query tools."]
@@ -448,11 +449,11 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
             except Exception as error:
                 why.append(f"its spend could not be read: {error}")
                 return False
-            share = (f"its share of the budget (${cap:.4f}, half of what was left when it "
-                     "started)" if audit.l2["usd"] - start >= cap - EPSILON else
-                     f"its share of the time ({time_cap:.0f} s, half of what was left when "
-                     "it started)" if time_cap is not None
-                     and audit.clock() - began >= time_cap else None)
+            share = None
+            if audit.l2["usd"] - start >= cap - EPSILON:
+                share = f"its share of the budget (${cap:.4f}, half of what was left)"
+            elif time_cap is not None and audit.clock() - began >= time_cap:
+                share = f"its share of the time ({time_cap:.0f} s, half of what was left)"
             if share is not None:
                 if why:  # it had its last turn
                     return False
@@ -516,14 +517,10 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
         if b["remaining_usd"] <= EPSILON:
             tools.stop_reason = "L2 spent the whole budget before calling end_audit"
             return False
-        if b["time_left_s"] is not None and b["time_left_s"] <= 0:
-            tools.stop_reason = (f"the time limit ({b['time_limit_s']:g} s) was reached "
-                                 "before L2 ended the audit")
-            return False
         if state.output.message.tool_calls:
             return True
-        return (f"The audit is stopping ({b['stopped']}): conclude now." if b["stopped"]
-                else CONTINUE)
+        stopping = b["stopped"] or b["halted"]
+        return f"The audit is stopping ({stopping}): conclude now." if stopping else CONTINUE
 
     agent = react(name="l2", prompt=prompt, tools=others,
                   submit=AgentSubmit(tool=end, answer_only=True, keep_in_messages=True),
@@ -540,16 +537,21 @@ INTERRUPT_NOTICE = ("\nInterrupted: the experiment running now (if any) finishes
 
 def interrupt_handler(tools: Tools) -> Callable[[int, Any], None]:
     """The SIGINT handler while L2 runs: the first Ctrl-C stops the audit by hand (the
-    running experiment finishes, then L2 concludes); the second stops the running epochs
-    and raises ``KeyboardInterrupt``."""
+    running experiment finishes, then L2 concludes); the second stops the running epoch,
+    and any next one from starting, and raises ``KeyboardInterrupt``."""
     def handle(signum: int, frame: Any) -> None:
-        if tools.audit.interrupted is None:
-            tools.audit.interrupt()
+        tools.audit.interrupt()
+        if tools.audit.interrupts == 1:
             print(INTERRUPT_NOTICE, file=sys.stderr, flush=True)
             return
         m1.stop_running()
         raise KeyboardInterrupt
     return handle
+
+
+LAUNCH_WAIT = 60.0
+"""Seconds a second Ctrl-C waits for a running launch to write its record (its epoch is
+stopped, and no next one starts) before the audit's record is written."""
 
 
 def run_l2(tools: Tools, model: str | Model, prompt: str, *,
@@ -574,16 +576,22 @@ def run_l2(tools: Tools, model: str | Model, prompt: str, *,
     main = threading.current_thread() is threading.main_thread()
     previous = signal.signal(signal.SIGINT, interrupt_handler(tools)) if main else None
     try:
-        [log] = inspect_eval(task, model=model, log_dir=str(audit.out / "l2"),
-                             display="none", fail_on_error=False)
-    except KeyboardInterrupt:
-        tools.stop_reason = "stopped by hand (Ctrl-C twice)"
-        finalize(tools, None, prices)
-        raise
+        try:
+            [log] = inspect_eval(task, model=model, log_dir=str(audit.out / "l2"),
+                                 display="none", fail_on_error=False)
+        except KeyboardInterrupt:
+            # The launch, if one is running, goes on in its worker thread until its record
+            # is written; wait for it, so the audit's record comes last.
+            until = time.monotonic() + LAUNCH_WAIT
+            while audit.launching and time.monotonic() < until:
+                time.sleep(0.1)
+            tools.stop_reason = "stopped by hand (Ctrl-C twice)"
+            finalize(tools, None, prices)
+            raise
+        finalize(tools, log, prices)
     finally:
-        if main:
-            signal.signal(signal.SIGINT, previous)
-    finalize(tools, log, prices)
+        if main:  # put back after finalize, so a Ctrl-C there is handled too
+            signal.signal(signal.SIGINT, signal.SIG_DFL if previous is None else previous)
     return log
 
 

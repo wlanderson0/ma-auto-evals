@@ -24,11 +24,12 @@ runs, so milestone 1's between-epoch check stops it exactly at the audit-wide
 limit. A launched epoch runs to completion, so spending can exceed the budget by
 up to one epoch (recorded in ``ledger.json``).
 
-**Stopping early.** A stop asked for by hand (``interrupt``, Ctrl-C) or the time limit
-(``start_clock``; ``TIME_RESERVE`` of it held back for L2's report) is a stop like the
-hard stop: ``stopped`` gives its reason, no new experiment starts and the tools refuse
-everything but ``budget``, ``request_review`` and ``end_audit``. The time limit also
-stops a running experiment before its next epoch; an interrupt lets it finish.
+**Stopping early.** A stop asked for by hand (``interrupt``, Ctrl-C) or by the time
+limit (``start_clock``; ``TIME_RESERVE`` of it held back for L2's report) stops runs as
+the run budget does: ``halted`` gives its reason, no new experiment starts, and L2 is
+told to conclude; the query tools still work, so it can read what ran. The time limit,
+or a second interrupt, also stops a running experiment before its next epoch; a first
+interrupt lets it finish.
 
 **Run budget.** A brief's ``run_budget_usd`` caps spend on runs inside the budget
 (spec §9.4). It stops runs the same way: what is available for experiments is capped
@@ -59,9 +60,8 @@ from experiments.l2.model import SCENARIO, L2Brief, Problems, Variant
 RESERVE = 0.10
 """Share of the budget held back from experiments for L2's final calls (spec §7)."""
 TIME_RESERVE = 0.10
-"""Share of the time limit held back for L2's report: once only this is left, the audit
-stops like at the hard stop (spec §7)."""
-INTERRUPTED = "interrupted by hand (Ctrl-C)"
+"""Share of the time limit held back for L2's report: once only this is left, no new
+experiment or epoch starts (spec §7)."""
 CONDITIONS = ("baseline", "scripted")
 """Inner conditions milestone 2 runs (no inner L0/L1 auditor yet)."""
 OVERRUN = ("a launched epoch runs to completion, so spending can exceed the budget by up "
@@ -97,8 +97,10 @@ class Audit:
         self.time_limit: float | None = None
         """Seconds for the whole audit (``start_clock``), or ``None``."""
         self.started: float | None = None
-        self.interrupted: str | None = None
-        """Why the audit was stopped by hand (``interrupt``), if it was."""
+        self.interrupts = 0
+        """How many times the audit was interrupted by hand (``interrupt``)."""
+        self.launching = False
+        """Whether a launch is running (its record is still to be written)."""
         self.notes: list[str] = []
         """Problems with the ledger itself (e.g. L2's log could not be priced)."""
 
@@ -191,7 +193,7 @@ class Audit:
         """Start the audit's clock; ``time_limit`` seconds for the whole audit, if any."""
         self.time_limit, self.started = time_limit, self.clock()
 
-    def time(self) -> dict[str, float | None]:
+    def clock_state(self) -> dict[str, float | None]:
         """Elapsed and left of the time limit, and the share held back for L2's report."""
         if self.time_limit is None or self.started is None:
             return {"time_limit_s": None, "elapsed_s": None, "time_left_s": None,
@@ -203,7 +205,7 @@ class Audit:
 
     def time_up(self) -> str | None:
         """Why no experiment or epoch may start now for lack of time, if so."""
-        t = self.time()
+        t = self.clock_state()
         if t["time_left_s"] is None or t["time_left_s"] > t["time_reserve_s"] + EPSILON:
             return None
         return (f"the time limit: {t['elapsed_s'] / 60:.1f} of {t['time_limit_s'] / 60:.1f} "
@@ -211,14 +213,31 @@ class Audit:
                 "for L2's report")
 
     def interrupt(self) -> None:
-        """Stop by hand: no new experiment starts (one running finishes), and L2 concludes."""
-        self.interrupted = INTERRUPTED
+        """Stop by hand: no new experiment starts, and L2 concludes. A first interrupt lets
+        a running experiment finish; a second stops it before its next epoch."""
+        self.interrupts += 1
+
+    @property
+    def interrupted(self) -> str | None:
+        return (None if not self.interrupts else "interrupted by hand (Ctrl-C)"
+                if self.interrupts == 1 else "stopped by hand (Ctrl-C twice)")
+
+    @property
+    def halted(self) -> str | None:
+        """Why no experiment may start now, other than money: the time limit or an
+        interrupt."""
+        return self.time_up() or self.interrupted
+
+    def epoch_stop(self) -> str | None:
+        """Why a running experiment stops before its next epoch: the time limit, or a
+        second interrupt."""
+        return self.time_up() or (self.interrupted if self.interrupts > 1 else None)
 
     def budget(self) -> dict[str, Any]:
         """Spent, remaining (budget − ledger total) and the reserve, by kind (spec §7),
         and the time left. With a run budget, what is available for experiments is also
-        capped by what is left of it. ``stopped``: the hard stop, the time limit or an
-        interrupt, whichever came first in that order."""
+        capped by what is left of it. ``stopped``: the hard stop; ``halted``: a stop by
+        time or by hand."""
         experiments = self.experiment_spend()
         runs = sum(experiments.values())
         spent = runs + self.l2["usd"]
@@ -236,9 +255,8 @@ class Audit:
             "run_budget_usd": cap, "run_budget_left_usd": None if cap is None else cap - runs,
             "by_kind": {"experiments": sum(experiments.values()), "l2": self.l2["usd"]},
             "by_experiment": experiments, "l2_by_model": self.l2["by_model"],
-            **self.time(),
-            "stopped": (self.stop_reason(spent, reserve, total) or self.time_up()
-                        or self.interrupted)}
+            **self.clock_state(), "halted": self.halted,
+            "stopped": self.stop_reason(spent, reserve, total)}
 
     @staticmethod
     def stop_reason(spent: float, reserve: float, total: float) -> str | None:
@@ -313,6 +331,14 @@ class Audit:
         (the estimate exceeds what is available for experiments), ``ran`` or
         ``failed`` (an epoch failed; finished epochs are kept). A launch that ran or
         failed uses up its variant ids, even with no epoch done."""
+        self.launching = True
+        try:
+            return self._launch(variants, epochs, confirm, rationale)
+        finally:
+            self.launching = False
+
+    def _launch(self, variants: Sequence[Variant], epochs: int, confirm: bool,
+                rationale: str | None) -> dict[str, Any]:
         result: dict[str, Any] = {"ids": [v.id for v in variants], "epochs": epochs,
                                   "confirm": confirm, "rationale": rationale,
                                   "experiment": None, "variants": []}
@@ -362,7 +388,7 @@ class Audit:
                                   history=history, launch=self.launch_epoch,
                                   cost_of=self.cost_of,
                                   estimator=lambda *args, **kwargs: guess,
-                                  stop=self.time_up, scenarios=self.scenarios_dir)
+                                  stop=self.epoch_stop, scenarios=self.scenarios_dir)
                 status, reason = "ran", None
             except Exception as error:  # the record keeps the finished epochs
                 status, reason = "failed", f"{type(error).__name__}: {error}"[:3000]
@@ -404,7 +430,7 @@ class Audit:
             return "the audit has ended"
         if self.analysis is not None:
             return "this is an analysis-only audit: run_experiment is off"
-        if stopped := self.stopped:
+        if stopped := self.stopped or self.halted:
             return f"{stopped}; no new experiment starts"
         b = self.budget()
         if b["run_budget_left_usd"] is not None and b["run_budget_left_usd"] <= EPSILON:
@@ -503,6 +529,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if (args.question is None) != (args.budget is None):
         parser.error("--question and --budget go together (a --brief sets its own budget)")
+    if args.time_limit is not None and not args.time_limit > 0:
+        parser.error("--time-limit must be a positive number of seconds")
     if args.fake and args.model:
         raise SystemExit("--fake and --model exclude each other")
     if args.fake and not args.mock and args.analysis_only is None:
@@ -553,7 +581,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                   "then L2 concludes; twice: stop at once.", flush=True)
             agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
     except KeyboardInterrupt:  # a second Ctrl-C: the record is written all the same
-        print(f"stopped by hand; report: {out / 'report.md'}")
+        report = out / "report.md"
+        print("stopped by hand; " + (f"report: {report}" if report.exists() else
+                                     "no report was written"))
         raise SystemExit(130) from None
     budget = audit.budget()
     print(f"spent ${budget['spent_usd']:.4f} of ${budget['budget_usd']:.2f}")

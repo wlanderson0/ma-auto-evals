@@ -207,7 +207,7 @@ class Tools:
             ok, text = True, getattr(self, name)(**args)
         except Exception as error:
             ok, text = False, _failure(error)
-        stopped = self.audit.stopped
+        stopped = self.audit.stopped or self.audit.halted
         if ok and by == "l2" and stopped and name not in FREE:  # e.g. during a launch
             text += (f"\n\nThe audit is stopping: {stopped}. No new experiment starts; "
                      "conclude: call " + ("request_review, then end_audit."
@@ -465,8 +465,10 @@ class Tools:
                    is not None else "")
                 + (f" Time: {max(b['time_left_s'], 0) / 60:.1f} min left of "
                    f"{b['time_limit_s'] / 60:.1f} min ({b['time_reserve_s'] / 60:.1f} min "
-                   "held back for your report)." if b.get("time_limit_s") else "")
-                + (f" STOPPED: {b['stopped']}." if b["stopped"] else ""))
+                   "held back for your report)." if b["time_limit_s"] is not None else "")
+                + (f" STOPPED: {b['stopped']}." if b["stopped"] else "")
+                + (f" STOPPING: {b['halted']}; no new experiment starts: conclude."
+                   if b["halted"] and not b["stopped"] else ""))
 
     def variant_rows(self) -> list[dict[str, Any]]:
         """Every variant run so far: experiment, base, its changes, status, epochs."""
