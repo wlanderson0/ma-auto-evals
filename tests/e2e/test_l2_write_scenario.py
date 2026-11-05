@@ -234,11 +234,12 @@ def test_l2_writes_a_scenario_runs_it_and_reads_its_scores(tmp_path):
         ("write_scenario", {"name": "rumour", "code": RUMOUR}),
         ("run_experiment", {"variants": json.dumps([W1]), "epochs": 1}),
         ("scores", {"variant_ids": ["W1"], "scorer": "probe"}),
-        ("end_audit", {"conclusions": "Fake L2: a pipeline test; nothing is concluded."}),
+        *[(name, {"conclusions": "Fake L2: a pipeline test; nothing is concluded.", **more})
+          for name, more in (("request_review", {}), ("end_audit", {"response": "Kept."}))],
     ]
     tools = new(tmp_path, launch=launch_subprocess)  # no eval inside L2's own eval
     run_l2(tools, fake_model(script), PROMPT, prices={"mockllm/l2": (0.0, 0.0)})
-    trace = lines(tools.audit.out / "trace.jsonl")
+    trace = [r for r in tools.trace() if r.get("by") != "reviewer"]
     assert [r["tool"] for r in trace] == [name for name, _ in script]
     assert all(r["ok"] for r in trace), [r["result"] for r in trace if not r["ok"]]
     assert "W1 (epochs [1])" in trace[2]["result"]

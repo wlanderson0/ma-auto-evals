@@ -231,7 +231,7 @@ def parse_claims(raw: Any, tools: Tools) -> list[dict[str, Any]]:
         claims.append(claim)
     if problems:
         raise ClaimError("The claims could not be recorded; nothing ended. Fix these and call "
-                         "end_audit again:\n- " + "\n- ".join(problems))
+                         "again:\n- " + "\n- ".join(problems))
     return claims
 
 

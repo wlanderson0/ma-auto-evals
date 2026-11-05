@@ -62,7 +62,7 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
 
 The audit directory holds `report.md` (L2's claims with their verdicts, its conclusions,
 the tables they rest on, every variant and experiment), `claims.json` (each claim with its
-evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every tool call),
+evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
 
 ## 3. Read it critically
@@ -77,6 +77,10 @@ evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every
   per variant); for each cited post, its log, message id, sender and text. On Cosmos,
   samples are filed by the variant's built name (`<base>--<variant>`), condition and
   epoch; find a post there by its text, since Cosmos numbers messages itself.
+- Read the review in the report: before the audit ended, an adversarial reviewer read
+  L2's draft claims and conclusions (with the checker's verdicts) and could query the
+  runs; L2 then revised once and said how it answered. A point L2 dismissed is worth
+  checking yourself. The draft is in `review.json`.
 - Check that a comparison's variants ran in the same experiment, with the same epochs.
 - Read a few transcripts (on Cosmos, below) before trusting a measure.
 

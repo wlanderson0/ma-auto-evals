@@ -27,7 +27,7 @@ ANALYSIS_BRIEF = MILESTONE2.parent / "milestone2-analysis.md"
     "auditor-as:<agent>", "Compared vs recorded", "compare post counts at the rounds",
     "state yours with note_decision", "The search counts",
     "Where you departed from the reading guidance", "The measures you chose yourself",
-    "only budget and end_audit work", "analysis only", "Same scorers", "elicit mode",
+    "only budget, request_review and end_audit work", "analysis only", "Same scorers", "elicit mode",
     "The seat's push", "spending can go over by up to one epoch",
     "What the brief fixes, you must use", "If the brief does not fix the mode",
     "is a lead until fresh epochs confirm it", "Record your other choices",

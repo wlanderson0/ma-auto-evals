@@ -339,7 +339,8 @@ L2's tools (`experiments/l2/tools.py`):
 | `run_python(code)` | L2's own code on the logs (§6) |
 | `note_decision(field, value, reason)` | records a choice on something the brief left open (e.g. the mode or the measure, §6.4) |
 | `budget()` | spent, remaining and the reserve (§7) |
-| `end_audit(conclusions, claims)` | ends the audit with its claims, which are checked (§6.4) |
+| `request_review(conclusions, claims)` | has an adversarial reviewer read L2's draft before the audit ends (§6.5) |
+| `end_audit(conclusions, claims, response)` | ends the audit with its claims, which are checked (§6.4); after the review, `response` says how L2 answered it |
 
 **Not built yet:** `branches(run)` (an L1 branch tree, with inner L1), `exposure(run, agent)` (what an agent saw; see below), and filtering `list_runs` by tag (§6.2).
 
@@ -419,18 +420,27 @@ The other verdicts: *lead* (a condition above fails short of a contradiction, e.
 
 **Checking by hand.** Under the claims, the report says where each cited call and post is: the call's row in `trace.jsonl` and the eval logs it read, and each post's log, message id, sender and text, with the names their samples have on Cosmos. A reader can check any claim without the checker, which is a faster first pass, not the only one.
 
-What this does not check: whether the claims are the important results (§9.2 scores that), whether the measure is a good one, and anything in the prose. Because the prose is unchecked, a reader should take the claims as L2's findings and the conclusions as interpretation.
+What this does not check: whether the claims are the important results (§9.2 scores that), whether the measure is a good one, and anything in the prose. Because the prose is unchecked, a reader should take the claims as L2's findings and the conclusions as interpretation. The review (§6.5) reads what the checker cannot.
+
+### 6.5 An adversarial review before the end
+
+Before the audit ends, L2 has a reviewer read its draft: `request_review(conclusions, claims)` checks the draft's claims as `end_audit` would (refusing malformed ones), then runs the reviewer on the draft. The reviewer is an agent on L2's model, told to be adversarial: it looks for what the checker cannot see, such as a claim that says more than its evidence, a comparison that changes more than the claim says, a measure that does not count the behaviour claimed, and results or departures the conclusions leave out. It is given the brief, the reading guidance, the draft conclusions and each claim with the checker's verdict and reasons, and it can read the runs with the query tools (`list_runs`, `scores`, `transcript`, `find`) but runs nothing: no experiments, no scenarios, no code. It returns a critique, which L2 receives as the result of `request_review`.
+
+L2 then revises once: `end_audit(conclusions, claims, response)`, where `response` says what it changed in answer to the critique and why, or why it kept a point. `end_audit` refuses to end the audit before the review, and after the review there is no second review and no new experiment or scenario (the query tools still work), so the claims that end the audit are a revision of the reviewed draft and rest on the evidence the reviewer saw. The final claims are checked as in §6.4.
+
+- **Budget.** The reviewer's model calls run inside L2's own Inspect sample, so they are in L2's log and counted as L2's own calls in the ledger (§7). It may spend up to half of what is left of the budget when it starts, so L2 can still revise, and has a message limit as a backstop. Its query calls cost nothing, so the hard stop does not refuse them.
+- **Record.** `review.json` holds the draft (conclusions, and claims with their verdicts), the critique, the reviewer's calls (rows of `trace.jsonl` marked `"by": "reviewer"`; L2 can cite them like its own), what it cost, why it stopped early if it did, and L2's response. The report shows the draft claims with their verdicts, the critique and the response, quoted and unchecked.
 
 ## 7. Budget
 
 An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It covers every model call made on the audit's behalf. The brief can also cap spend on runs inside it (`run_budget_usd`, §2), enforced in the same way but stopping only runs: once it is reached, no new experiment or epoch starts, and the query tools still work. There are no separate count limits (variants, samples, L2 calls, scorer calls), and the brief cannot add them: the money budget covers them all. Each sample still obeys its own `AuditLimits`, which L2 sets per variant (§4).
 
-**Ledger.** Every model call counts against the budget, whoever makes it: agents, scorers and judges, interviews and L2 itself (and inner auditors and realism checks, once built). Cost is tokens times a price table (`experiments/l2/cost.py`, `PRICES`, with the date the prices were checked), since the logs record tokens but not cost; a model with no price is refused rather than counted as free. Each experiment's `cost.json` sums its logs' calls; the audit's `ledger.json` adds those up, plus L2's own calls (read from L2's own Inspect log), by kind and by experiment (test L2-10).
+**Ledger.** Every model call counts against the budget, whoever makes it: agents, scorers and judges, interviews and L2 itself, the reviewer included (§6.5; and inner auditors and realism checks, once built). Cost is tokens times a price table (`experiments/l2/cost.py`, `PRICES`, with the date the prices were checked), since the logs record tokens but not cost; a model with no price is refused rather than counted as free. Each experiment's `cost.json` sums its logs' calls; the audit's `ledger.json` adds those up, plus L2's own calls (read from L2's own Inspect log), by kind and by experiment (test L2-10).
 
 **Enforcement.**
 
 - Before launch: the cost check (§5).
-- During a run: the budget is checked between epochs. Once spent plus the reserve reaches the budget (the **hard stop**), no new epoch or experiment starts, and L2's tools refuse everything but `budget` and `end_audit` (test L2-11). A launched epoch runs to completion, so spending can go over by up to one epoch; `ledger.json` records it. Samples run one epoch at a time across variants, so a stop leaves the variants balanced (§5, test L2-12). **Not built yet:** stopping a sample in progress (`budget_exhausted`).
+- During a run: the budget is checked between epochs. Once spent plus the reserve reaches the budget (the **hard stop**), no new epoch or experiment starts, and L2's tools refuse everything but `budget`, `request_review` and `end_audit` (test L2-11). A launched epoch runs to completion, so spending can go over by up to one epoch; `ledger.json` records it. Samples run one epoch at a time across variants, so a stop leaves the variants balanced (§5, test L2-12). **Not built yet:** stopping a sample in progress (`budget_exhausted`).
 - **Reserve for the report:** part of the budget (10%) is held back from runs for L2's own final calls (confirming results and writing its conclusions), so it is never left unable to report. **Not built yet:** L2 choosing or changing the amount; today it is fixed per audit.
 
 **L2 sees what's left.** `budget()` returns spent, remaining and the reserve, broken down by kind of call. The remaining amount is also appended to the result of every launch.
@@ -447,8 +457,8 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 - `trace.jsonl`, every tool call with its arguments, result (shortened) and the result's hash, including the code L2 ran on the logs;
 - `experiments/exp-<n>/`, one per launch: its variants, `runs.jsonl` (with the eval log paths), `decisions.json`, `cost.json` and the eval logs;
 - `ledger.json`, the budget ledger (§7), and `l2/`, L2's own Inspect log;
-- `claims.json`, L2's claims with their verdicts (§6.4);
-- `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
+- `claims.json`, L2's claims with their verdicts (§6.4), and `review.json`, the reviewer's critique of L2's draft and L2's response (§6.5);
+- `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the review, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
 - once shared (§8.1): `cosmos-runs.json`, `cosmos.json` and `cosmos/`.
 
 **Not built yet:** inner briefs (with inner L1), every scorer with its prompt (§6.3), and comments and tags (`annotations.jsonl`, §6.2).
@@ -540,7 +550,8 @@ The LLM L2 is an agent working with tools (§6.1) and doesn't need to fit this i
 - scenarios written by L2, with the generic mocks and their dry-run (`level2-milestone4.md`);
 - rebuilding an incident from a brief, against a calibration (`level2-milestone5.md`);
 - sharing on Cosmos and a first study (`level2-milestone6.md`);
-- claims checked against the record, and linked to Cosmos (§6.4, §8.1).
+- claims checked against the record, and linked to Cosmos (§6.4, §8.1);
+- an adversarial review of L2's draft before the audit ends (§6.5).
 
 **Next:**
 
@@ -581,6 +592,7 @@ Contract tests for L2, in the style of `auditor-tests.md`. Each is cited by numb
 | L2-18 | `find` labels authorship                      | Matches in auditor-written content are labelled `auditor-as:<seat>`, and matches in agents' own posts `agent:<name>`. |
 | L2-19 | Comments and tags round-trip (*not built*)    | Comments and tags written by L2 or a person are read back with author and time, on all four target kinds, and sync to Cosmos comments. |
 | L2-20 | Every claim is checked against the record     | `end_audit` refuses a claim citing a call or post that does not exist; every recorded claim has a verdict and reasons read from the logs, and a claim the logs contradict (wrong k/n, wrong direction, a quote not in its post, an auditor-written post as a target's) is never *checked*. |
+| L2-21 | The review comes before the end               | With a reviewer, `end_audit` is refused until `request_review` has run, then needs a `response`; the reviewer is offered only the query tools and its calls are refused otherwise; after the review no experiment, scenario or second review starts; the reviewer stops at half of what was left; the draft, critique and response are in `review.json` and the report. |
 
 (L2-4, "scorers cover all compared runs", was dropped: it is now guidance, §6.3.)
 

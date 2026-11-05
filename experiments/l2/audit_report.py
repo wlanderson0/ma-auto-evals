@@ -32,6 +32,7 @@ RECORD = {
     "launches.jsonl": "every launch L2 asked for and what came of it",
     "trace.jsonl": "every tool call and its (shortened) result, in order",
     "claims.json": "L2's claims, each with its evidence, verdict and the checker's reasons",
+    "review.json": "the reviewer's critique of L2's draft, the draft, and L2's response",
     "cosmos.json": "Cosmos links to the claims' runs and messages (experiments.l2.cosmos_links)",
     "ledger.json": "spend by kind, reserve, remaining",
     "experiments/": "one milestone 1 audit directory per launch (eval logs under logs/)",
@@ -145,6 +146,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     else:
         out.append(f"None: {why_no_conclusions or 'L2 never called end_audit'}.")
     out.append("")
+    out += _review(tools)
 
     decisions = _jsonl(audit.out / "decisions.jsonl")
     out += ["## Decisions on what the brief left open", ""]
@@ -206,6 +208,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     ok_compares = sum(bool(row.get("ok")) and (row.get("tool") == "compare" or (
         row.get("tool") == "scores" and bool(row["args"].get("against")))) for row in trace)
     failed = sum(not row.get("ok") for row in trace)
+    by_reviewer = sum(row.get("by") == "reviewer" for row in trace)
     with_epochs = sum(1 for r in launched if r.get("spent_usd") or any(
         v["epochs"] for v in variants if v["experiment"] == r["experiment"]))
     out += ["## Search counts (from the record)", "",
@@ -217,7 +220,9 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"- Comparisons tried: {len(compares)} distinct ({ok_compares} successful calls)",
             f"- Transcripts read: {calls['transcript']}; searches: {calls['find']}; "
             f"code runs: {calls['run_python']} (the code and its output are in trace.jsonl)",
-            f"- Tool calls: {len(trace)} ({failed} refused or failed)", ""]
+            f"- Tool calls: {len(trace)} ({failed} refused or failed"
+            + (f"; {by_reviewer} by the reviewer, counted above too" if by_reviewer else "")
+            + ")", ""]
 
     out += ["## Departures from the reading guidance (automatic checks)", ""]
     notes = []
@@ -266,6 +271,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- L2 on {model}: ${row.get('usd', 0):.4f} ({row.get('calls', '?')} calls, "
             f"{row.get('input_tokens', '?')} input / {row.get('output_tokens', '?')} output "
             "tokens)" for model, row in b["l2_by_model"].items()]
+    if tools.review is not None:
+        out.append(f"- Of L2's own calls, the reviewer's: ${tools.review.get('cost_usd') or 0:.4f}")
     if b["stopped"]:
         out.append(f"- Stopped: {b['stopped']}")
     out += [f"- Problem: {note}" for note in audit.notes]
@@ -323,12 +330,7 @@ def _claims(tools: Tools) -> list[str]:
                                          "checked"))}
     for i, claim in sorted(enumerate(tools.claims, 1),
                            key=lambda pair: order.get(pair[1]["verdict"], 0)):
-        fields = ", ".join(f"{name}={_inline(claim[name])}"
-                           for name in claims_.FIELDS[claim["kind"]])
-        out += [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
-                f": {_inline(claim['text'])}",
-                f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
-        out += [f"   - {_inline(reason)}" for reason in claim["reasons"]]
+        out += claim_lines(i, claim)
         try:
             out += [f"   - {line}" for line in _claim_links(tools, claim, links)]
         except Exception as error:  # the report is still written
@@ -340,6 +342,49 @@ def _claims(tools: Tools) -> list[str]:
                  f"(could not be worked out: {_inline(f'{type(error).__name__}: {error}')})",
                  ""]
     return out + ["", *where]
+
+
+def claim_lines(i: int, claim: dict[str, Any]) -> list[str]:
+    """Claim ``i`` with its verdict, fields, evidence and the checker's reasons."""
+    fields = ", ".join(f"{name}={_inline(claim[name])}"
+                       for name in claims_.FIELDS[claim["kind"]])
+    return [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
+            f": {_inline(claim['text'])}",
+            f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}",
+            *[f"   - {_inline(reason)}" for reason in claim["reasons"]]]
+
+
+def _review(tools: Tools) -> list[str]:
+    """The reviewer's critique of L2's draft and L2's response (``review.json``)."""
+    review = tools.review
+    if review is None:
+        return (["## Review", "", "No review was requested: L2 did not call request_review "
+                 "before the audit stopped.", ""] if tools.needs_review else [])
+    calls = review.get("reviewer_calls") or []
+    out = ["## Review (an adversarial reviewer read L2's draft before the audit ended)", "",
+           f"L2 asked for the review in call {review['call']}. The reviewer saw the draft "
+           "claims with the checker's verdicts and could read the runs (list_runs, scores, "
+           f"transcript, find) but not run anything; it made {len(calls)} call(s)"
+           + (f" ({', '.join(f'call {c}' for c in calls)})" if calls else "")
+           + f" and cost ${review.get('cost_usd') or 0:.4f}, part of L2's own calls in the "
+           "ledger." + (f" It stopped early: {_inline(review['stopped'])}."
+                         if review.get("stopped") else ""), "",
+           "### L2's draft claims, as the checker read them", ""]
+    draft = review["draft"]
+    out += [f"{i}. **{c['verdict']}** ({c['kind']}): {_inline(c['text'])}"
+            for i, c in enumerate(draft.get("claims") or [], 1)] or ["L2 claimed nothing."]
+    out += ["", "The draft conclusions are in `review.json`.", "",
+            "### The critique (the reviewer's words, quoted; not checked)", ""]
+    out += _quoted(review.get("critique")) or ["The reviewer gave no critique."]
+    out += ["", "### L2's response (its words, quoted; not checked)", ""]
+    out += _quoted(review.get("response")) or ["None: L2 did not end the audit after the "
+                                               "review."]
+    return out + [""]
+
+
+def _quoted(text: Any) -> list[str]:
+    return [f"> {line}" if line.strip() else ">" for line in str(text or "").strip()
+            .splitlines()]
 
 
 def _cosmos(tools: Tools) -> dict[str, Any]:
