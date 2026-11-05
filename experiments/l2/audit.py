@@ -42,7 +42,6 @@ from __future__ import annotations
 import json
 import math
 import shutil
-import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -81,7 +80,7 @@ class Audit:
                  cost_of: m1.CostOf = log_cost,
                  estimator: Callable[..., dict[str, Any]] = m1.estimate,
                  clock: Callable[[], float] = time.monotonic,
-                 progress: Callable[[str], None] | None = None) -> None:
+                 progress: Callable[[dict[str, Any]], None] | None = None) -> None:
         if not 0 <= reserve < 1:
             raise ValueError(f"reserve must be a share of the budget in [0, 1), not {reserve}")
         self.out = Path(out)
@@ -106,8 +105,8 @@ class Audit:
         self.notes: list[str] = []
         """Problems with the ledger itself (e.g. L2's log could not be priced)."""
         self.progress = progress
-        """Called with a line of progress (a launch, an epoch, a tool call); the CLI
-        prints it. None: silent."""
+        """Called with each progress event (``say``); the CLI shows them
+        (``experiments.l2.progress``). None: silent."""
 
     @classmethod
     def create(cls, brief_path: str | Path, out: str | Path, **options: Any) -> Audit:
@@ -172,14 +171,12 @@ class Audit:
         with (self.out / name).open("a") as file:
             file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
 
-    def say(self, text: str) -> None:
+    def say(self, event: str, **fields: Any) -> None:
+        """A progress event, ``{"event", **fields, "budget"}`` with the budget as it now
+        stands: ``tool`` (a call starts or ends), ``launch``, ``epoch`` (starts or
+        ends) and ``spend`` (L2's own spend moved). Nothing is recorded."""
         if self.progress is not None:
-            self.progress(text)
-
-    def spend_line(self) -> str:
-        b = self.budget()
-        return (f"spent ${b['spent_usd']:.4f} of ${b['budget_usd']:.2f} "
-                f"(L2 ${b['by_kind']['l2']:.4f}, runs ${b['by_kind']['experiments']:.4f})")
+            self.progress({"event": event, **fields, "budget": self.budget()})
 
     # ---------------------------------------------------------------- ledger
     def experiment_spend(self) -> dict[str, float]:
@@ -200,8 +197,11 @@ class Audit:
             raise ValueError(f"L2's spend must be a finite amount >= 0, not {usd!r}")
         if usd < self.l2["usd"] - EPSILON:
             raise ValueError(f"L2's spend cannot go down (${self.l2['usd']:.6f} -> ${usd:.6f})")
+        before = self.l2["usd"]
         self.l2 = {"usd": float(max(usd, self.l2["usd"])), "by_model": spend.get("by_model", {})}
         self.write_ledger()
+        if self.l2["usd"] > before:
+            self.say("spend")
 
     def start_clock(self, time_limit: float | None) -> None:
         """Start the audit's clock; ``time_limit`` seconds for the whole audit, if any."""
@@ -394,15 +394,15 @@ class Audit:
         exp = self.experiments_dir / f"exp-{n}"
         result["experiment"] = exp.name
         history = [*self.history, *self.experiments()]
-        self.say(f"{exp.name}: {len(variants)} variant(s) x {epochs} epoch(s), estimated "
-                 f"${guess['usd']:.4f} of ${available:.4f} available")
+        self.say("launch", experiment=exp.name, variants=[v.id for v in variants],
+                 epochs=epochs, estimate_usd=guess["usd"], available_usd=available)
 
         def launch_epoch(*args: Any) -> Any:
             epoch, started = args[2], time.monotonic()
-            self.say(f"{exp.name} epoch {epoch}/{epochs}: running; {self.spend_line()}")
+            self.say("epoch", experiment=exp.name, epoch=epoch, epochs=epochs, done=False)
             paths = self.launch_epoch(*args)
-            self.say(f"{exp.name} epoch {epoch}/{epochs}: done in "
-                     f"{_duration(time.monotonic() - started)}")
+            self.say("epoch", experiment=exp.name, epoch=epoch, epochs=epochs, done=True,
+                     seconds=time.monotonic() - started)
             return paths
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -506,22 +506,6 @@ def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def _duration(seconds: float) -> str:
-    minutes, seconds = divmod(int(seconds), 60)
-    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
-
-
-def printer(clock: Callable[[], float] = time.monotonic) -> Callable[[str], None]:
-    """A progress callback that prints each line to stdout with the time and the time
-    since the audit started."""
-    start = clock()
-
-    def say(text: str) -> None:
-        print(f"[{time.strftime('%H:%M:%S')} +{_duration(clock() - start)}] {text}",
-              file=sys.stdout, flush=True)
-    return say
-
-
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
     """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
@@ -537,6 +521,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     from experiments.l2 import agent
     from experiments.l2.audit_report import write_report
     from experiments.l2.fake import ANALYSIS, FULL, PROMPT, fake_model
+    from experiments.l2.progress import reporter
     from experiments.l2.tools import Tools
 
     parser = argparse.ArgumentParser(description="Run an L2 audit (milestone 2).")
@@ -568,8 +553,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
     parser.add_argument("--quiet", action="store_true",
-                        help="print no progress lines (tool calls, launches, epochs) while "
-                             "the audit runs")
+                        help="show no progress (the live status panel, or lines when the "
+                             "output is not a terminal) while the audit runs")
     args = parser.parse_args(argv)
     if (args.question is None) != (args.budget is None):
         parser.error("--question and --budget go together (a --brief sets its own budget)")
@@ -612,18 +597,20 @@ def main(argv: Sequence[str] | None = None) -> None:
             brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
                                   f"{args.question.strip()}\n")
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
-                             history=args.history, progress=None if args.quiet else printer())
+                             history=args.history)
     tools = Tools(audit, on_end=write_report)
+    model = None if args.fake else args.model or agent.MODEL
+    if model is not None:
+        print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
+              f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "
+              "then L2 concludes; twice: stop at once.", flush=True)
     try:
-        if args.fake:
-            script = ANALYSIS if args.analysis_only else FULL
-            agent.run_l2(tools, fake_model(script), PROMPT, time_limit=args.time_limit)
-        else:
-            model = args.model or agent.MODEL
-            print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
-                  f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "
-                  "then L2 concludes; twice: stop at once.", flush=True)
-            agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
+        with reporter(audit, quiet=args.quiet, model=model or "the fake L2"):
+            if model is None:
+                script = ANALYSIS if args.analysis_only else FULL
+                agent.run_l2(tools, fake_model(script), PROMPT, time_limit=args.time_limit)
+            else:
+                agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
     except KeyboardInterrupt:  # a second Ctrl-C: the record is written all the same
         report = out / "report.md"
         print("stopped by hand; " + (f"report: {report}" if report.exists() else

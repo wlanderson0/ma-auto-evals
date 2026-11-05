@@ -197,17 +197,6 @@ class Tools:
         ok, text, _ = self.numbered_call(name, **args)
         return ok, text
 
-    def _say(self, name: str, ok: bool, text: str) -> None:
-        """One progress line per call: what L2 called, how it went (the first line of
-        the result for a launch, an end or a refusal) and the spend so far."""
-        if self.audit.progress is None:
-            return
-        head = f"L2 called {name}"
-        if not ok or name in ("run_experiment", "end_audit"):
-            first = (text.strip().splitlines() or [""])[0]
-            head += f": {_short(first, 160)}" if ok else f" (refused): {_short(first, 160)}"
-        self.audit.say(f"{head}; {self.audit.spend_line()}")
-
     def numbered_call(self, name: str, /, by: str = "l2", **args: Any) -> tuple[bool, str, int]:
         """``call``, plus the call's number in ``trace.jsonl`` (its ``seq``), which L2
         sees as ``[call N]`` and cites as evidence for a claim. The number is taken when
@@ -215,6 +204,8 @@ class Tools:
         ``by="reviewer"``: a call by the reviewer, which may use only the query tools
         (``READ``); they cost nothing, so the hard stop does not refuse them.
         (L2's tools are serial: Inspect runs a tool in parallel only if it says so.)"""
+        if by == "l2":
+            self.audit.say("tool", name=name, done=False)
         self._seq += 1
         seq = self._seq
         self._caller = by
@@ -233,7 +224,8 @@ class Tools:
                                           if self.needs_review else "end_audit."))
         number = self._trace(name, args, ok, text, seq, by)
         if by == "l2":
-            self._say(name, ok, text)
+            self.audit.say("tool", name=name, done=True, ok=ok,
+                           first_line=(text.strip().splitlines() or [""])[0])
         return ok, text, number
 
     async def reviewed_call(self, reviewer: Callable[[Tools, dict[str, Any]], Any], /,
@@ -257,7 +249,8 @@ class Tools:
                      "stopped": f"the reviewer failed: {type(error).__name__}: {error}"}
         text = self._record_review(seq, draft, found)
         number = self._trace("request_review", args, True, text, seq)
-        self._say("request_review", True, text)
+        self.audit.say("tool", name="request_review", done=True, ok=True,
+                       first_line=(text.strip().splitlines() or [""])[0])
         return True, text, number
 
     def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
