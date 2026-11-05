@@ -7,6 +7,7 @@ ledger and record; experiments run in real subprocesses, as they will live.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,27 @@ def test_the_cli_runs_the_fake_on_mocks(tmp_path, capsys):
     with pytest.raises(SystemExit, match="use --mock"):  # no live spend before review
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "y"), "--fake"])
     assert not (tmp_path / "y").exists()
+
+
+def test_the_cli_prints_progress_while_the_audit_runs(tmp_path, capsys):
+    """Each tool call, launch and epoch is a timestamped line with the spend so far;
+    --quiet leaves only the summary."""
+    main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "p"), "--mock",
+          "--fake"])
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("[")]
+    assert re.fullmatch(r"\[\d\d:\d\d:\d\d \+\d+s\] L2 called note_decision; spent \$0\.0000 "
+                        r"of \$1\.00 \(L2 \$0\.0000, runs \$0\.0000\)", lines[0])
+    text = "\n".join(lines)
+    for expected in ("exp-1: 2 variant(s) x 2 epoch(s), estimated $",
+                     "exp-1 epoch 1/2: running; spent $", "exp-1 epoch 2/2: done in ",
+                     "L2 called run_experiment: Ran exp-1.;", "L2 called end_audit: "):
+        assert expected in text
+    assert text.index("exp-1 epoch 2/2: done") < text.index("L2 called run_experiment")
+    main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "q"), "--mock",
+          "--fake", "--quiet"])
+    printed = capsys.readouterr().out
+    assert not [line for line in printed.splitlines() if line.startswith("[")]
+    assert "report:" in printed
 
 
 def test_a_question_and_a_budget_are_the_shortest_brief(tmp_path):

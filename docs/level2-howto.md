@@ -58,6 +58,11 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake. `--time-limit <seconds>` ends it cleanly earlier.
+- While it runs it prints a line per tool call L2 makes, per experiment it launches and
+  per epoch, each with the time, the time since the start and the spend so far against
+  the budget (L2's own calls and the runs separately), e.g.
+  `[14:02:31 +12m05s] exp-2 epoch 1/3: running; spent $0.4120 of $3.00 (L2 $0.1830, runs $0.2290)`.
+  A launch prints its estimate first. `--quiet` turns these lines off.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
 The audit directory holds `report.md` (L2's conclusions, the tables they rest on, every
