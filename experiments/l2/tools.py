@@ -164,6 +164,7 @@ class Tools:
     def call(self, name: str, /, **args: Any) -> tuple[bool, str]:
         """Run tool ``name``; ``(ok, text)``. Refusals and errors are ``ok=False``.
         (``name`` is positional-only, so a tool can take an argument called name.)"""
+        self.audit.say("tool", name=name, done=False)
         try:
             if name not in TOOLS:
                 raise Refused(f"unknown tool {name!r}")
@@ -185,19 +186,9 @@ class Tools:
         except Exception as error:  # a bug or a bad argument: L2 sees it, the audit goes on
             ok, text = False, f"error: {type(error).__name__}: {error}"
         self._trace(name, args, ok, text)
-        self._say(name, ok, text)
+        self.audit.say("tool", name=name, done=True, ok=ok,
+                       first_line=(text.strip().splitlines() or [""])[0])
         return ok, text
-
-    def _say(self, name: str, ok: bool, text: str) -> None:
-        """One progress line per call: what L2 called, how it went (the first line of
-        the result for a launch, an end or a refusal) and the spend so far."""
-        if self.audit.progress is None:
-            return
-        head = f"L2 called {name}"
-        if not ok or name in ("run_experiment", "end_audit"):
-            first = (text.strip().splitlines() or [""])[0]
-            head += f": {_short(first, 160)}" if ok else f" (refused): {_short(first, 160)}"
-        self.audit.say(f"{head}; {self.audit.spend_line()}")
 
     def _trace(self, name: str, args: dict[str, Any], ok: bool, text: str) -> None:
         self._seq += 1
