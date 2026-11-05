@@ -428,8 +428,10 @@ Before the audit ends, L2 has a reviewer read its draft: `request_review(conclus
 
 L2 then revises once: `end_audit(conclusions, claims, response)`, where `response` says what it changed in answer to the critique and why, or why it kept a point. `end_audit` refuses to end the audit before the review, and after the review there is no second review and no new experiment or scenario (the query tools still work), so the claims that end the audit are a revision of the reviewed draft and rest on the evidence the reviewer saw. The final claims are checked as in §6.4.
 
-- **Budget.** The reviewer's model calls run inside L2's own Inspect sample, so they are in L2's log and counted as L2's own calls in the ledger (§7). It may spend up to half of what is left of the budget when it starts, so L2 can still revise, and has a message limit as a backstop. Its query calls cost nothing, so the hard stop does not refuse them.
-- **Record.** `review.json` holds the draft (conclusions, and claims with their verdicts), the critique, the reviewer's calls (rows of `trace.jsonl` marked `"by": "reviewer"`; L2 can cite them like its own), what it cost, why it stopped early if it did, and L2's response. The report shows the draft claims with their verdicts, the critique and the response, quoted and unchecked.
+- **Budget.** The reviewer's model calls run inside L2's own Inspect sample, so they are in L2's log and counted as L2's own calls in the ledger (§7). It may spend up to half of what is left of the budget when it starts, so L2 can still revise; once it reaches that, it gets one last turn to submit what it has. A message limit is the backstop. Its query calls cost nothing, so the hard stop does not refuse them.
+- **A failed review** (e.g. the provider refuses the reviewer's call) is recorded as a review with no critique and the error, so L2 can still revise and end the audit.
+- **Not L2's search.** The reviewer's calls are rows of `trace.jsonl` marked `"by": "reviewer"`. L2 can cite them like its own, but they are left out of L2's search counts and tables in the report and of the correction for the number of comparisons (§6.4), since the reviewer's checks are not L2's search.
+- **Record.** `review.json` holds the draft (conclusions, and claims with their verdicts), the critique, the reviewer's calls, what it cost, why it stopped early if it did, and L2's response. The report shows the draft claims with their verdicts, the critique and the response, quoted and unchecked.
 
 ## 7. Budget
 

@@ -1,4 +1,4 @@
-"""The adversarial reviewer of L2's draft (spec §6.4, "Review"; L2-21).
+"""The adversarial reviewer of L2's draft (spec §6.5; L2-21).
 
 The fake L2 asks for a review and ends the audit; the same fake model plays the reviewer
 (``fake.REVIEW``) when its tools include ``submit_review``. Offline throughout.
@@ -79,6 +79,7 @@ def test_the_reviewer_sees_the_draft_with_verdicts_and_only_the_query_tools(revi
     assert "# The brief" in user and "# L2's draft conclusions" in user
     assert "# L2's draft claims, with the checker's verdicts" in user
     assert "(no_difference: a=V1, b=C0, target=dave)" in user and "Evidence: call 4" in user
+    assert "your own calls" not in user  # the budget lines are L2's
 
 
 def test_l2_is_offered_request_review(reviewed):
@@ -159,7 +160,7 @@ def test_the_reviewer_reads_only_and_the_hard_stop_does_not_refuse_it(tmp_path):
 def test_request_review_without_a_reviewer_is_refused(tmp_path):
     tools = Tools(Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True))
     ok, text = tools.call("request_review", **DRAFT)
-    assert not ok and "no reviewer" in text
+    assert not ok and "needs the reviewer" in text
     assert tools.call("end_audit", **FINAL)[0]  # no reviewer: end_audit ends at once
 
 
@@ -175,7 +176,9 @@ def test_the_reviewer_stops_at_its_share_of_what_is_left(tmp_path):
     review = tools.review
     assert "share of the budget" in review["stopped"]
     cap = 0.5 * (0.05 - 0.0012)  # half of what was left after L2's first call
-    assert cap <= review["cost_usd"] <= cap + 0.0012 + 1e-9  # at most one call over
+    # at most one call over, then one last turn, in which it submits what it has
+    assert cap <= review["cost_usd"] <= cap + 2 * 0.0012 + 1e-9
+    assert review["critique"] == REVIEW[-1][1]["answer"]
     assert tools.conclusions == "Final: nothing is concluded." and audit.ended
 
 
@@ -202,3 +205,44 @@ def test_no_review_requested_is_said_when_there_is_a_reviewer(tmp_path):
     assert "No review was requested" in render(tools, "stopped")
     tools.needs_review = False
     assert "## Review" not in render(tools, "stopped")
+
+
+def test_a_failing_reviewer_is_recorded_and_the_audit_can_still_end(tmp_path):
+    tools = reviewing(tmp_path)
+
+    async def broken(tools, draft):
+        raise RuntimeError("the provider said 400")
+
+    ok, text, _ = anyio.run(lambda: tools.reviewed_call(broken, **DRAFT))
+    assert ok and "the reviewer failed: RuntimeError: the provider said 400" in text
+    assert tools.review["critique"] == "" and "failed" in tools.review["stopped"]
+    assert tools.call("end_audit", **FINAL, response="No critique to answer.")[0]
+
+
+def test_the_reviewer_s_comparisons_are_not_l2_s_search(tmp_path):
+    """A comparison the reviewer makes neither counts in L2's search counts and tables nor
+    tightens the correction on L2's claims; L2 can still cite it."""
+    from experiments.l2 import claims as claims_
+    from tests.support.l2_audit import InProcess
+
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
+                         launch=InProcess())
+    tools = Tools(audit, on_end=write_report)
+    c0 = {"id": "C0", "control": "M0", "rationale": "control"}
+    dave = [{"axis": "topology", "op": op, "args": {"agent": "dave", "channel": "town"}}
+            for op in ("add_reader", "add_writer")]
+    v1 = {"id": "V1", "control": "M0", "rationale": "Dave on #town", "mutations": dave}
+    v2 = {"id": "V2", "control": "M0", "rationale": "the same again", "mutations": dave}
+    assert tools.call("run_experiment", variants=[c0, v1, v2], epochs=1)[0]
+    assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
+    ok, _, seq = tools.numbered_call("scores", "reviewer", variant_ids=["V2"], against="C0",
+                                     scorer="probe")
+    assert ok and len(claims_._all_scores(tools)) == 1
+    tools.needs_review = False
+    claim = {"text": "No difference for dave.", "kind": "no_difference", "a": "V2", "b": "C0",
+             "target": "dave", "evidence": [{"call": seq}]}
+    assert tools.call("end_audit", conclusions="None.", claims=[claim])[0]  # citable
+    report = (audit.out / "report.md").read_text()
+    assert "- Comparisons tried: 1 distinct (1 successful calls)" in report
+    assert "### compare V2 vs C0" not in report
+    assert "- Tool calls: 2 (0 refused or failed), and 1 by the reviewer" in report

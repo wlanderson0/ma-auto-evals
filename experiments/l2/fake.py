@@ -4,7 +4,7 @@ It drives the real agent (``experiments.l2.agent``), tools, ledger and record en
 end with no LLM cost. Each turn it makes the next call of its script, whatever the
 results say; once the script is spent it asks for a review and ends the audit, and keeps
 doing so. Asked to review (its tools include ``submit_review``), it plays the reviewer
-from ``REVIEW`` instead.
+from ``REVIEW`` instead, and submits ``REVIEW``'s critique when told to.
 """
 
 from __future__ import annotations
@@ -77,6 +77,8 @@ def fake_model(script: Sequence[tuple[str, dict[str, Any]]], name: str = "mockll
     def reply(messages, tools, tool_choice, config) -> ModelOutput:
         turn = sum(m.role == "assistant" for m in messages)
         calls = review if any(t.name == "submit_review" for t in tools) else script
+        if calls is review and "submit_review now" in messages[-1].text:
+            calls, turn = REVIEW, len(REVIEW) - 1  # told to submit: it submits
         function, arguments = (calls[turn] if turn < len(calls) else
                                END[(turn - len(calls)) % 2] if calls is script else
                                calls[-1])

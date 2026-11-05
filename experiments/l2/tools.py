@@ -202,7 +202,8 @@ class Tools:
         try:
             args = self._admit(name, args, by)
             if name == "request_review":  # it runs the reviewer: see reviewed_call
-                raise Refused("refused: this audit has no reviewer")
+                raise Refused("refused: request_review needs the reviewer, which runs only "
+                              "inside the L2 agent")
             ok, text = True, getattr(self, name)(**args)
         except Exception as error:
             ok, text = False, _failure(error)
@@ -219,10 +220,16 @@ class Tools:
         try:
             args = self._admit("request_review", args, "l2")
             draft = self._draft(**args)
-            text, ok = self._record_review(seq, draft, await reviewer(self, draft)), True
-        except Exception as error:
+        except Exception as error:  # nothing was reviewed: L2 can fix its draft
             ok, text = False, _failure(error)
-        return ok, text, self._trace("request_review", args, ok, text, seq)
+            return ok, text, self._trace("request_review", args, ok, text, seq)
+        try:
+            found = await reviewer(self, draft)
+        except Exception as error:  # recorded as a review, so the audit can still end
+            found = {"critique": "", "calls": [], "cost_usd": 0.0,
+                     "stopped": f"the reviewer failed: {type(error).__name__}: {error}"}
+        text = self._record_review(seq, draft, found)
+        return True, text, self._trace("request_review", args, True, text, seq)
 
     def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
         """The call's arguments if it may run now; ``Refused`` if not."""
@@ -235,8 +242,7 @@ class Tools:
         if by != "reviewer":
             if self.review is not None and name in (*MAKES, "request_review"):
                 raise Refused("refused: the review is done, so the audit can only end now: "
-                              "revise your claims and conclusions and call end_audit (the "
-                              "query tools still work)")
+                              "revise your claims and conclusions and call end_audit")
             stopped = self.audit.stopped
             if stopped and name not in FREE:
                 raise Refused(f"refused: {stopped}. Only budget, request_review and end_audit "
@@ -794,7 +800,7 @@ class Tools:
             "Now revise once and end the audit: call end_audit with your final conclusions "
             "and claims, and with response: what you changed in answer to the review and "
             "why, or why you kept a point as it was. No new experiment or scenario can be "
-            "made now; the query tools still work."])
+            "made now."])
 
     def _save_review(self) -> None:
         (self.audit.out / "review.json").write_text(
@@ -1018,8 +1024,9 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             tools.audit.set_l2_spend(spend())
         except Exception as error:  # e.g. no price for L2's model: never run blind
             if name != "end_audit":
-                text = (f"refused: L2's own spend cannot be read ({error}); call "
-                        "end_audit with your conclusions.")
+                text = (f"refused: L2's own spend cannot be read ({error}); "
+                        + ("submit your critique." if by == "reviewer" else
+                           "call end_audit with your conclusions."))
                 seq = tools._trace(name, args, False, text, by=by)
                 raise ToolError(f"[call {seq}] {text}") from error
 

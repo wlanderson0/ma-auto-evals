@@ -169,10 +169,8 @@ def token_backstop(budget_usd: float, model: str,
 
 
 def brief_lines(tools: Tools) -> list[str]:
-    """The brief as L2 and the reviewer are shown it: the question, what the brief fixes
-    and the budget."""
-    audit = tools.audit
-    brief = audit.brief
+    """The brief as L2 and the reviewer are shown it: the question and what it fixes."""
+    brief = tools.audit.brief
     lines = ["# The brief", "", brief.question.strip(), ""]
     for name in ("mode", "measure", "base_scenarios", "allowed_changes"):
         if (value := getattr(brief, name)) is not None:
@@ -182,13 +180,6 @@ def brief_lines(tools: Tools) -> list[str]:
     if brief.hypotheses is not None:
         lines.append("- hypotheses (starting points you may refine or replace): "
                      + "; ".join(brief.hypotheses))
-    lines.append(f"- budget: ${brief.budget_usd:.2f} for everything, your own calls "
-                 f"included; {audit.reserve:.0%} is held back for your final calls")
-    if brief.run_budget_usd is not None:
-        lines.append(f"- run budget: at most ${brief.run_budget_usd:.2f} of it on runs "
-                     "(your own calls are not counted in it); once it is reached no new "
-                     "experiment or epoch starts (an epoch already running finishes), but "
-                     "the query tools still work")
     return lines
 
 
@@ -199,11 +190,18 @@ def brief_message(tools: Tools) -> str:
     audit = tools.audit
     brief = audit.brief
     lines = brief_lines(tools)
+    lines.append(f"- budget: ${brief.budget_usd:.2f} for everything, your own calls "
+                 f"included; {audit.reserve:.0%} is held back for your final calls")
+    if brief.run_budget_usd is not None:
+        lines.append(f"- run budget: at most ${brief.run_budget_usd:.2f} of it on runs "
+                     "(your own calls are not counted in it); once it is reached no new "
+                     "experiment or epoch starts (an epoch already running finishes), but "
+                     "the query tools still work")
     if audit.analysis is not None:
         lines += ["", "This audit is analysis only: you cannot run experiments. Read the "
                   "runs already made with the query tools."]
         return "\n".join(lines)
-    bases =tuple(SCENARIOS) if brief.base_scenarios is None else brief.base_scenarios
+    bases = tuple(SCENARIOS) if brief.base_scenarios is None else brief.base_scenarios
     lines += ["", "# The setup", ""]
     if bases:
         lines += ["The scenarios you can start from, as they run before any change. In each, "
@@ -398,6 +396,8 @@ REVIEW_MESSAGES = 60
 """A backstop on the reviewer's conversation length."""
 REVIEW_CONTINUE = ("Check what matters with the tools, then call submit_review with your "
                    "critique.")
+REVIEW_LAST = ("You have reached your share of the budget: call submit_review now with your "
+               "critique of what you have checked.")
 
 
 def review_message(tools: Tools, draft: Mapping[str, Any]) -> str:
@@ -415,12 +415,11 @@ def review_message(tools: Tools, draft: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def reviewer(model: str | Model | None = None,
-             prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[..., Any]:
+def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[..., Any]:
     """The reviewer ``request_review`` runs (``Tools.reviewed_call``): a ``react`` agent on
-    ``model`` (default: L2's own) inside L2's sample, so its calls are in L2's log and
-    ledger, with the query tools only. It stops at ``REVIEW_SHARE`` of what is left of
-    the budget, or at the end of the budget."""
+    L2's own model inside L2's sample, so its calls are in L2's log and ledger, with the
+    query tools only. It stops at ``REVIEW_SHARE`` of what is left of
+    the budget (after one last turn to submit what it has)."""
     async def review(tools: Tools, draft: dict[str, Any]) -> dict[str, Any]:
         audit = tools.audit
         start, first = audit.l2["usd"], tools._seq
@@ -437,12 +436,14 @@ def reviewer(model: str | Model | None = None,
                 why.append(f"its spend could not be read: {error}")
                 return False
             if audit.l2["usd"] - start >= cap - EPSILON:
+                if why:  # it had its last turn
+                    return False
                 why.append(f"it reached its share of the budget (${cap:.4f}, half of what "
                            "was left when it started)")
-                return False
+                return REVIEW_LAST
             return True if state.output.message.tool_calls else REVIEW_CONTINUE
 
-        agent = react(name="reviewer", prompt=REVIEWER_PROMPT, model=_model(model),
+        agent = react(name="reviewer", prompt=REVIEWER_PROMPT,
                       tools=inspect_tools(tools, spend=spend, by="reviewer"),
                       submit=AgentSubmit(name="submit_review", answer_only=True,
                                          description="Submit your critique of L2's draft."),
@@ -511,18 +512,17 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
 
 def run_l2(tools: Tools, model: str | Model, prompt: str, *,
            prices: Mapping[str, tuple[float, float]] = PRICES,
-           token_limit: int | None = None, time_limit: int | None = None,
-           review_model: str | Model | None = None) -> EvalLog:
+           token_limit: int | None = None, time_limit: int | None = None) -> EvalLog:
     """Run L2 over ``tools.audit`` to the end, then ``finalize``. Without a
     ``token_limit``, the backstop is the budget's worth of the model's tokens. The
-    reviewer runs on ``review_model``, by default L2's own."""
+    reviewer runs on L2's model."""
     if token_limit is None:
         try:
             token_limit = token_backstop(tools.audit.brief.budget_usd, str(model), prices)
         except UnknownPrice:
             token_limit = None  # the ledger then stops L2 at its first tool call
     task = l2_task(tools, prompt, prices=prices, token_limit=token_limit,
-                   time_limit=time_limit, review=reviewer(review_model, prices))
+                   time_limit=time_limit, review=reviewer(prices))
     model = _model(model)
     tools.stop_reason = None
     if time_limit is not None:  # experiments stop starting epochs when L2's time is up

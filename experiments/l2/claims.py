@@ -337,12 +337,13 @@ def _launch_seqs(tools: Tools) -> dict[str, int]:
 
 
 def _all_scores(tools: Tools) -> list[dict[str, Any]]:
-    """The args of every successful scores call with against in the audit."""
+    """The args of every successful scores call with against L2 made (the reviewer's
+    checks are not L2's search, so they do not change its corrections)."""
     from experiments.l2.tools import _ids
 
     return [{**row["args"], "variant_ids": _ids(row["args"].get("variant_ids") or [])}
             for row in tools.trace() if row.get("tool") == "scores" and row.get("ok")
-            and (row.get("args") or {}).get("against")]
+            and (row.get("args") or {}).get("against") and row.get("by") != "reviewer"]
 
 
 def _figures(text: str, own: Sequence[tuple[int, int]]) -> list[str]:

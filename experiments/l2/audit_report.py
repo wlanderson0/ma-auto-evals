@@ -112,7 +112,8 @@ def proposals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     audit = tools.audit
     brief = audit.brief
-    trace = tools.trace()
+    everything = tools.trace()
+    trace = [row for row in everything if row.get("by") != "reviewer"]  # L2's own search
     out = [f"# L2 audit report: {audit.out.name}", ""]
     status = ("ended by L2 (end_audit)" if tools.conclusions is not None else
               f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}")
@@ -208,7 +209,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     ok_compares = sum(bool(row.get("ok")) and (row.get("tool") == "compare" or (
         row.get("tool") == "scores" and bool(row["args"].get("against")))) for row in trace)
     failed = sum(not row.get("ok") for row in trace)
-    by_reviewer = sum(row.get("by") == "reviewer" for row in trace)
+    by_reviewer = len(everything) - len(trace)
     with_epochs = sum(1 for r in launched if r.get("spent_usd") or any(
         v["epochs"] for v in variants if v["experiment"] == r["experiment"]))
     out += ["## Search counts (from the record)", "",
@@ -220,9 +221,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"- Comparisons tried: {len(compares)} distinct ({ok_compares} successful calls)",
             f"- Transcripts read: {calls['transcript']}; searches: {calls['find']}; "
             f"code runs: {calls['run_python']} (the code and its output are in trace.jsonl)",
-            f"- Tool calls: {len(trace)} ({failed} refused or failed"
-            + (f"; {by_reviewer} by the reviewer, counted above too" if by_reviewer else "")
-            + ")", ""]
+            f"- Tool calls: {len(trace)} ({failed} refused or failed)"
+            + (f", and {by_reviewer} by the reviewer (not counted above)" if by_reviewer
+               else ""), "",
+            "These count L2's own calls; the reviewer's are listed under Review.", ""]
 
     out += ["## Departures from the reading guidance (automatic checks)", ""]
     notes = []
