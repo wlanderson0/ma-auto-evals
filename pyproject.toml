@@ -9,6 +9,9 @@ dependencies = [
     "inspect-ai>=0.3.263,<0.4",
     "pydantic>=2",
     "anyio>=4,<5",
+    "pyyaml>=6",
+    "pandas>=3.1.0",
+    "markdown-it-py>=3",
 ]
 
 [dependency-groups]
@@ -53,6 +56,8 @@ timeout = 120
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# Scenario code L2 wrote, kept byte for byte (its hash is in the record).
+extend-exclude = ["experiments/l2/briefs/*/scenarios"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

@@ -114,19 +114,33 @@ def mention_counts(pattern: str | None, agent: str, posts: list[dict]) -> dict:
                    and agent in (m.get("recipients") or [])
                    and count_mentions(pattern, [m["content"]])[0])
     copied, raw, original, channels = [], 0, 0, Counter()
-    for i, m in enumerate(posts):
-        if m["sender"] != agent:
-            continue
-        earlier = [o["content"] for o in posts[:i] if o["sender"] != agent]
-        share = copied_share(m["content"], earlier)
-        hits = count_mentions(pattern, [m["content"]])[0]
-        copied.append(share >= COPY_THRESHOLD)
+    for m, hits, is_copy in _own_posts(pattern, agent, posts):
+        copied.append(is_copy)
         raw += hits
-        if hits and share < COPY_THRESHOLD:
+        if hits and not is_copy:
             original += hits
             channels[m["channel_id"]] += 1
     return {"exposure": exposure, "mentions": raw, "own_mentions": original,
             "copied_posts": sum(copied), "copied": copied, "mention_channels": dict(channels)}
+
+
+def _own_posts(pattern: str | None, agent: str, posts: list[dict]):
+    """Each of ``agent``'s posts with its raw uses of ``pattern`` and whether it copies
+    an earlier post by another agent."""
+    for i, m in enumerate(posts):
+        if m["sender"] != agent:
+            continue
+        earlier = [o["content"] for o in posts[:i] if o["sender"] != agent]
+        yield (m, count_mentions(pattern, [m["content"]])[0],
+               copied_share(m["content"], earlier) >= COPY_THRESHOLD)
+
+
+def own_mentions_by_post(pattern: str | None, agent: str,
+                         posts: list[dict]) -> list[tuple[dict, int]]:
+    """Each of ``agent``'s posts with its uses of ``pattern`` in its own words: the
+    same copy exclusion as ``mention_counts`` (a post copying an earlier post by
+    another agent counts 0), so the hits sum to its ``own_mentions``."""
+    return [(m, 0 if is_copy else hits) for m, hits, is_copy in _own_posts(pattern, agent, posts)]
 
 
 def mention_fields(pattern: str | None, counted: dict, answers: dict[str, str]) -> dict:
