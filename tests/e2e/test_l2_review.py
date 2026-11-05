@@ -125,7 +125,7 @@ def test_after_the_review_l2_only_revises(tmp_path):
     tools still work."""
     tools = reviewing(tmp_path)
     assert anyio.run(lambda: tools.reviewed_call(stub(), **DRAFT))[0]
-    for name, args in (("run_experiment", {"variants": "[]", "epochs": 1}),
+    for name, args in (("run_experiment", {"variants": "[]", "epochs": 1, "rationale": "a test launch"}),
                        ("write_scenario", {"name": "x", "code": "pass"})):
         ok, text = tools.call(name, **args)
         assert not ok and "the review is done" in text, name
@@ -233,7 +233,7 @@ def test_the_reviewer_s_comparisons_are_not_l2_s_search(tmp_path):
             for op in ("add_reader", "add_writer")]
     v1 = {"id": "V1", "control": "M0", "rationale": "Dave on #town", "mutations": dave}
     v2 = {"id": "V2", "control": "M0", "rationale": "the same again", "mutations": dave}
-    assert tools.call("run_experiment", variants=[c0, v1, v2], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[c0, v1, v2], epochs=1, rationale="a test")[0]
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
     ok, _, seq = tools.numbered_call("scores", "reviewer", variant_ids=["V2"], against="C0",
                                      scorer="probe")

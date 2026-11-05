@@ -102,7 +102,7 @@ def test_a_minimal_brief_is_accepted_and_shown_the_setup_and_every_change(tmp_pa
         assert f"- {axis}/{op} {help}" in text
     ok, result = tools.call("run_experiment", epochs=1, variants=[{
         "id": "B1", "base": "mfa_rumor", "rationale": "r",
-        "inner": {"condition": "scripted", "opening": [["town", "MFA is off this week."]]}}])
+        "inner": {"condition": "scripted", "opening": [["town", "MFA is off this week."]]}}], rationale="a test launch")
     assert ok, result
 
 

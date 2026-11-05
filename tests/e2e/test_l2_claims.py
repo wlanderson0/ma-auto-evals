@@ -24,7 +24,7 @@ from tests.e2e.test_l2_tools import C0, V1, lines, new
 def tools(tmp_path_factory, offline_module):
     tools = new(tmp_path_factory.mktemp("claims"))
     assert tools.numbered_call("run_experiment", variants=json.dumps([C0, V1]),
-                               epochs=2)[2] == 1
+                               epochs=2, rationale="a test launch")[2] == 1
     assert tools.numbered_call("scores", variant_ids=["V1"], against="C0")[2] == 2
     assert tools.numbered_call("transcript", variant_id="V1", epoch=1)[2] == 3
     ok, _, seq = tools.numbered_call("transcript", variant_id="V9", epoch=1)
@@ -159,7 +159,7 @@ def test_without_a_fixed_measure_a_difference_is_a_lead_unless_recorded_first(
     patched(monkeypatch, 6, 0)
     claim = {"text": "Dave adopts more in V1.", "kind": "difference", "a": "V1", "b": "C0",
              "target": "dave", "direction": "higher", "evidence": [{"call": 3}]}
-    assert tools.numbered_call("run_experiment", variants=[C0, V1], epochs=1)[0]
+    assert tools.numbered_call("run_experiment", variants=[C0, V1], epochs=1, rationale="a test launch")[0]
     tools.call("note_decision", field="measure", value="probe NOT_REQUIRED", reason="r")
     assert tools.numbered_call("scores", variant_ids=["V1"], against="C0",
                                scorer="probe")[2] == 3
@@ -167,7 +167,7 @@ def test_without_a_fixed_measure_a_difference_is_a_lead_unless_recorded_first(
     assert late["verdict"] == "lead" and "chose probe itself" in late["reasons"][-1]
     # recorded before a fresh experiment: its runs confirm the measure
     assert tools.numbered_call("run_experiment", epochs=1, variants=[
-        {**C0, "id": "C1"}, {**V1, "id": "V2"}])[0]
+        {**C0, "id": "C1"}, {**V1, "id": "V2"}], rationale="a test launch")[0]
     assert tools.numbered_call("scores", variant_ids=["V2"], against="C1",
                                scorer="probe")[2] == 5
     fresh = one(tools, **{**claim, "a": "V2", "b": "C1", "evidence": [{"call": 5}]})
@@ -176,7 +176,7 @@ def test_without_a_fixed_measure_a_difference_is_a_lead_unless_recorded_first(
 
 def test_end_audit_refuses_bad_claims_and_saves_the_verdicts(tmp_path, offline_module):
     tools = new(tmp_path)
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=1, rationale="a test launch")[0]
     assert tools.call("scores", variant_ids=["V1"], against="C0")[0]
     ok, text = tools.call("end_audit", conclusions="c", claims=[{**NO_DIFF,
                                                                 "evidence": [{"call": 9}]}])
@@ -254,7 +254,7 @@ def test_the_recorded_measure_must_name_the_scorer_exactly(tmp_path, offline_mod
     patched(monkeypatch, 6, 0)
     assert tools.call("note_decision", field="measure", value=value, reason="r")[0]
     assert tools.call("run_experiment", epochs=1, variants=[
-        {**C0, "id": ids[0]}, {**V1, "id": ids[1]}])[0]
+        {**C0, "id": ids[0]}, {**V1, "id": ids[1]}], rationale="a test launch")[0]
     assert tools.numbered_call("scores", variant_ids=["V1"], against="C0",
                                scorer="probe")[2] == 3
     checked = one(tools, text="Dave adopts more in V1.", kind="difference", a="V1", b="C0",
@@ -294,7 +294,7 @@ def test_the_correction_counts_every_variant_compared_with_the_control(
         tmp_path, offline_module, monkeypatch):
     tools = new(tmp_path)
     assert tools.call("run_experiment", epochs=1, variants=[
-        C0, V1, {**V1, "id": "V2", "rationale": "again"}])[0]
+        C0, V1, {**V1, "id": "V2", "rationale": "again"}], rationale="a test launch")[0]
     assert tools.numbered_call("scores", variant_ids=["V1"], against="C0")[2] == 2
     assert tools.numbered_call("scores", variant_ids=["V2"], against="C0")[2] == 3
     patched(monkeypatch, 6, 1)  # p = 0.015: under 0.05 / 3, not under 0.05 / 6
@@ -308,5 +308,5 @@ def test_a_launch_of_a_single_variant_object_counts_for_the_measure(
     from experiments.l2.claims import _launch_seqs
 
     tools = new(tmp_path)
-    assert tools.call("run_experiment", variants=json.dumps(C0), epochs=1)[0]
+    assert tools.call("run_experiment", variants=json.dumps(C0), epochs=1, rationale="a test launch")[0]
     assert _launch_seqs(tools) == {"C0": 1}

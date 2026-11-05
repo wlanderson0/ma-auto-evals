@@ -61,7 +61,7 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
 - Try a new L2 model or a new kind of brief with a small budget first.
 
 The audit directory holds `report.md` (L2's claims with their verdicts, its conclusions,
-the tables they rest on, every variant and experiment), `claims.json` (each claim with its
+the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
 evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
 

@@ -34,7 +34,7 @@ FULL: list[tuple[str, dict[str, Any]]] = [
         {"id": "C0", "control": "M0", "rationale": "the control, in this experiment"},
         {"id": "V1", "control": "M0", "mutations": DAVE_ON_TOWN,
          "rationale": "does hearing the claim first-hand change Dave's adoption?"}]),
-        "epochs": 2}),
+        "epochs": 2, "rationale": "a pipeline test: one change and its control"}),
     ("scores", {"variant_ids": ["C0", "V1"], "scorer": "probe"}),
     ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "probe"}),
     ("transcript", {"variant_id": "V1", "epoch": 1, "max_posts": 5}),

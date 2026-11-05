@@ -93,7 +93,7 @@ def test_output_that_is_not_utf8_is_still_returned(tmp_path):
 
 def test_code_reads_the_audits_logs_with_inspect_and_pandas(tmp_path, offline_module):
     tools = new(tmp_path)
-    assert tools.call("run_experiment", variants=[C0], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")[0]
     code = """
 import json, os
 from pathlib import Path

@@ -297,7 +297,9 @@ If a comparison of setups uses either of these, the report says that the seat's 
 
 ## 5. Running
 
-`run_experiment(variants, epochs, confirm=False)` (the L2 tool) launches one **experiment**: it builds every variant (`apply`), checks it (§3.4) and, if none is rejected, runs them in a new directory of the audit, `experiments/exp-<n>` (`experiments.l2.experiment`). Scenarios L2 writes itself (§3.5) run through the same path.
+`run_experiment(variants, epochs, rationale, confirm=False)` (the L2 tool) launches one **experiment**: it builds every variant (`apply`), checks it (§3.4) and, if none is rejected, runs them in a new directory of the audit, `experiments/exp-<n>` (`experiments.l2.experiment`). Scenarios L2 writes itself (§3.5) run through the same path.
+
+- **Rationale:** required, and refused if empty: what the last results showed (for the first experiment, what L2 starts from) and why this experiment comes next. It explains the step between experiments, where each variant's own `rationale` (§3.1) explains why that variant is in it. It is recorded with the launch in `launches.jsonl` whatever came of it (refused and rejected launches included) and in the experiment's `brief.md`, and the report shows it above the experiment's variants and their rationales, so the search can be read in order.
 
 - **One epoch at a time:** each epoch is one subprocess making one `inspect_eval` call over all the variants' tasks, so variants within an epoch run in parallel and every variant gets epoch _e_ before any gets _e + 1_;
 - **unique names:** each built scenario is named `<base>--<variant id>`, so variants of one base never overwrite each other's logs;
@@ -330,7 +332,7 @@ L2's tools (`experiments/l2/tools.py`):
 
 | Tool | Does |
 | --- | --- |
-| `run_experiment(variants, epochs, confirm)` | builds, checks and runs an experiment (§5); a variant may name one of the brief's `controls` |
+| `run_experiment(variants, epochs, rationale, confirm)` | builds, checks and runs an experiment (§5), with L2's reason for running it next; a variant may name one of the brief's `controls` |
 | `write_scenario(name, code)` | checks, dry-runs and saves a scenario (§3.5) |
 | `list_runs()` | every variant run so far: experiment, base, condition, changes, status, epochs, cost, warnings |
 | `scores(variant_ids, scorer, against, rounds, field)` | per-target score table across epochs (incomplete shown as such); with `against`, each variant is also compared with it: k of n per target, the difference, Fisher's exact test and the reading-guidance checks (§6.3). Left out, `scorer` is the brief's measure |
@@ -454,13 +456,13 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 **Recording.** One directory per L2 audit, containing:
 
 - `brief.md`, the brief as given, and `decisions.jsonl`, what L2 decided for what the brief left open (mode, measure…), with its reasons;
-- `proposed.jsonl`, every variant L2 proposed, rejected ones too, with its rationale, problems and warnings, and `launches.jsonl`, every launch and what came of it;
+- `proposed.jsonl`, every variant L2 proposed, rejected ones too, with its rationale, problems and warnings, and `launches.jsonl`, every launch, with L2's rationale for the experiment (§5), and what came of it;
 - `scenarios/`, the code of every scenario L2 wrote, with its hash (§3.5);
 - `trace.jsonl`, every tool call with its arguments, result (shortened) and the result's hash, including the code L2 ran on the logs;
 - `experiments/exp-<n>/`, one per launch: its variants, `runs.jsonl` (with the eval log paths), `decisions.json`, `cost.json` and the eval logs;
 - `ledger.json`, the budget ledger (§7), and `l2/`, L2's own Inspect log;
 - `claims.json`, L2's claims with their verdicts (§6.4), and `review.json`, the reviewer's critique of L2's draft and L2's response (§6.5);
-- `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the review, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
+- `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the review, each experiment's rationale with its variants and theirs, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
 - once shared (§8.1): `cosmos-runs.json`, `cosmos.json` and `cosmos/`.
 
 **Not built yet:** inner briefs (with inner L1), every scorer with its prompt (§6.3), and comments and tags (`annotations.jsonl`, §6.2).
@@ -595,6 +597,7 @@ Contract tests for L2, in the style of `auditor-tests.md`. Each is cited by numb
 | L2-19 | Comments and tags round-trip (*not built*)    | Comments and tags written by L2 or a person are read back with author and time, on all four target kinds, and sync to Cosmos comments. |
 | L2-20 | Every claim is checked against the record     | `end_audit` refuses a claim citing a call or post that does not exist; every recorded claim has a verdict and reasons read from the logs, and a claim the logs contradict (wrong k/n, wrong direction, a quote not in its post, an auditor-written post as a target's) is never *checked*. |
 | L2-21 | The review comes before the end               | With a reviewer, `end_audit` is refused until `request_review` has run, then needs a `response`; the reviewer is offered only the query tools and its calls are refused otherwise; after the review no experiment, scenario or second review starts; the reviewer stops at half of what was left; the draft, critique and response are in `review.json` and the report. |
+| L2-22 | Every experiment has a rationale              | A launch without a rationale is refused, and recorded; a launch's rationale, refused or rejected ones included, is in `launches.jsonl`, and a run experiment's in its `brief.md` and in the report above its variants. |
 
 (L2-4, "scorers cover all compared runs", was dropped: it is now guidance, §6.3.)
 

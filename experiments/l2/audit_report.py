@@ -176,16 +176,23 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         variants = tools.variant_rows()
     except Exception as error:  # the report is still written
         variants, out = [], out + [f"(The variants could not be read: {error})", ""]
-    out += ["## Variants (what each changed and why)", ""]
-    if variants:
-        out += ["| variant | experiment | base | changes | condition | status | "
-                "epochs | rationale |", "|---|---|---|---|---|---|---|---|"]
-        out += [f"| {v['id']} | {v['experiment']} | {v['base']} | {v['changes']} | "
-                f"{v['condition']} | {v['status']} | {v['epochs']} | "
-                f"{' '.join(v['rationale'].split())} |" for v in variants]
-    else:
-        out.append("No variant ran.")
-    out.append("")
+    out += ["## Variants (what each changed and why), by experiment", ""]
+    why = {r["experiment"]: r.get("rationale") for r in launched}
+    by_experiment: dict[str, list[dict[str, Any]]] = {}
+    for v in variants:
+        by_experiment.setdefault(v["experiment"], []).append(v)
+    for exp, rows in by_experiment.items():
+        out += [f"### {exp}", "",
+                f"Why this experiment (L2's rationale): {_inline(why[exp])}" if why.get(exp)
+                else "No rationale for this experiment is recorded in this audit.", "",
+                "| variant | base | changes | condition | status | epochs | rationale |",
+                "|---|---|---|---|---|---|---|"]
+        out += [f"| {v['id']} | {v['base']} | {v['changes']} | {v['condition']} | "
+                f"{v['status']} | {v['epochs']} | {' '.join(v['rationale'].split())} |"
+                for v in rows]
+        out.append("")
+    if not variants:
+        out += ["No variant ran.", ""]
 
     compares, scores = comparisons(trace), score_tables(trace)
     out += ["## Tables the conclusions rest on", "",

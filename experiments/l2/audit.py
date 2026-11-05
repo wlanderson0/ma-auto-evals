@@ -6,7 +6,7 @@ One directory per audit::
     <audit>/
       brief.md                the brief as given
       ledger.json             spend by kind, reserve, remaining (rewritten on every change)
-      launches.jsonl          every launch L2 asked for and what came of it
+      launches.jsonl          every launch L2 asked for, with its rationale, and what came of it
       experiments/exp-<n>/    one milestone 1 audit directory per launch
       scenarios/              the scenarios L2 wrote: <name>.py and <name>.sha256
 
@@ -258,9 +258,11 @@ class Audit:
                 rejections=(*extra, *problems.rejections), warnings=problems.warnings)))
         return checked
 
-    def launch(self, variants: Sequence[Variant], epochs: int,
-               confirm: bool = False) -> dict[str, Any]:
-        """Check, gate and run one experiment (``experiments/exp-<n>``).
+    def launch(self, variants: Sequence[Variant], epochs: int, confirm: bool = False,
+               rationale: str | None = None) -> dict[str, Any]:
+        """Check, gate and run one experiment (``experiments/exp-<n>``). ``rationale`` is
+        required: what the last results showed and why this experiment comes next; it is
+        recorded with the launch, whatever came of it.
 
         ``status``: ``refused`` (audit ended, analysis only, hard stop, bad arguments),
         ``rejected`` (a variant failed its checks: nothing ran), ``needs_confirmation``
@@ -268,8 +270,9 @@ class Audit:
         ``failed`` (an epoch failed; finished epochs are kept). A launch that ran or
         failed uses up its variant ids, even with no epoch done."""
         result: dict[str, Any] = {"ids": [v.id for v in variants], "epochs": epochs,
-                                  "confirm": confirm, "experiment": None, "variants": []}
-        refused = self._refusal(variants, epochs)
+                                  "confirm": confirm, "rationale": rationale,
+                                  "experiment": None, "variants": []}
+        refused = self._refusal(variants, epochs, rationale)
         if refused:
             return self._finish(result, "refused", refused)
 
@@ -309,7 +312,7 @@ class Audit:
         history = [*self.history, *self.experiments()]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "brief.md"
-            path.write_text(self.experiment_brief(n, variants, available))
+            path.write_text(self.experiment_brief(n, variants, available, rationale))
             try:
                 m1.run_experiment(path, epochs, exp, mock=self.mock, confirm=confirm,
                                   history=history, launch=self.launch_epoch,
@@ -331,13 +334,13 @@ class Audit:
         return self._finish(result, status, reason)
 
     def record_rejection(self, rows: Sequence[tuple[str, Sequence[str]]], epochs: Any,
-                         confirm: bool) -> dict[str, Any]:
+                         confirm: bool, rationale: Any = None) -> dict[str, Any]:
         """Record a launch the tools rejected before it became variants (e.g. a JSON
         variant naming an unknown control), as ``launch`` records its own rejections. ``rows``:
         each proposed variant's name and rejections (none for one that passed)."""
         result: dict[str, Any] = {
             "ids": [name for name, _ in rows], "epochs": epochs, "confirm": confirm,
-            "experiment": None,
+            "rationale": rationale, "experiment": None,
             "variants": [{"id": name, "status": "rejected" if found else "accepted",
                           "rejections": list(found), "warnings": []} for name, found in rows]}
         return self._finish(result, "rejected", "a variant failed its checks, so nothing ran")
@@ -347,7 +350,8 @@ class Audit:
             return None
         return "L2's time limit is reached"
 
-    def _refusal(self, variants: Sequence[Variant], epochs: int) -> str | None:
+    def _refusal(self, variants: Sequence[Variant], epochs: int,
+                 rationale: Any) -> str | None:
         if self.ended:
             return "the audit has ended"
         if self.analysis is not None:
@@ -365,6 +369,9 @@ class Audit:
             return f"epochs must be a whole number >= 1, not {epochs!r}"
         if not variants:
             return "no variants to run"
+        if not isinstance(rationale, str) or not rationale.strip():
+            return ("rationale is required: what the last results showed (or, for the first "
+                    "experiment, what you start from) and why this experiment comes next")
         return None
 
     def _finish(self, result: dict[str, Any], status: str,
@@ -375,17 +382,19 @@ class Audit:
         self._append("launches.jsonl", {
             "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             **{k: result.get(k) for k in ("status", "reason", "ids", "epochs", "confirm",
-                                          "experiment", "available_usd", "stopped",
-                                          "spent_usd")},
+                                          "rationale", "experiment", "available_usd",
+                                          "stopped", "spent_usd")},
             "estimate": result.get("estimate"),
             "rejections": [[v["id"], v["rejections"]] for v in result["variants"]
                            if v.get("rejections")],
             "remaining_usd": result["budget"]["remaining_usd"]})
         return result
 
-    def experiment_brief(self, n: int, variants: Sequence[Variant], available: float) -> str:
+    def experiment_brief(self, n: int, variants: Sequence[Variant], available: float,
+                         rationale: str) -> str:
         """The per-launch brief milestone 1 runs: these variants, and what is available for
-        experiments as its budget (so its between-epoch check is the audit's hard stop)."""
+        experiments as its budget (so its between-epoch check is the audit's hard stop),
+        with L2's rationale for the experiment."""
         header: dict[str, Any] = {"budget_usd": available}
         if self.brief.mode is not None:
             header["mode"] = self.brief.mode
@@ -395,7 +404,8 @@ class Audit:
             f"Experiment {n} of the L2 audit {self.out.name}. budget_usd is what was "
             f"available for experiments at launch (the audit's budget less its spend and "
             f"reserve, or what was left of its run budget if that was less).\n\n"
-            f"The audit's question:\n\n{self.brief.question}\n")
+            f"The audit's question:\n\n{self.brief.question}\n\n"
+            f"Why this experiment (L2's rationale):\n\n{rationale.strip()}\n")
 
 
 def _json(path: Path) -> dict[str, Any]:

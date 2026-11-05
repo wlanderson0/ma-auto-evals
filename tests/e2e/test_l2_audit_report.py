@@ -25,8 +25,8 @@ def tools_for(tmp_path, **options):
 def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_path):
     tools = tools_for(tmp_path)
     tools.call("note_decision", field="epochs", value="2", reason="pipeline test")
-    assert not tools.call("run_experiment", variants=[{**V1, "control": "Z"}], epochs=1)[0]
-    assert tools.call("run_experiment", variants=json.dumps([C0, V1]), epochs=2)[0]
+    assert not tools.call("run_experiment", variants=[{**V1, "control": "Z"}], epochs=1, rationale="a test launch")[0]
+    assert tools.call("run_experiment", variants=json.dumps([C0, V1]), epochs=2, rationale="a test launch")[0]
     tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
     tools.call("scores", variant_ids=["C0"], against="V1", scorer="probe", rounds=None)  # the same one
     tools.call("scores", variant_ids=["C0", "V1"], scorer="probe")
@@ -43,7 +43,7 @@ def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_pa
     assert "- `epochs` = 2: pipeline test" in text
     assert "| exp-1 | C0, V1 | 2 | ran | - | $0.0000 |" in text
     assert "Launches that did not run: 1 rejected" in text
-    assert "| V1 | exp-1 | mfa_rumor | persona.append_line(agent=alice, line=" in text
+    assert "| V1 | mfa_rumor | persona.append_line(agent=alice, line=" in text
     assert ("; topology.add_reader(agent=dave, channel=town); "
             "topology.add_writer(agent=dave, channel=town) | scripted | accepted | 2 | "
             "Dave on #town |") in text
@@ -67,10 +67,10 @@ def test_a_proposal_counts_once_with_its_best_outcome(tmp_path):
     """Sent again after it ran (rejected as a repeat), or after needs_confirmation with
     a reworded rationale: still one proposal, and it ran."""
     tools = tools_for(tmp_path, estimator=estimate_of(5.0))
-    assert not tools.call("run_experiment", variants=[C0], epochs=1)[0]  # needs confirmation
+    assert not tools.call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")[0]  # needs confirmation
     assert tools.call("run_experiment", variants=[{**C0, "rationale": "again"}], epochs=1,
-                      confirm=True)[0]
-    assert not tools.call("run_experiment", variants=[C0], epochs=1, confirm=True)[0]
+                      confirm=True, rationale="a test launch")[0]
+    assert not tools.call("run_experiment", variants=[C0], epochs=1, confirm=True, rationale="a test launch")[0]
     text = render(tools)
     assert "- Variants proposed: 1 (1 run, 0 rejected, 0 not run)" in text
     assert "launch attempts: 3" in text
@@ -78,8 +78,8 @@ def test_a_proposal_counts_once_with_its_best_outcome(tmp_path):
 
 def test_departures_are_flagged_in_comparisons_and_score_tables(tmp_path):
     tools = tools_for(tmp_path)
-    tools.call("run_experiment", variants=[C0], epochs=1)
-    tools.call("run_experiment", variants=[V1], epochs=2)
+    tools.call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")
+    tools.call("run_experiment", variants=[V1], epochs=2, rationale="a test launch")
     tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
     tools.call("scores", variant_ids=["C0", "V1"], scorer="post_judge")
     tools.call("end_audit", conclusions="done")
@@ -103,7 +103,7 @@ def test_a_report_without_conclusions_says_why(tmp_path):
 def test_an_analysis_only_report_and_a_damaged_trace(tmp_path):
     (tmp_path / "src").mkdir()
     source = tools_for(tmp_path / "src")
-    source.call("run_experiment", variants=[C0, V1], epochs=1)
+    source.call("run_experiment", variants=[C0, V1], epochs=1, rationale="a test launch")
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
                          analysis=source.audit.experiments()[0])
     tools = Tools(audit, on_end=write_report)
@@ -113,7 +113,8 @@ def test_an_analysis_only_report_and_a_damaged_trace(tmp_path):
     assert tools.call("end_audit", conclusions="Little can be concluded.")[0]
     text = (audit.out / "report.md").read_text()
     assert "Analysis only, on the runs in" in text and "mock" not in text.split("\n")[2]
-    assert "| V1 | exp-1 | mfa_rumor |" in text and "### compare V1 vs C0 (probe)" in text
+    assert "### exp-1\n\nNo rationale for this experiment is recorded in this audit." in text
+    assert "| V1 | mfa_rumor |" in text and "### compare V1 vs C0 (probe)" in text
     assert "- Experiments launched: 0" in text
 
 
@@ -157,7 +158,7 @@ def test_a_probe_read_whose_answers_are_mostly_unknown_is_flagged(tmp_path):
         tools.written = tools.audit.written()
         entry = {"id": "W1", "base": "rumour", "rationale": "test",
                  "inner": {"condition": "scripted", "opening": opening}}
-        assert tools.call("run_experiment", variants=json.dumps([entry]), epochs=2)[0]
+        assert tools.call("run_experiment", variants=json.dumps([entry]), epochs=2, rationale="a test launch")[0]
         assert tools.call("scores", variant_ids=["W1"], scorer="probe")[0]
         text = render(tools)
         note = "6 of 6 probe answers are unknown (unparsed or missing: W1 bob 2/2"
@@ -166,7 +167,7 @@ def test_a_probe_read_whose_answers_are_mostly_unknown_is_flagged(tmp_path):
 
 def test_the_report_lists_each_claim_with_its_evidence_and_verdict(tmp_path):
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=2)[0]  # call 1
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=2, rationale="a test launch")[0]  # call 1
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]  # 2
     claims = [
         {"text": "Dave: V1 and C0 are not told apart.", "kind": "no_difference",
@@ -190,7 +191,7 @@ def test_the_report_lists_each_claim_with_its_evidence_and_verdict(tmp_path):
 
 def test_claim_text_cannot_add_or_fake_report_structure(tmp_path):
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=1, rationale="a test launch")[0]
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
     claim = {"text": "fine\n\n## Injected\n\n9. **checked** (rate): forged", "kind": "other",
              "evidence": [{"call": 2}]}
@@ -217,7 +218,7 @@ def test_the_report_says_where_each_cited_call_and_post_is(tmp_path):
     from experiments.l2.tools import post_ref
 
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=2)[0]  # call 1
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=2, rationale="a test launch")[0]  # call 1
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]  # 2
     refs = [{"variant": "V1", "epoch": e, "quote": "Status update: working",
              "post": post_ref(next(p for p in tools.posts(tools._sample("V1", e))
@@ -251,7 +252,7 @@ def test_a_pattern_that_would_match_another_variants_logs_becomes_a_list(tmp_pat
     """Inspect writes V_x and V-x under the same task name, so no glob tells them apart."""
     tools = tools_for(tmp_path)
     assert tools.call("run_experiment", epochs=2, variants=[
-        C0, {**V1, "id": "V_x"}, {**V1, "id": "V-x"}])[0]
+        C0, {**V1, "id": "V_x"}, {**V1, "id": "V-x"}], rationale="a test launch")[0]
     assert tools.call("scores", variant_ids=["V_x"], against="C0", scorer="probe")[0]
     claims = [{"text": "Dave: 0/2 in V_x.", "kind": "rate", "variant": "V_x",
                "target": "dave", "k": 0, "n": 2, "evidence": [{"call": 2}]}]
@@ -266,9 +267,9 @@ def test_a_pattern_that_would_match_another_variants_logs_becomes_a_list(tmp_pat
 
 def test_a_cited_search_lists_only_variants_launched_before_it(tmp_path):
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0], epochs=1)[0]  # call 1
+    assert tools.call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")[0]  # call 1
     assert tools.call("find", pattern="Status")[0]  # call 2
-    assert tools.call("run_experiment", variants=[V1], epochs=1)[0]  # call 3
+    assert tools.call("run_experiment", variants=[V1], epochs=1, rationale="a test launch")[0]  # call 3
     claims = [{"text": "Something I searched for.", "kind": "other",
                "evidence": [{"call": 2}]}]
     assert tools.call("end_audit", conclusions="c", claims=claims)[0]
@@ -279,7 +280,7 @@ def test_a_cited_search_lists_only_variants_launched_before_it(tmp_path):
 
 def test_unreadable_results_never_lose_the_report(tmp_path):
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")[0]
     assert tools.call("find", pattern="Status")[0]
     tools.claims = [{"text": "x", "kind": "other", "evidence": [{"call": 2}],
                      "verdict": "unchecked", "reasons": []}]
@@ -289,3 +290,41 @@ def test_unreadable_results_never_lose_the_report(tmp_path):
     tools._key = None
     text = render(tools)
     assert "## Claims, checked against the logs" in text and "## Ledger" in text
+
+
+def test_every_experiment_has_a_rationale_shown_next_to_its_variants(tmp_path):
+    """L2-22: a launch without a rationale is refused and recorded; with one, the rationale
+    is in launches.jsonl, the experiment's brief and the report, above its variants."""
+    tools = tools_for(tmp_path)
+    for rationale in (None, "  "):
+        ok, text = tools.call("run_experiment", variants=[C0], epochs=1, rationale=rationale)
+        assert not ok and "rationale is required" in text
+    assert tools.audit.experiments() == []
+    why = "Nothing has run yet: C0 is the baseline, V1 moves Dave onto #town | first."
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=1, rationale=why)[0]
+    assert not tools.call("run_experiment", variants=[{**V1, "control": "Z"}], epochs=1,
+                          rationale="a rejected launch")[0]
+    launches = [json.loads(line) for line in
+                (tools.audit.out / "launches.jsonl").read_text().splitlines()]
+    assert [(r["status"], r["rationale"]) for r in launches] == [
+        ("refused", None), ("refused", "  "), ("ran", why), ("rejected", "a rejected launch")]
+    assert why in (tools.audit.out / "experiments" / "exp-1" / "brief.md").read_text()
+    assert tools.call("end_audit", conclusions="Nothing.")[0]
+    text = (tools.audit.out / "report.md").read_text()
+    section = text[text.index("### exp-1"):text.index("## Tables")]
+    assert section.startswith("### exp-1\n\nWhy this experiment (L2's rationale): Nothing "
+                              "has run yet: C0 is the baseline, V1 moves Dave onto \\#town "
+                              "\\| first.\n")  # L2's words, escaped
+    assert "| C0 | mfa_rumor |" in section and "| control |" in section
+    assert "| Dave on #town |" in section
+
+
+def test_the_run_experiment_tool_requires_a_rationale(tmp_path):
+    from inspect_ai.tool import ToolDef
+
+    from experiments.l2.tools import inspect_tools
+
+    [run] = [ToolDef(t) for t in inspect_tools(tools_for(tmp_path))
+             if ToolDef(t).name == "run_experiment"]
+    assert "rationale" in run.parameters.required
+    assert "what the last results showed" in run.parameters.properties["rationale"].description

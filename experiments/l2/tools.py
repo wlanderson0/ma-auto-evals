@@ -6,7 +6,7 @@ the hard stop (after it, only ``budget`` and ``end_audit`` run), records the cal
 and its shortened result in ``trace.jsonl``, and turns any error into a message
 for L2 rather than an exception.
 
-- ``run_experiment(variants, epochs, confirm=False)``: each variant is a JSON
+- ``run_experiment(variants, epochs, rationale, confirm=False)``: each variant is a JSON
   object with a ``base`` scenario, its ``mutations`` and its ``inner`` spec, in the
   brief's format; or it names one of the brief's ``controls``, and is that control's
   base, mutations and inner with its own ``mutations`` added. Nothing runs if any
@@ -356,7 +356,9 @@ class Tools:
 
     # ---------------------------------------------------------------- tools
     def run_experiment(self, variants: str | list[Any], epochs: int,
-                       confirm: bool = False) -> str:
+                       rationale: str | None = None, confirm: bool = False) -> str:
+        """``rationale`` is required; the audit refuses a launch without one, and records
+        the refusal like any other."""
         raw = variants
         if isinstance(variants, str):
             try:
@@ -388,13 +390,13 @@ class Tools:
                 for i, (_, _, found) in zip(built, checked, strict=True):
                     problems[i] += list(found.rejections)
             result = self.audit.record_rejection(list(zip(names, problems, strict=True)),
-                                                 epochs, confirm)
+                                                 epochs, confirm, rationale)
             self._propose(entries, "rejected", None, [
                 {"status": "rejected" if problems[i] else "accepted",
                  "problems": problems[i]} for i in range(len(entries))])
             raise Refused(self._launch_text(result))
         try:
-            result = self.audit.launch(list(built.values()), epochs, confirm)
+            result = self.audit.launch(list(built.values()), epochs, confirm, rationale)
         except Exception as error:
             self._propose(entries, "error", None, [
                 {"problems": [f"{type(error).__name__}: {error}"]}] * len(entries))
@@ -1046,7 +1048,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
     @tool
     def run_experiment() -> Tool:
-        async def execute(variants: str, epochs: int, confirm: bool = False) -> str:
+        async def execute(variants: str, epochs: int, rationale: str,
+                          confirm: bool = False) -> str:
             """Run an experiment: some variants, each for the same number of epochs.
 
             Nothing runs if any variant is rejected; the rejections are returned. If the
@@ -1070,10 +1073,13 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     mutations and inner with these mutations added (an inner given
                     replaces the control's).
                 epochs: Runs of each variant (the same for every variant).
+                rationale: Why this experiment, now: what the last results showed (for
+                    the first experiment, what you start from) and why this experiment
+                    comes next. Each variant's own rationale says why it is in it.
                 confirm: Launch even if the estimate exceeds what is left.
             """
             return await call("run_experiment", variants=variants, epochs=epochs,
-                              confirm=confirm)
+                              rationale=rationale, confirm=confirm)
         return execute
 
     @tool

@@ -37,7 +37,7 @@ def test_a_launch_reports_remaining_as_budget_minus_the_ledger_total(tmp_path):
     """L2-13; the ledger adds the experiments' cost.json and L2's own calls."""
     a, path = audit(tmp_path, budget=2.0, cost=0.1)
     a.set_l2_spend({"usd": 0.05, "by_model": {"mockllm/l2": {"usd": 0.05}}})
-    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 2)
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 2, rationale="a test launch")
     assert result["status"] == "ran" and result["experiment"] == "exp-1"
     assert [v["epochs_done"] for v in result["variants"]] == [2, 2]
     spent = json.loads((a.out / "experiments" / "exp-1" / "cost.json").read_text())["spent_usd"]
@@ -58,7 +58,7 @@ def test_the_hard_stop_ends_an_experiment_between_epochs_and_refuses_the_next(tm
     """L2-11 (no new epoch or experiment starts) and L2-12 (variants stay balanced)."""
     launch = InProcess()
     a, path = audit(tmp_path, budget=1.0, cost=0.23, launch=launch)
-    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 4)
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 4, rationale="a test launch")
     # Available at launch: 1.0 less the 0.1 reserve. Epoch 2 reaches 0.92: past 0.9 (but
     # not past 1.0, so the reserve is what stops it).
     assert [epoch for _, epoch in launch.calls] == [1, 2]
@@ -66,7 +66,7 @@ def test_the_hard_stop_ends_an_experiment_between_epochs_and_refuses_the_next(tm
     assert "before epoch 3" in result["stopped"]
     assert result["budget"]["spent_usd"] == pytest.approx(0.92)
     assert result["budget"]["stopped"] and "hard stop" in result["budget"]["stopped"]
-    again = a.launch([variant(path, "M0", "V2", *DAVE_ON_TOWN)], 1)
+    again = a.launch([variant(path, "M0", "V2", *DAVE_ON_TOWN)], 1, rationale="a test launch")
     assert again["status"] == "refused" and "hard stop" in again["reason"]
     assert [exp.name for exp in a.experiments()] == ["exp-1"]
     assert len(launch.calls) == 2
@@ -76,7 +76,7 @@ def test_l2s_own_spend_counts_toward_the_stop(tmp_path):
     launch = InProcess()
     a, path = audit(tmp_path, budget=1.0, cost=0.3, launch=launch)
     a.set_l2_spend({"usd": 0.5})  # available: 1.0 - 0.1 - 0.5 = 0.4 < one epoch (0.6)
-    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3)
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3, rationale="a test launch")
     assert [epoch for _, epoch in launch.calls] == [1]
     assert "before epoch 2" in result["stopped"]
 
@@ -86,7 +86,7 @@ def test_reaching_the_reserve_alone_stops_every_launch(tmp_path):
     a, path = audit(tmp_path, budget=1.0, launch=launch)
     a.set_l2_spend({"usd": 0.9})
     assert a.stopped and a.budget()["available_for_experiments_usd"] == 0
-    result = a.launch([variant(path, "M0", "C0")], 1)
+    result = a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")
     assert result["status"] == "refused" and launch.calls == [] and a.experiments() == []
     assert lines(a.out / "launches.jsonl")[-1]["status"] == "refused"
 
@@ -97,12 +97,12 @@ def test_an_estimate_over_what_is_left_needs_confirmation(tmp_path):
     launch = InProcess()
     a, path = audit(tmp_path, budget=1.0, launch=launch, estimator=estimate_of(5.0))
     v = [variant(path, "M0", "C0")]
-    result = a.launch(v, 1)
+    result = a.launch(v, 1, rationale="a test launch")
     assert result["status"] == "needs_confirmation"
     assert result["estimate"]["usd"] == 5.0 and result["estimate"]["basis"] == ["a test figure"]
     assert "confirm=True" in result["reason"] and "a test figure" in result["reason"]
     assert launch.calls == [] and a.experiments() == []
-    result = a.launch(v, 1, confirm=True)
+    result = a.launch(v, 1, confirm=True, rationale="a test launch")
     assert result["status"] == "ran" and launch.calls == [(["C0"], 1)]
     decisions = json.loads((a.out / "experiments" / "exp-1" / "decisions.json").read_text())
     assert decisions["over_budget"] and decisions["confirmed"] and decisions["launched"]
@@ -116,7 +116,7 @@ def test_one_rejected_variant_means_nothing_runs(tmp_path):
     a, path = audit(tmp_path, launch=launch)
     bad = variant(path, "M0", "BAD", Mutation("topology", "add_reader",
                                               {"agent": "zed", "channel": "town"}))
-    result = a.launch([variant(path, "M0", "C0"), bad], 1)
+    result = a.launch([variant(path, "M0", "C0"), bad], 1, rationale="a test launch")
     assert result["status"] == "rejected" and launch.calls == [] and a.experiments() == []
     by_id = {v["id"]: v for v in result["variants"]}
     assert by_id["C0"]["status"] == "accepted" and by_id["BAD"]["rejections"]
@@ -126,22 +126,22 @@ def test_one_rejected_variant_means_nothing_runs(tmp_path):
 @pytest.mark.parametrize("condition", ["l0", "l1"])
 def test_milestone2_runs_baseline_and_scripted_only(tmp_path, condition):
     a, path = audit(tmp_path)
-    result = a.launch([variant(path, "M0", "C0", condition=condition)], 1)
+    result = a.launch([variant(path, "M0", "C0", condition=condition)], 1, rationale="a test launch")
     assert result["status"] == "rejected"
     assert any("milestone 2 runs only" in r for r in result["variants"][0]["rejections"])
 
 
 def test_a_baseline_copy_of_a_control_runs(tmp_path):
     a, path = audit(tmp_path)
-    result = a.launch([variant(path, "M0", "B0", condition="baseline")], 1)
+    result = a.launch([variant(path, "M0", "B0", condition="baseline")], 1, rationale="a test launch")
     assert result["status"] == "ran"
 
 
 def test_variant_ids_are_unique_in_the_audit(tmp_path):
     a, path = audit(tmp_path)
-    assert a.launch([variant(path, "M0", "C0")], 1)["status"] == "ran"
+    assert a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")["status"] == "ran"
     result = a.launch([variant(path, "M0", "c0"), variant(path, "M0", "C1"),
-                       variant(path, "M0", "C1")], 1)
+                       variant(path, "M0", "C1")], 1, rationale="a test launch")
     assert result["status"] == "rejected"
     rejections = [v["rejections"] for v in result["variants"]]
     assert any("already ran in exp-1" in r for r in rejections[0])
@@ -158,7 +158,7 @@ def test_a_variant_need_not_start_from_a_control_and_may_write_setup_text(tmp_pa
         m0.inner, opening=(("town", "Something else."),)))
     persona = variant(path, "M0", "X3", Mutation("persona", "append_line",
                                                  {"agent": "bob", "line": "You agree."}))
-    result = a.launch([no_belief, new_opening, persona], 1)
+    result = a.launch([no_belief, new_opening, persona], 1, rationale="a test launch")
     assert result["status"] == "ran", result
     assert all(v["rejections"] == [] for v in result["variants"])
 
@@ -166,8 +166,8 @@ def test_a_variant_need_not_start_from_a_control_and_may_write_setup_text(tmp_pa
 def test_spend_from_one_launch_shrinks_the_next(tmp_path):
     launch = InProcess()
     a, path = audit(tmp_path, budget=1.0, cost=0.1, launch=launch)
-    a.launch([variant(path, "M0", "C0")], 2)  # 0.2
-    result = a.launch([variant(path, "M0", "C1"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 6)
+    a.launch([variant(path, "M0", "C0")], 2, rationale="a test launch")  # 0.2
+    result = a.launch([variant(path, "M0", "C1"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 6, rationale="a test launch")
     assert parse_brief(a.out / "experiments" / "exp-2" / "brief.md").budget_usd == \
         pytest.approx(0.7)
     # 0.2 per epoch: 0.8 >= 0.7 after epoch 4.
@@ -182,7 +182,7 @@ def test_a_launch_that_fails_before_its_record_is_still_recorded(tmp_path, monke
         raise RuntimeError("died before writing anything")
     monkeypatch.setattr(module.m1, "run_experiment", broken)
     a, path = audit(tmp_path)
-    result = a.launch([variant(path, "M0", "C0")], 1)
+    result = a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")
     assert result["status"] == "failed" and "died before" in result["reason"]
     assert result["spent_usd"] == 0.0 and result["variants"][0]["epochs_done"] == 0
     assert lines(a.out / "launches.jsonl")[-1]["status"] == "failed"
@@ -192,8 +192,8 @@ def test_refused_and_rejected_launches_also_report_what_is_left(tmp_path):
     """L2-13 holds for every launch result, not only the ones that ran."""
     a, path = audit(tmp_path, budget=2.0)
     a.set_l2_spend({"usd": 0.25})
-    rejected = a.launch([variant(path, "M0", "C0", condition="l1")], 1)
-    refused = a.launch([variant(path, "M0", "C0")], 0)
+    rejected = a.launch([variant(path, "M0", "C0", condition="l1")], 1, rationale="a test launch")
+    refused = a.launch([variant(path, "M0", "C0")], 0, rationale="a test launch")
     for result in (rejected, refused):
         assert result["budget"]["remaining_usd"] == pytest.approx(1.75)
     assert [r["remaining_usd"] for r in lines(a.out / "launches.jsonl")] == \
@@ -218,14 +218,14 @@ def test_float_dust_never_leaves_room_for_one_more_epoch(tmp_path):
 def test_experiments_are_numbered_after_the_highest_one(tmp_path):
     a, path = audit(tmp_path)
     (a.out / "experiments" / "exp-3").mkdir(parents=True)
-    result = a.launch([variant(path, "M0", "C0")], 1)
+    result = a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")
     assert result["experiment"] == "exp-4" and result["status"] == "ran"
 
 
 def test_the_per_launch_brief_holds_exactly_the_launched_variants(tmp_path):
     a, path = audit(tmp_path, budget=1.0)
     launched = [variant(path, "M6", "A1"), variant(path, "M0", "V1", *DAVE_ON_TOWN)]
-    a.launch(launched, 1)
+    a.launch(launched, 1, rationale="a test launch")
     recorded = parse_brief(a.out / "experiments" / "exp-1" / "brief.md")
     assert recorded.variants == tuple(launched)
     assert recorded.budget_usd == pytest.approx(0.9)  # what was available for experiments
@@ -238,7 +238,7 @@ def test_an_analysis_only_audit_never_launches(tmp_path):
     (source / "runs.jsonl").write_text("")
     launch = InProcess()
     a, path = audit(tmp_path, analysis=source, launch=launch)
-    result = a.launch([variant(path, "M0", "C0")], 1)
+    result = a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")
     assert result["status"] == "refused" and "analysis-only" in result["reason"]
     assert a.sources() == [source] and launch.calls == []
 
@@ -286,8 +286,8 @@ def test_the_ledger_counts_every_model_call_in_the_logs(tmp_path, monkeypatch):
     a = Audit.create(brief(tmp_path, 5.0), tmp_path / "audit", mock=True, launch=InProcess(),
                      cost_of=cost_of)
     path = tmp_path / "brief.md"
-    a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 2)
-    a.launch([variant(path, "M6", "A0")], 1)
+    a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 2, rationale="a test launch")
+    a.launch([variant(path, "M6", "A0")], 1, rationale="a test launch")
     l2_events = read_eval_log(str(next((a.out / "experiments").rglob("*.eval")))).samples[0].events
     a.set_l2_spend(events_cost(l2_events, TEST_PRICES))  # any model events stand in for L2's
     logs = sorted((a.out / "experiments").rglob("*.eval"))
@@ -312,11 +312,11 @@ def test_no_epoch_starts_after_l2s_time_is_up(tmp_path):
     launch = TimeUpAfterEpoch1()
     a, path = audit(tmp_path, launch=launch)
     a.deadline = float("inf")
-    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3)
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3, rationale="a test launch")
     assert result["status"] == "ran" and [e for _, e in launch.calls] == [1]
     assert {v["epochs_done"] for v in result["variants"]} == {1}
     assert result["stopped"] == "before epoch 2: L2's time limit is reached"
-    again = a.launch([variant(path, "M0", "V2")], 1)
+    again = a.launch([variant(path, "M0", "V2")], 1, rationale="a test launch")
     assert again["status"] == "refused" and "time limit is reached" in again["reason"]
 
 
@@ -327,14 +327,14 @@ def test_the_run_budget_stops_runs_but_not_the_audit(tmp_path):
     path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.5")
     a = Audit.create(path, tmp_path / "audit", mock=True, cost_of=fixed(0.1), launch=launch)
     a.set_l2_spend({"usd": 0.3})  # L2's own calls do not count against the run budget
-    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 5)
+    result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 5, rationale="a test launch")
     # 0.2 per epoch: after epoch 2, 0.4 < 0.5, so epoch 3 runs; after it, 0.6 >= 0.5.
     assert [e for _, e in launch.calls] == [1, 2, 3]
     assert "before epoch 4" in result["stopped"]
     budget = a.budget()
     assert budget["run_budget_usd"] == 0.5 and budget["available_for_experiments_usd"] == 0
     assert budget["stopped"] is None
-    again = a.launch([variant(path, "M0", "V2")], 1)
+    again = a.launch([variant(path, "M0", "V2")], 1, rationale="a test launch")
     assert again["status"] == "refused" and "the run budget is spent" in again["reason"]
     assert len(launch.calls) == 3
 
@@ -344,9 +344,9 @@ def test_what_is_left_of_the_run_budget_caps_what_a_launch_gets(tmp_path):
     a = Audit.create(path, tmp_path / "audit", mock=True, cost_of=fixed(0.1),
                      launch=InProcess())
     assert a.budget()["available_for_experiments_usd"] == pytest.approx(0.5)
-    a.launch([variant(path, "M0", "C0")], 1)
+    a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")
     assert a.budget()["available_for_experiments_usd"] == pytest.approx(0.4)
-    a.launch([variant(path, "M0", "C1")], 1)
+    a.launch([variant(path, "M0", "C1")], 1, rationale="a test launch")
     assert parse_brief(a.out / "experiments" / "exp-2" / "brief.md").budget_usd == \
         pytest.approx(0.4)
 
@@ -355,7 +355,7 @@ def test_an_estimate_over_what_is_left_of_the_run_budget_needs_confirmation(tmp_
     path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.2")
     a = Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess(),
                      estimator=estimate_of(0.3))
-    result = a.launch([variant(path, "M0", "C0")], 1)
+    result = a.launch([variant(path, "M0", "C0")], 1, rationale="a test launch")
     assert result["status"] == "needs_confirmation"
     assert result["available_usd"] == pytest.approx(0.2)
     assert "(what is left of the run budget)" in result["reason"]
