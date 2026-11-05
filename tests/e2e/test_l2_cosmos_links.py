@@ -244,3 +244,46 @@ def test_a_run_with_no_recorded_count_lists_no_messages(audit, monkeypatch):
         resolve(tools, {"exp-1": "abc123"}, get, BASE)))
     text = render(tools)
     assert "[1 ?]" in text and "The messages counted" not in text  # mfa has no recorded count
+
+
+def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
+    """Each experiment is exported and uploaded once (its slug kept in cosmos-runs.json),
+    the runs are waited on until ready, and the report gets its links. A second call
+    uploads nothing."""
+    from experiments.l2.share import share
+
+    tools, _ = audit
+    get, *_ = fake_cosmos(tools)
+    uploads, polls = [], {}
+
+    def upload(folder, name, pr):
+        assert (folder / "manifest.json").exists() and name.endswith(" exp-1")
+        uploads.append(folder)
+        return "abc123"
+
+    def cosmos(path):
+        if path == "/api/runs/abc123":  # parsing twice, then ready
+            polls[path] = polls.get(path, 0) + 1
+            return {**get(path), "status": "ready" if polls[path] > 2 else "parsing"}
+        return get(path)
+    said = []
+    links = share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE,
+                  sleep=lambda s: None, say=said.append)
+    assert len(uploads) == 1 and links["runs"] == {"exp-1": f"{BASE}/runs/abc123"}
+    assert json.loads((tools.audit.out / "cosmos-runs.json").read_text()) == {"exp-1": "abc123"}
+    assert "dave in each run of V1" in (tools.audit.out / "report.md").read_text()
+    assert said[0] == f"exp-1: {BASE}/runs/abc123" and "report with Cosmos links" in said[1]
+    share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE, sleep=lambda s: None,
+          say=said.append)
+    assert len(uploads) == 1  # nothing uploaded twice
+
+
+def test_share_stops_on_a_run_cosmos_could_not_parse(audit):
+    from experiments.l2.share import share
+
+    tools, _ = audit
+    get, *_ = fake_cosmos(tools)
+    with pytest.raises(SystemExit, match="could not parse"):
+        share(tools.audit.out, upload=lambda f, n, p: "abc123",
+              get=lambda path: {**get(path), "status": "failed"}, base_url=BASE,
+              sleep=lambda s: None, say=lambda s: None)

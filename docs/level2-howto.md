@@ -82,7 +82,21 @@ evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every
 
 ## 4. Share it on Cosmos
 
-Each experiment of the audit is one Cosmos run:
+In one step, once the audit has ended (or add `--share` to the audit command in step 2,
+which does this when it ends):
+
+```bash
+uv run python -m experiments.l2.share logs/l2-audit/<name>
+```
+
+It exports each experiment, uploads it with your `cosmos login` (each experiment is one
+Cosmos run), waits until Cosmos has processed it, and writes the report's claims section
+again with links to the runs and messages each claim rests on. It prints each run's
+link. Run it again if it stops partway: an experiment already uploaded (its slug is kept
+in the audit's `cosmos-runs.json`) is never uploaded twice. `--pr N` files the runs under
+a pull request.
+
+The same, step by step. Each experiment of the audit is one Cosmos run:
 
 ```bash
 for d in logs/l2-audit/<name>/experiments/exp-*; do

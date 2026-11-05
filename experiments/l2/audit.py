@@ -441,6 +441,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                              "--mock); without it, anything that would spend money stops")
     parser.add_argument("--analysis-only", type=Path, default=None, metavar="AUDIT",
                         help="read this milestone 1 audit; run_experiment is off")
+    parser.add_argument("--share", action="store_true",
+                        help="when the audit ends, upload its experiments to Cosmos and link "
+                             "the report to them (experiments.l2.share)")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
     args = parser.parse_args(argv)
@@ -498,6 +501,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"report: {out / 'report.md'}")
     if tools.conclusions is None:
         raise SystemExit(2)  # the record is complete, but L2 never ended the audit
+    if args.share:
+        from experiments.l2.share import share
+
+        try:
+            share(out)
+        except SystemExit as error:  # the audit is done and recorded either way
+            print(f"not shared on Cosmos: {error}; share it later with "
+                  f"`uv run python -m experiments.l2.share {out}`")
 
 
 if __name__ == "__main__":
