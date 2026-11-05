@@ -258,7 +258,7 @@ class Audit:
                 rejections=(*extra, *problems.rejections), warnings=problems.warnings)))
         return checked
 
-    def launch(self, variants: Sequence[Variant], epochs: int, confirm: bool = False,
+    def launch(self, variants: Sequence[Variant], epochs: int, confirm: bool = False, *,
                rationale: str | None = None) -> dict[str, Any]:
         """Check, gate and run one experiment (``experiments/exp-<n>``). ``rationale`` is
         required: what the last results showed and why this experiment comes next; it is
@@ -334,7 +334,7 @@ class Audit:
         return self._finish(result, status, reason)
 
     def record_rejection(self, rows: Sequence[tuple[str, Sequence[str]]], epochs: Any,
-                         confirm: bool, rationale: Any = None) -> dict[str, Any]:
+                         confirm: bool, *, rationale: Any = None) -> dict[str, Any]:
         """Record a launch the tools rejected before it became variants (e.g. a JSON
         variant naming an unknown control), as ``launch`` records its own rejections. ``rows``:
         each proposed variant's name and rejections (none for one that passed)."""
@@ -343,7 +343,16 @@ class Audit:
             "rationale": rationale, "experiment": None,
             "variants": [{"id": name, "status": "rejected" if found else "accepted",
                           "rejections": list(found), "warnings": []} for name, found in rows]}
-        return self._finish(result, "rejected", "a variant failed its checks, so nothing ran")
+        missing = self.rationale_problem(rationale)  # said now, not on the next try
+        return self._finish(result, "rejected", "a variant failed its checks, so nothing ran"
+                            + (f"; and {missing}" if missing else ""))
+
+    @staticmethod
+    def rationale_problem(rationale: Any) -> str | None:
+        if isinstance(rationale, str) and rationale.strip():
+            return None
+        return ("rationale is required: what the last results showed (or, for the first "
+                "experiment, what you start from) and why this experiment comes next")
 
     def time_up(self) -> str | None:
         if self.deadline is None or time.monotonic() < self.deadline:
@@ -369,10 +378,7 @@ class Audit:
             return f"epochs must be a whole number >= 1, not {epochs!r}"
         if not variants:
             return "no variants to run"
-        if not isinstance(rationale, str) or not rationale.strip():
-            return ("rationale is required: what the last results showed (or, for the first "
-                    "experiment, what you start from) and why this experiment comes next")
-        return None
+        return self.rationale_problem(rationale)
 
     def _finish(self, result: dict[str, Any], status: str,
                 reason: str | None) -> dict[str, Any]:

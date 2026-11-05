@@ -29,7 +29,7 @@ RECORD = {
     "brief.md": "the brief as given",
     "decisions.jsonl": "L2's choices on what the brief left open, with reasons",
     "proposed.jsonl": "every variant L2 proposed, rejected ones too (with the trace seq)",
-    "launches.jsonl": "every launch L2 asked for and what came of it",
+    "launches.jsonl": "every launch L2 asked for, with its rationale, and what came of it",
     "trace.jsonl": "every tool call and its (shortened) result, in order",
     "claims.json": "L2's claims, each with its evidence, verdict and the checker's reasons",
     "review.json": "the reviewer's critique of L2's draft, the draft, and L2's response",
@@ -178,18 +178,20 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         variants, out = [], out + [f"(The variants could not be read: {error})", ""]
     out += ["## Variants (what each changed and why), by experiment", ""]
     why = {r["experiment"]: r.get("rationale") for r in launched}
-    by_experiment: dict[str, list[dict[str, Any]]] = {}
+    by_experiment: dict[str, list[dict[str, Any]]] = {exp: [] for exp in why}
     for v in variants:
         by_experiment.setdefault(v["experiment"], []).append(v)
     for exp, rows in by_experiment.items():
         out += [f"### {exp}", "",
                 f"Why this experiment (L2's rationale): {_inline(why[exp])}" if why.get(exp)
-                else "No rationale for this experiment is recorded in this audit.", "",
-                "| variant | base | changes | condition | status | epochs | rationale |",
+                else "No rationale for this experiment is recorded in this audit.", ""]
+        if not rows:  # e.g. a launch that failed before any variant ran
+            out += ["No variant of it ran.", ""]
+            continue
+        out += ["| variant | base | changes | condition | status | epochs | rationale |",
                 "|---|---|---|---|---|---|---|"]
         out += [f"| {v['id']} | {v['base']} | {v['changes']} | {v['condition']} | "
-                f"{v['status']} | {v['epochs']} | {' '.join(v['rationale'].split())} |"
-                for v in rows]
+                f"{v['status']} | {v['epochs']} | {_inline(v['rationale'])} |" for v in rows]
         out.append("")
     if not variants:
         out += ["No variant ran.", ""]

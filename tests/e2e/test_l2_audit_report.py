@@ -46,7 +46,7 @@ def test_the_report_holds_conclusions_tables_counts_departures_and_ledger(tmp_pa
     assert "| V1 | mfa_rumor | persona.append_line(agent=alice, line=" in text
     assert ("; topology.add_reader(agent=dave, channel=town); "
             "topology.add_writer(agent=dave, channel=town) | scripted | accepted | 2 | "
-            "Dave on #town |") in text
+            "Dave on \\#town |") in text
     assert text.count("### compare") == 1 and "V1 vs C0 on probe" in text
     assert text.count("### scores") == 1 and "| dave |" in text
     assert "- Variants proposed: 3 (2 run, 1 rejected, 0 not run)" in text
@@ -304,10 +304,13 @@ def test_every_experiment_has_a_rationale_shown_next_to_its_variants(tmp_path):
     assert tools.call("run_experiment", variants=[C0, V1], epochs=1, rationale=why)[0]
     assert not tools.call("run_experiment", variants=[{**V1, "control": "Z"}], epochs=1,
                           rationale="a rejected launch")[0]
+    ok, text = tools.call("run_experiment", variants=[{**V1, "control": "Z"}], epochs=1)
+    assert not ok and "rationale is required" in text  # with the variant's problem, at once
     launches = [json.loads(line) for line in
                 (tools.audit.out / "launches.jsonl").read_text().splitlines()]
     assert [(r["status"], r["rationale"]) for r in launches] == [
-        ("refused", None), ("refused", "  "), ("ran", why), ("rejected", "a rejected launch")]
+        ("refused", None), ("refused", "  "), ("ran", why), ("rejected", "a rejected launch"),
+        ("rejected", None)]
     assert why in (tools.audit.out / "experiments" / "exp-1" / "brief.md").read_text()
     assert tools.call("end_audit", conclusions="Nothing.")[0]
     text = (tools.audit.out / "report.md").read_text()
@@ -316,7 +319,7 @@ def test_every_experiment_has_a_rationale_shown_next_to_its_variants(tmp_path):
                               "has run yet: C0 is the baseline, V1 moves Dave onto \\#town "
                               "\\| first.\n")  # L2's words, escaped
     assert "| C0 | mfa_rumor |" in section and "| control |" in section
-    assert "| Dave on #town |" in section
+    assert "| Dave on \\#town |" in section  # escaped too
 
 
 def test_the_run_experiment_tool_requires_a_rationale(tmp_path):
@@ -328,3 +331,13 @@ def test_the_run_experiment_tool_requires_a_rationale(tmp_path):
              if ToolDef(t).name == "run_experiment"]
     assert "rationale" in run.parameters.required
     assert "what the last results showed" in run.parameters.properties["rationale"].description
+
+
+def test_a_launch_that_failed_before_any_variant_ran_still_shows_its_rationale(tmp_path):
+    tools = tools_for(tmp_path)
+    with (tools.audit.out / "launches.jsonl").open("a") as file:
+        file.write(json.dumps({"status": "failed", "experiment": "exp-1", "ids": ["C0"],
+                               "epochs": 1, "rationale": "Why: first look."}) + "\n")
+    text = render(tools, "stopped")
+    assert ("### exp-1\n\nWhy this experiment (L2's rationale): Why: first look.\n\n"
+            "No variant of it ran.") in text

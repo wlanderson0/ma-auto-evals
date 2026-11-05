@@ -390,13 +390,14 @@ class Tools:
                 for i, (_, _, found) in zip(built, checked, strict=True):
                     problems[i] += list(found.rejections)
             result = self.audit.record_rejection(list(zip(names, problems, strict=True)),
-                                                 epochs, confirm, rationale)
+                                                 epochs, confirm, rationale=rationale)
             self._propose(entries, "rejected", None, [
                 {"status": "rejected" if problems[i] else "accepted",
                  "problems": problems[i]} for i in range(len(entries))])
             raise Refused(self._launch_text(result))
         try:
-            result = self.audit.launch(list(built.values()), epochs, confirm, rationale)
+            result = self.audit.launch(list(built.values()), epochs, confirm,
+                                       rationale=rationale)
         except Exception as error:
             self._propose(entries, "error", None, [
                 {"problems": [f"{type(error).__name__}: {error}"]}] * len(entries))
