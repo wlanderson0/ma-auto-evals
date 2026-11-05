@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -79,7 +80,8 @@ class Audit:
                  history: Sequence[Path] = (), launch: m1.Launch = m1.launch_subprocess,
                  cost_of: m1.CostOf = log_cost,
                  estimator: Callable[..., dict[str, Any]] = m1.estimate,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 progress: Callable[[str], None] | None = None) -> None:
         if not 0 <= reserve < 1:
             raise ValueError(f"reserve must be a share of the budget in [0, 1), not {reserve}")
         self.out = Path(out)
@@ -103,6 +105,9 @@ class Audit:
         """Whether a launch is running (its record is still to be written)."""
         self.notes: list[str] = []
         """Problems with the ledger itself (e.g. L2's log could not be priced)."""
+        self.progress = progress
+        """Called with a line of progress (a launch, an epoch, a tool call); the CLI
+        prints it. None: silent."""
 
     @classmethod
     def create(cls, brief_path: str | Path, out: str | Path, **options: Any) -> Audit:
@@ -166,6 +171,15 @@ class Audit:
     def _append(self, name: str, row: dict[str, Any]) -> None:
         with (self.out / name).open("a") as file:
             file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+    def say(self, text: str) -> None:
+        if self.progress is not None:
+            self.progress(text)
+
+    def spend_line(self) -> str:
+        b = self.budget()
+        return (f"spent ${b['spent_usd']:.4f} of ${b['budget_usd']:.2f} "
+                f"(L2 ${b['by_kind']['l2']:.4f}, runs ${b['by_kind']['experiments']:.4f})")
 
     # ---------------------------------------------------------------- ledger
     def experiment_spend(self) -> dict[str, float]:
@@ -380,12 +394,23 @@ class Audit:
         exp = self.experiments_dir / f"exp-{n}"
         result["experiment"] = exp.name
         history = [*self.history, *self.experiments()]
+        self.say(f"{exp.name}: {len(variants)} variant(s) x {epochs} epoch(s), estimated "
+                 f"${guess['usd']:.4f} of ${available:.4f} available")
+
+        def launch_epoch(*args: Any) -> Any:
+            epoch, started = args[2], time.monotonic()
+            self.say(f"{exp.name} epoch {epoch}/{epochs}: running; {self.spend_line()}")
+            paths = self.launch_epoch(*args)
+            self.say(f"{exp.name} epoch {epoch}/{epochs}: done in "
+                     f"{_duration(time.monotonic() - started)}")
+            return paths
+
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "brief.md"
             path.write_text(self.experiment_brief(n, variants, available, rationale))
             try:
                 m1.run_experiment(path, epochs, exp, mock=self.mock, confirm=confirm,
-                                  history=history, launch=self.launch_epoch,
+                                  history=history, launch=launch_epoch,
                                   cost_of=self.cost_of,
                                   estimator=lambda *args, **kwargs: guess,
                                   stop=self.epoch_stop, scenarios=self.scenarios_dir)
@@ -481,6 +506,22 @@ def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+def _duration(seconds: float) -> str:
+    minutes, seconds = divmod(int(seconds), 60)
+    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
+
+
+def printer(clock: Callable[[], float] = time.monotonic) -> Callable[[str], None]:
+    """A progress callback that prints each line to stdout with the time and the time
+    since the audit started."""
+    start = clock()
+
+    def say(text: str) -> None:
+        print(f"[{time.strftime('%H:%M:%S')} +{_duration(clock() - start)}] {text}",
+              file=sys.stdout, flush=True)
+    return say
+
+
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
     """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
@@ -526,6 +567,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                              "the report to them (experiments.l2.share)")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
+    parser.add_argument("--quiet", action="store_true",
+                        help="print no progress lines (tool calls, launches, epochs) while "
+                             "the audit runs")
     args = parser.parse_args(argv)
     if (args.question is None) != (args.budget is None):
         parser.error("--question and --budget go together (a --brief sets its own budget)")
@@ -568,7 +612,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
                                   f"{args.question.strip()}\n")
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
-                             history=args.history)
+                             history=args.history, progress=None if args.quiet else printer())
     tools = Tools(audit, on_end=write_report)
     try:
         if args.fake:

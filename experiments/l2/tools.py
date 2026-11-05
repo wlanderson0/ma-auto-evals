@@ -197,6 +197,17 @@ class Tools:
         ok, text, _ = self.numbered_call(name, **args)
         return ok, text
 
+    def _say(self, name: str, ok: bool, text: str) -> None:
+        """One progress line per call: what L2 called, how it went (the first line of
+        the result for a launch, an end or a refusal) and the spend so far."""
+        if self.audit.progress is None:
+            return
+        head = f"L2 called {name}"
+        if not ok or name in ("run_experiment", "end_audit"):
+            first = (text.strip().splitlines() or [""])[0]
+            head += f": {_short(first, 160)}" if ok else f" (refused): {_short(first, 160)}"
+        self.audit.say(f"{head}; {self.audit.spend_line()}")
+
     def numbered_call(self, name: str, /, by: str = "l2", **args: Any) -> tuple[bool, str, int]:
         """``call``, plus the call's number in ``trace.jsonl`` (its ``seq``), which L2
         sees as ``[call N]`` and cites as evidence for a claim. The number is taken when
@@ -220,7 +231,10 @@ class Tools:
             text += (f"\n\nThe audit is stopping: {stopped}. No new experiment starts; "
                      "conclude: call " + ("request_review, then end_audit."
                                           if self.needs_review else "end_audit."))
-        return ok, text, self._trace(name, args, ok, text, seq, by)
+        number = self._trace(name, args, ok, text, seq, by)
+        if by == "l2":
+            self._say(name, ok, text)
+        return ok, text, number
 
     async def reviewed_call(self, reviewer: Callable[[Tools, dict[str, Any]], Any], /,
                             **args: Any) -> tuple[bool, str, int]:
@@ -242,7 +256,9 @@ class Tools:
             found = {"critique": "", "calls": [], "cost_usd": 0.0,
                      "stopped": f"the reviewer failed: {type(error).__name__}: {error}"}
         text = self._record_review(seq, draft, found)
-        return True, text, self._trace("request_review", args, True, text, seq)
+        number = self._trace("request_review", args, True, text, seq)
+        self._say("request_review", True, text)
+        return True, text, number
 
     def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
         """The call's arguments if it may run now; ``Refused`` if not."""

@@ -64,6 +64,11 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
 - `--time-limit <seconds>` (or `time_limit` in the brief) bounds the audit's runs: once
   only its last 10% is left, no new experiment or epoch starts and L2 concludes in that
   time (it may run a little over, but always ends with a report). A long audit can take hours, so set one when it matters.
+- While it runs it prints a line per tool call L2 makes, per experiment it launches and
+  per epoch, each with the time, the time since the start and the spend so far against
+  the budget (L2's own calls and the runs separately), e.g.
+  `[14:02:31 +12m05s] exp-2 epoch 1/3: running; spent $0.4120 of $3.00 (L2 $0.1830, runs $0.2290)`.
+  A launch prints its estimate first. `--quiet` turns these lines off.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
 The audit directory holds `writeup.md` (L2's write-up: a results report with tables and
