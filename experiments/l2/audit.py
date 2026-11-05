@@ -500,15 +500,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"spent ${budget['spent_usd']:.4f} of ${budget['budget_usd']:.2f}")
     print(f"report: {out / 'report.md'}")
     if tools.conclusions is None:
+        if args.share:
+            print("not shared on Cosmos: L2 never ended the audit")
         raise SystemExit(2)  # the record is complete, but L2 never ended the audit
     if args.share:
-        from experiments.l2.share import share
+        from experiments.l2.share import share_or_explain
 
-        try:
-            share(out)
-        except SystemExit as error:  # the audit is done and recorded either way
-            print(f"not shared on Cosmos: {error}; share it later with "
-                  f"`uv run python -m experiments.l2.share {out}`")
+        if not share_or_explain(out):  # the audit is recorded either way
+            raise SystemExit(3)
 
 
 if __name__ == "__main__":

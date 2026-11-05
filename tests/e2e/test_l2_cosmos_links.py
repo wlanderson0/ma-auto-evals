@@ -262,14 +262,16 @@ def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
         return "abc123"
 
     def cosmos(path):
-        if path == "/api/runs/abc123":  # parsing twice, then ready
+        if path == "/api/runs/abc123":  # parsing until polled a few times, then ready
             polls[path] = polls.get(path, 0) + 1
-            return {**get(path), "status": "ready" if polls[path] > 2 else "parsing"}
+            return {**get(path), "status": "ready" if polls[path] > 3 else "parsing"}
         return get(path)
     said = []
     links = share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE,
                   sleep=lambda s: None, say=said.append)
     assert len(uploads) == 1 and links["runs"] == {"exp-1": f"{BASE}/runs/abc123"}
+    assert uploads[0] == tools.audit.out / "cosmos" / "exp-1"  # inside the audit
+    assert not [p for p in uploads[0].parent.iterdir() if p.name.startswith(".")]
     assert json.loads((tools.audit.out / "cosmos-runs.json").read_text()) == {"exp-1": "abc123"}
     assert "dave in each run of V1" in (tools.audit.out / "report.md").read_text()
     assert said[0] == f"exp-1: {BASE}/runs/abc123" and "report with Cosmos links" in said[1]
@@ -287,3 +289,62 @@ def test_share_stops_on_a_run_cosmos_could_not_parse(audit):
         share(tools.audit.out, upload=lambda f, n, p: "abc123",
               get=lambda path: {**get(path), "status": "failed"}, base_url=BASE,
               sleep=lambda s: None, say=lambda s: None)
+
+
+def test_a_run_that_is_not_the_experiments_is_never_recorded(audit):
+    """E.g. another audit's export uploaded by mistake: refused before it is kept, so a
+    rerun uploads afresh."""
+    from experiments.l2.share import share
+
+    tools, _ = audit
+    get, *_ = fake_cosmos(tools)
+
+    def other(path):
+        out = get(path)
+        return {**out, "manifest": {**out["manifest"], "started_at": "2020-01-01T00:00:00+00:00"},
+                "status": "ready"}
+    with pytest.raises(SystemExit, match="was not recorded"):
+        share(tools.audit.out, upload=lambda f, n, p: "abc123", get=other, base_url=BASE,
+              sleep=lambda s: None, say=lambda s: None)
+    assert not (tools.audit.out / "cosmos-runs.json").exists()
+
+
+def test_any_failure_while_sharing_is_a_message_not_a_traceback(audit, capsys):
+    from experiments.l2.share import share_or_explain
+
+    tools, _ = audit
+
+    def unreachable(path):
+        raise ConnectionError("cosmos.example unreachable")
+    assert not share_or_explain(tools.audit.out, upload=lambda f, n, p: "abc123",
+                                get=unreachable, base_url=BASE, sleep=lambda s: None,
+                                say=lambda s: None)
+    out = capsys.readouterr().out
+    assert "not shared on Cosmos: ConnectionError" in out and "experiments.l2.share" in out
+
+
+def test_a_failed_export_leaves_nothing_to_reuse(audit, monkeypatch):
+    import experiments.l2.cosmos as cosmos
+    from experiments.l2.share import share_or_explain
+
+    tools, _ = audit
+
+    def broken(exp, out, pr=None):
+        out.mkdir(parents=True)
+        (out / "manifest.json").write_text("{}")
+        raise OSError("disk full")
+    monkeypatch.setattr(cosmos, "export", broken)
+    assert not share_or_explain(tools.audit.out, upload=lambda f, n, p: "abc123",
+                                get=lambda p: {}, base_url=BASE, say=lambda s: None)
+    assert not (tools.audit.out / "cosmos" / "exp-1").exists()
+
+
+def test_sign_in_reads_the_config_the_cosmos_cli_reads(tmp_path, monkeypatch):
+    from experiments.l2.cosmos_links import sign_in
+
+    config = tmp_path / "elsewhere.json"
+    config.write_text(json.dumps({"url": "https://cosmos.example", "token": "fake-token"}))
+    monkeypatch.delenv("COSMOS_URL", raising=False)
+    monkeypatch.delenv("COSMOS_TOKEN", raising=False)
+    monkeypatch.setenv("COSMOS_CONFIG", str(config))
+    assert sign_in() == ("https://cosmos.example", "fake-token")

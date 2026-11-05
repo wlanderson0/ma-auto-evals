@@ -212,8 +212,11 @@ def http_get(base_url: str, token: str | None) -> Get:
 def sign_in() -> tuple[str, str | None]:
     """The Cosmos server and token, as the ``cosmos`` CLI finds them."""
     config: dict[str, Any] = {}
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    path = Path(base) / "cosmos" / "config.json"
+    if env := os.environ.get("COSMOS_CONFIG"):  # as the cosmos CLI's config_path()
+        path = Path(env).expanduser()
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        path = Path(base) / "cosmos" / "config.json"
     if path.exists():
         config = json.loads(path.read_text())
     url = os.environ.get("COSMOS_URL") or config.get("url")
