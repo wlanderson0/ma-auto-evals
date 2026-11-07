@@ -167,7 +167,7 @@ def test_one_interrupt_lets_the_running_experiment_finish_then_l2_concludes(tmp_
     assert tools.call("end_audit", conclusions="Stopped.")[0]
 
 
-def test_the_first_ctrl_c_interrupts_and_the_second_stops_now(tmp_path, capsys):
+def test_the_first_ctrl_c_interrupts_and_the_second_stops_now(tmp_path, capfd):
     audit, _ = audit_with(tmp_path)
     handle = interrupt_handler(Tools(audit))
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
@@ -175,7 +175,8 @@ def test_the_first_ctrl_c_interrupts_and_the_second_stops_now(tmp_path, capsys):
     m1.RUNNING.add(child)
     try:
         handle(signal.SIGINT, None)
-        assert audit.interrupted and "Press Ctrl-C again" in capsys.readouterr().err
+        # written to the process's own stderr, which Inspect's display does not hold
+        assert audit.interrupted and "Press Ctrl-C again" in capfd.readouterr().err
         assert child.poll() is None and audit.epoch_stop() is None  # it may finish
         with pytest.raises(KeyboardInterrupt):
             handle(signal.SIGINT, None)

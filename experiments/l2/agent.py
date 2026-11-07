@@ -542,7 +542,9 @@ def interrupt_handler(tools: Tools) -> Callable[[int, Any], None]:
     def handle(signum: int, frame: Any) -> None:
         tools.audit.interrupt()
         if tools.audit.interrupts == 1:
-            print(INTERRUPT_NOTICE, file=sys.stderr, flush=True)
+            # The terminal's own stderr: on a terminal, Inspect's display holds sys.stderr
+            # while L2 runs, and the notice would never show.
+            print(INTERRUPT_NOTICE, file=sys.__stderr__, flush=True)
             return
         m1.stop_running()
         raise KeyboardInterrupt
