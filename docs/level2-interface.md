@@ -358,7 +358,7 @@ L2 and humans can mark up runs, and both see each other's marks:
 
 `annotations(filter)` reads them back, whoever wrote them. Each mark records its author (L2 or a named person) and time.
 
-They are stored in a file next to the experiment's logs, `annotations.jsonl`, using the same four kinds of target as Cosmos (run, sample, branch, message), so they can be synced to Cosmos (§8.1):
+They are stored in a file next to the experiment's logs, `annotations.jsonl`, using the same four kinds of target as Cosmos (run, sample, branch, message), so they can be synced to Cosmos (§8.1). `experiments.l2.share` already posts an `annotations.jsonl` in the audit's directory, one record per line in Cosmos's shape (Cosmos spec 13, "Annotations import": `id`, `kind`, `target` with `variant` and `epoch`, `body`, `tags`, `author`, `at`):
 
 - **Comments:** Cosmos already has them on these four targets, through its API (`/api/comments`).
 - **Tags:** Cosmos doesn't have them yet; adding them, with filtering of runs and samples by tag, is a request to Cosmos (§12).
@@ -449,6 +449,7 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 - `ledger.json`, the budget ledger (§7), and `l2/`, L2's own Inspect log;
 - `claims.json`, L2's claims with their verdicts (§6.4);
 - `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
+- `review.json`, a review of the audit, when there is one; and `annotations.jsonl` (§6.2) once something writes it;
 - once shared (§8.1): `cosmos-runs.json`, `cosmos.json` and `cosmos/`.
 
 **Not built yet:** inner briefs (with inner L1), every scorer with its prompt (§6.3), and comments and tags (`annotations.jsonl`, §6.2).
@@ -470,9 +471,15 @@ L2's experiments can be shared on Cosmos, so the team browses them like any othe
 uv run python -m experiments.l2.share logs/l2-audit/<name>
 ```
 
-For each experiment it exports a folder `cosmos upload` accepts (`experiments.l2.cosmos`, which never changes the experiment), uploads it with the `cosmos` CLI, checks the run Cosmos made is that experiment's (its manifest's commit and start time), and keeps the slug in `cosmos-runs.json`, so nothing is uploaded twice. Once Cosmos has parsed the runs, it resolves links (`experiments.l2.cosmos_links`, saved in `cosmos.json`) and writes the report's claims section again with them: each claim links to every run its counts come from, marked with what the target did there; a claim on `counts` also links every message that counted; and each cited post links to the message itself. A probe answer is a private interview, not a message, so a probe claim links to its runs only. The report uploaded to Cosmos ("Open report") is made before the links exist, so it has none.
+For each experiment it exports a folder `cosmos upload` accepts (`experiments.l2.cosmos`, which never changes the experiment), uploads it with the `cosmos` CLI, checks the run Cosmos made is that experiment's (its manifest's commit and start time), and keeps the slug in `cosmos-runs.json`, so nothing is uploaded twice.
 
-**Not built yet:** syncing `annotations.jsonl` with Cosmos comments, and with tags once Cosmos has them (§6.2).
+The audit itself is one more run, the **audit run** (`experiments.l2.study`, Cosmos spec 12 §12.1), uploaded the same way and kept in `cosmos-runs.json` as `audit`: its `manifest.json`, L2's own Inspect log (`l2/`), and under `study/` the audit's `claims.json`, `ledger.json`, `brief.json` (`{"text": ...}`, the brief as given), `decisions.json`, `proposed.json` and `launches.json` (the JSONL files as JSON arrays, since `cosmos upload` sends only `.eval`, `.json` and `.html`), and `review.json` when there is one. Every run of the audit names its study in its manifest: `study: {id, name, experiment: "exp-<n>"}` for an experiment, `study: {id, name, role: "audit"}` for the audit run, where `id` is the audit's directory name and start time (`<name>@<L2's log's start>`) and `name` its directory name. Cosmos servers older than studies keep the field and the files as they are, so they accept the upload.
+
+If the audit has an `annotations.jsonl` (§6.2), it is posted after the upload to `POST /api/runs/{slug}/annotations` (Cosmos spec 13), each record to the run that holds its target: the experiment that ran its `variant`, or the audit run for a record that names none. Cosmos imports a record id once per run, so sharing again changes nothing; a Cosmos without the import (HTTP 404 or 405) is a warning.
+
+Once Cosmos has parsed the runs, it resolves links (`experiments.l2.cosmos_links`, saved in `cosmos.json`) and writes the report's claims section again with them: each claim links to every run its counts come from, marked with what the target did there; a claim on `counts` also links every message that counted; and each cited post links to the message itself. A probe answer is a private interview, not a message, so a probe claim links to its runs only. The report uploaded to Cosmos ("Open report") is made before the links exist, so it has none.
+
+**Not built yet:** writing `annotations.jsonl` (L2's `annotate` and `tag` tools, §6.2), and reading Cosmos comments and tags back into it.
 
 L2 works from its local logs either way. Which Cosmos server to use is open (§12).
 

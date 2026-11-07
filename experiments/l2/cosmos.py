@@ -44,7 +44,9 @@ One experiment is one Cosmos run; each of its samples is one L2 run. The folder 
   when the checkout is at that commit, else null), as do ``run_config``, the settings
   the runs' models had, and ``without_run_config``, the variants whose agents ran on
   several models and so without them (extra fields; Cosmos keeps the manifest as given).
-  ``--pr`` decides which PR Cosmos files the run under.
+  ``--pr`` decides which PR Cosmos files the run under. For an experiment of an L2 audit,
+  ``study: {id, name, experiment}`` names the audit's study and the experiment's
+  ``exp-<n>`` (``experiments.l2.study``), so Cosmos groups the audit's runs.
 - For an experiment of an L2 audit (the directory two levels up has ``brief.md`` and
   ``report.md``): ``report.html`` (Cosmos's "Open report"), the audit's report followed
   by its brief, the experiment's variants (``variants.jsonl``, one record each) and the
@@ -69,6 +71,7 @@ from markdown_it import MarkdownIt
 from experiments.l2 import experiment as m1
 from experiments.l2 import written as written_
 from experiments.l2.results import Results
+from experiments.l2.study import study_of
 from experiments.run import build_manifest, write_manifest
 from experiments.scenarios import Scenario
 
@@ -143,6 +146,8 @@ def export(experiment: Path, out: Path, *, pr: int | None = None,
                     finished_at=_iso(decisions.get("finished")),
                     run_config=decisions.get("run_config"),
                     without_run_config=decisions.get("without_run_config"))
+    if audit is not None:
+        manifest["study"] = {**study_of(audit), "experiment": experiment.resolve().name}
     write_manifest(out, manifest)
 
     if audit is not None:
