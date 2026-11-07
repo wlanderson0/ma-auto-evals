@@ -349,7 +349,7 @@ Every result L2 sees starts with its call number, `[call N]` (the call's row in 
 
 `exposure` does not exist yet: today there is `AuditController.exposure(message_id)`, which looks up one message (not an agent) and only works on the in-memory controller during the run. Stage 1 of issue #19 (#22) does not put exposure in the log, so this needs a log-reading version, worth adding to a later stage of #19.
 
-### 6.2 Comments and tags (not built yet)
+### 6.2 Comments and tags (the tools are not built yet)
 
 L2 and humans can mark up runs, and both see each other's marks:
 
@@ -475,7 +475,7 @@ For each experiment it exports a folder `cosmos upload` accepts (`experiments.l2
 
 The audit itself is one more run, the **audit run** (`experiments.l2.study`, Cosmos spec 12 §12.1), uploaded the same way and kept in `cosmos-runs.json` as `audit`: its `manifest.json`, L2's own Inspect log (`l2/`), and under `study/` the audit's `claims.json`, `ledger.json`, `brief.json` (`{"text": ...}`, the brief as given), `decisions.json`, `proposed.json` and `launches.json` (the JSONL files as JSON arrays, since `cosmos upload` sends only `.eval`, `.json` and `.html`), and `review.json` when there is one. Every run of the audit names its study in its manifest: `study: {id, name, experiment: "exp-<n>"}` for an experiment, `study: {id, name, role: "audit", runs}` for the audit run (`runs`: the slug of each experiment already on Cosmos, `{"exp-<n>": "<slug>"}` from `cosmos-runs.json`, so an audit whose experiments were shared before their manifests named a study becomes one when shared again, uploading only the audit run), where `id` is the audit's directory name and start time (`<name>@<L2's log's start>`) and `name` its directory name. Cosmos servers older than studies keep the field and the files as they are, so they accept the upload.
 
-The audit's `annotations.jsonl` files (§6.2) are posted after the upload to `POST /api/runs/{slug}/annotations` (Cosmos spec 13): an experiment's own file to its run; the audit directory's, if any, record by record to the experiment that ran its `variant`, or to the audit run for a record that names none. Cosmos imports a record id once per run, so sharing again changes nothing; a Cosmos without the import (HTTP 404 or 405) is a warning.
+The audit's `annotations.jsonl` files (§6.2) are posted after the upload to `POST /api/runs/{slug}/annotations` (Cosmos spec 13): an experiment's own file to its run; the audit directory's, if any, record by record to the experiment that ran its `variant`, or to the audit run for a record that names none. They are posted after the report's links are written. Cosmos imports a record id once per run, so sharing again changes nothing; a post that fails (a Cosmos without the import, an HTTP error, a timeout) is a warning naming the run, and sharing again retries it.
 
 Once Cosmos has parsed the runs, it resolves links (`experiments.l2.cosmos_links`, saved in `cosmos.json`) and writes the report's claims section again with them: each claim links to every run its counts come from, marked with what the target did there; a claim on `counts` also links every message that counted; and each cited post links to the message itself. A probe answer is a private interview, not a message, so a probe claim links to its runs only. The report uploaded to Cosmos ("Open report") is made before the links exist, so it has none.
 

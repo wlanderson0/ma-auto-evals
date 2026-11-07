@@ -92,13 +92,16 @@ uv run python -m experiments.l2.share logs/l2-audit/<name>
 It exports each experiment, uploads it with your `cosmos login` (each experiment is one
 Cosmos run), then uploads the audit run (L2's own log, its claims, ledger, brief and
 records), waits until Cosmos has processed them, and writes the report's claims section
-again with links to the runs and messages each claim rests on. Every run's manifest names
-the audit's study (`study`), so Cosmos groups them; an audit shared before studies
-existed becomes one when shared again (the audit run lists its experiments' runs). Each experiment's
-`annotations.jsonl` is posted to its run (a Cosmos without the import says so and shares the runs anyway). It prints each run's link. Run it again if it
-stops partway: a run already uploaded (its slug is kept in the audit's `cosmos-runs.json`,
-the audit run as `audit`) is never uploaded twice, and Cosmos imports an annotation only
-once. `--pr N` files the runs under a pull request.
+again with links to the runs and messages each claim rests on. Every run's manifest
+names the audit's study (`study`), so Cosmos groups them; an audit shared before studies
+existed becomes one when shared again (the audit run lists its experiments' runs). Then
+each experiment's `annotations.jsonl` is posted to its run, and the audit's own, if it
+has one, to the runs its records are on; a post that fails (a Cosmos without the import,
+an error, a timeout) is a warning, and the runs and links are shared anyway. It prints
+each run's link. Run it again if it stops partway: a run already uploaded (its slug is
+kept in the audit's `cosmos-runs.json`, the audit run as `audit`) is never uploaded
+twice, and Cosmos imports an annotation only once. `--pr N` files the runs under a pull
+request.
 
 The same, step by step. Each experiment of the audit is one Cosmos run:
 

@@ -174,14 +174,13 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   `models`, and reads `seats`. Bump `MANIFEST_SCHEMA` for an incompatible
   change too. cosmos does not check it, so the matching cosmos change is still
   required.
-
 - **L2 studies** (`experiments/l2/study.py`, Cosmos spec 12 §12.1): an L2 audit's
   runs name it in their manifest's `study` (`{id, name, experiment}` on an experiment,
   `{id, name, role: "audit", runs: {"exp-<n>": "<slug>"}}` on the audit run), and the
-  audit run carries
-  `study/claims.json`, `ledger.json`, `brief.json`, `decisions.json`, `proposed.json`,
-  `launches.json` and `review.json`, read by name. `annotations.jsonl` records (each
-  experiment's, and the audit's) are posted in Cosmos spec 13's shape (`experiments.l2.share`).
+  audit run carries `study/claims.json`, `ledger.json`, `brief.json`, `decisions.json`,
+  `proposed.json`, `launches.json` and `review.json`, read by name. `annotations.jsonl`
+  records (each experiment's, and the audit's) are posted in Cosmos spec 13's shape
+  (`experiments.l2.share`).
 
 cosmos also reads Orbit's own records: `orbit.communication` info events of
 kind `sent`, the `CommunicationState:messages` store key and the `experiment`

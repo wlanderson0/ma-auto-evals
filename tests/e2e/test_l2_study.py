@@ -334,3 +334,38 @@ def test_the_http_layer_turns_404_and_405_into_not_on_server(monkeypatch):
         with pytest.raises(NotOnServer, match=f"HTTP {status}"):
             post("/api/runs/abc/annotations", {"records": []})
     assert post("/api/runs/abc/annotations", {"records": []})["created"] == 0
+
+
+@pytest.mark.parametrize("failure", ["500", "timeout"])
+def test_a_failed_annotations_post_is_a_warning_after_the_links(audit, monkeypatch, failure):
+    """A 5xx or a timeout on the import never stops the share: cosmos.json and the report's
+    links are written first, and the warning names the run and the status only."""
+    import httpx
+
+    from experiments.l2 import cosmos_links
+
+    def handler(request):
+        if failure == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(500, text="secret-looking body not-a-real-token")
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(handler), **kw))
+    annotations(audit, RECORDS[:1])
+    annotations(audit / "experiments" / "exp-2", RECORDS[1:2])
+    cosmos = FakeCosmos()
+    post = cosmos_links.http_post(BASE, "not-a-real-token")
+    said = []
+    links = share(audit, upload=cosmos.upload, get=cosmos.get, post=post, base_url=BASE,
+                  sleep=lambda s: None, say=said.append)
+    assert json.loads((audit / "cosmos.json").read_text()) == links  # the links are written
+    assert links["runs"] == {"exp-1": f"{BASE}/runs/run0", "exp-2": f"{BASE}/runs/run1"}
+    assert any(s.startswith("report with Cosmos links:") for s in said)  # and relinked
+    why = "HTTP 500" if failure == "500" else "ReadTimeout"
+    assert f"annotations for exp-1 (run0) not posted: {why}; share again to post them" in said
+    assert f"annotations for exp-2 (run1) not posted: {why}; share again to post them" in said
+    assert said[-1] == "annotations: 0 created, 0 unchanged, 0 not imported, 2 batches not posted"
+    assert not any("not-a-real-token" in s or "body" in s for s in said)
+    assert said.index("annotations for exp-1 (run0) not posted: "
+                      f"{why}; share again to post them") > next(
+        i for i, s in enumerate(said) if s.startswith("report with Cosmos links"))

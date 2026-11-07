@@ -21,14 +21,15 @@ claims, ledger, brief and records), in ``cosmos/audit``, uploaded as ``"<audit> 
 and kept in ``cosmos-runs.json`` as ``audit``; the run Cosmos made must name the audit's
 study. Its manifest lists the slug of every experiment already on Cosmos
 (``study.runs``), so an audit whose experiments were shared before manifests named a
-study becomes one when shared again: only the audit run is uploaded. It waits until
-Cosmos has parsed every run (status ``ready``), 15 minutes at most; posts the audit's
-``annotations.jsonl`` files, if it has any (each experiment's, and the audit's own), to
-the runs that hold their targets (``POST /api/runs/{slug}/annotations``: Cosmos never
-imports a record twice, so posting again changes nothing; a server without that endpoint
-is a warning); then resolves the links (``experiments.l2.cosmos_links``) and writes the
-claims section of ``report.md`` again with them. It prints each run's link and the
-report's path.
+study becomes one when shared again: only the audit run is uploaded.
+
+It waits until Cosmos has parsed every run (status ``ready``), 15 minutes at most;
+resolves the links (``experiments.l2.cosmos_links``) and writes the claims section of
+``report.md`` again with them; then posts the audit's ``annotations.jsonl`` files, if it
+has any (each experiment's, and the audit's own), to the runs that hold their targets
+(``POST /api/runs/{slug}/annotations``: Cosmos never imports a record twice, so posting
+again changes nothing). A failed post is a warning naming the run, never an error. It
+prints each run's link and the report's path.
 """
 
 from __future__ import annotations
@@ -169,10 +170,6 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
     wait_ready(get, [runs[exp.name] for exp in experiments] + [runs[AUDIT_RUN]], sleep=sleep)
     claims = audit_dir / "claims.json"
     tools.claims = json.loads(claims.read_text()) if claims.exists() else []
-    if annotated:
-        assert post is not None
-        tools.results()  # which experiment ran each variant
-        post_annotations(audit_dir, runs, dict(tools._where), post, say)
     try:
         links = resolve(tools, {name: slug for name, slug in runs.items() if name != AUDIT_RUN},
                         get, base_url)
@@ -184,13 +181,19 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
         f"{len(links['posts'])} cited messages)")
     for problem in links["problems"]:
         say(f"not linked: {problem}")
+    if annotated:  # after the links, so an import that fails never costs them
+        assert post is not None
+        tools.results()  # which experiment ran each variant
+        post_annotations(audit_dir, runs, dict(tools._where), post, say)
     return links
 
 
 def post_annotations(audit_dir: Path, runs: dict[str, str], where: dict[str, str], post: Post,
                      say: Callable[[str], None] = print) -> dict[str, int]:
     """Post the audit's ``annotations.jsonl`` files to the runs that hold their targets; the
-    counts Cosmos gave back. A server without the import (HTTP 404 or 405) is a warning."""
+    counts Cosmos gave back. Every failure is a warning naming the run, never an error: a
+    server without the import (HTTP 404 or 405) stops the posting; any other (an HTTP
+    error, a timeout) skips that batch, which the next share posts again."""
     batches, problems = annotation_batches(audit_dir, where)
     total = {"created": 0, "unchanged": 0, "problems": len(problems)}
     for problem in problems:
@@ -204,6 +207,11 @@ def post_annotations(audit_dir: Path, runs: dict[str, str], where: dict[str, str
                 say(f"annotations not posted: this Cosmos cannot import them ({error}); "
                     "the runs are shared without them")
                 return total
+            except Exception as error:  # a warning: the runs and their links are shared
+                total["failed"] = total.get("failed", 0) + 1
+                say(f"annotations for {name} ({runs[name]}) not posted: {_why(error)}; "
+                    "share again to post them")
+                continue
             total["created"] += int(answer.get("created") or 0)
             total["unchanged"] += int(answer.get("unchanged") or 0)
             for problem in answer.get("problems") or []:
@@ -211,8 +219,16 @@ def post_annotations(audit_dir: Path, runs: dict[str, str], where: dict[str, str
                 say(f"annotation {problem.get('id')} not imported on {name}: "
                     f"{problem.get('reason')}")
     say(f"annotations: {total['created']} created, {total['unchanged']} unchanged, "
-        f"{total['problems']} not imported")
+        f"{total['problems']} not imported"
+        + (f", {total['failed']} batches not posted" if total.get("failed") else ""))
     return total
+
+
+def _why(error: Exception) -> str:
+    """What went wrong, from its type and HTTP status only (a response body or a message
+    could carry what the request sent)."""
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    return f"HTTP {status}" if status is not None else type(error).__name__
 
 
 def _name_study(folder: Path, study: dict[str, Any]) -> None:
