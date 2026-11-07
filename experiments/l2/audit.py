@@ -195,10 +195,10 @@ class Audit:
 
     def clock_state(self) -> dict[str, float | None]:
         """Elapsed and left of the time limit, and the share held back for L2's report."""
-        if self.time_limit is None or self.started is None:
-            return {"time_limit_s": None, "elapsed_s": None, "time_left_s": None,
+        elapsed = None if self.started is None else self.clock() - self.started
+        if self.time_limit is None or elapsed is None:
+            return {"time_limit_s": None, "elapsed_s": elapsed, "time_left_s": None,
                     "time_reserve_s": None}
-        elapsed = self.clock() - self.started
         return {"time_limit_s": self.time_limit, "elapsed_s": elapsed,
                 "time_left_s": self.time_limit - elapsed,
                 "time_reserve_s": TIME_RESERVE * self.time_limit}

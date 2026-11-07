@@ -306,7 +306,7 @@ def test_the_inspect_tools_refresh_l2s_spend_and_raise_on_refusal(tmp_path):
         anyio.run(lambda: run("list_runs"))
     assert tools.audit.budget()["by_kind"]["l2"] == 0.95
     with pytest.raises(ToolError, match="conclusions are required"):
-        anyio.run(lambda: run("end_audit", conclusions="", claims="[]"))
+        anyio.run(lambda: run("end_audit", conclusions="", claims="[]", writeup="W."))
 
 
 def test_find_tells_the_seats_scripted_opening_from_its_own_posts(ran):
@@ -485,7 +485,7 @@ def test_an_unreadable_spend_refuses_everything_but_end_audit(tmp_path):
     made = {ToolDef(t).name: t for t in inspect_tools(tools, spend=spend)}
     with pytest.raises(ToolError, match="cannot be read"):
         anyio.run(lambda: made["budget"]())
-    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims=[]))
+    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims=[], writeup="W."))
 
 
 def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline_module):

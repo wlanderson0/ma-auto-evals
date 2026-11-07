@@ -78,7 +78,8 @@ def test_the_analysis_only_fake_reads_an_existing_audit(full, tmp_path):
     source = full[0].audit.experiments()[0]
     # ANALYSIS's calls, on this audit's variants (ANALYSIS names milestone 1's).
     script = [("list_runs", {}), ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "probe"}),
-              ("find", {"pattern": "(?i)mfa", "agent": "dave"}), *ANALYSIS[-2:]]
+              ("find", {"pattern": "(?i)mfa", "agent": "dave"}),
+              *[(name, {**args, "writeup": "No figures."}) for name, args in ANALYSIS[-2:]]]
     audit = Audit.create(brief(tmp_path, 0.5), tmp_path / "audit", mock=True,
                          analysis=source)
     tools = Tools(audit, on_end=write_report)
@@ -165,7 +166,7 @@ def test_a_refused_end_audit_is_retried_and_the_message_limit_backstops(tmp_path
     monkeypatch.setattr(agent, "MESSAGE_LIMIT", 12)
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
     tools = Tools(audit, on_end=write_report)
-    script = [("end_audit", {"conclusions": " ", "claims": "[]"})] * 50
+    script = [("end_audit", {"conclusions": " ", "claims": "[]", "writeup": "W."})] * 50
     run_l2(tools, fake_model(script), PROMPT, prices=PRICES)
     trace = lines(audit.out / "trace.jsonl")
     assert len(trace) > 1 and not any(r["ok"] for r in trace)

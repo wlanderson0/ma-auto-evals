@@ -20,8 +20,8 @@ from experiments.l2.tools import READ, Tools
 from tests.support.l2_audit import brief
 
 PRICES = {"mockllm/l2": (1.0, 2.0)}  # $0.0012 per fake call
-DRAFT = {"conclusions": "Draft: nothing is concluded.", "claims": "[]"}
-FINAL = {"conclusions": "Final: nothing is concluded.", "claims": "[]"}
+DRAFT = {"conclusions": "Draft: nothing is concluded.", "claims": "[]", "writeup": "Draft."}
+FINAL = {"conclusions": "Final: nothing is concluded.", "claims": "[]", "writeup": "Final."}
 
 
 @pytest.fixture(scope="module")
@@ -110,7 +110,8 @@ def test_end_audit_waits_for_the_review_then_needs_a_response(tmp_path):
     review = stub()
     ok, text, _ = anyio.run(lambda: tools.reviewed_call(review, **DRAFT))
     assert ok and "1. A point." in text and "revise once" in text
-    assert review.draft == {"conclusions": "Draft: nothing is concluded.", "claims": []}
+    assert review.draft == {"conclusions": "Draft: nothing is concluded.", "claims": [],
+                            "writeup": "Draft."}
     ok, text = tools.call("end_audit", **FINAL)
     assert not ok and "response is required" in text and not tools.audit.ended
     ok, text = tools.call("end_audit", **FINAL, response="Kept: nothing to change.")

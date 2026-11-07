@@ -53,7 +53,7 @@ from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
 
 from experiments.l2 import claims as claims_
-from experiments.l2 import workspace
+from experiments.l2 import figures, workspace
 from experiments.l2 import written as written_
 from experiments.l2.apply import recorded_inner
 from experiments.l2.audit import Audit
@@ -176,6 +176,8 @@ class Tools:
         self.needs_review = False
         """Whether ``end_audit`` waits for a review (set by the agent, which runs the
         reviewer)."""
+        self.writeup: str | None = None
+        """L2's final write-up (``writeup.md``), once it ends the audit with one."""
         self.review: dict[str, Any] | None = None
         """The review once requested (``review.json``): L2's draft, the critique, and L2's
         response once it ends the audit."""
@@ -541,7 +543,21 @@ class Tools:
             raise Refused("against needs at least one other variant to compare with it")
         table = self.score_table([*ids, against], scorer, field)
         return "\n\n".join([table, *(self.compare(vid, against, scorer, rounds, field)
+                                      + self._figure(vid, against, scorer, rounds, field)
                                       for vid in ids)])
+
+    def _figure(self, a: str, b: str, scorer: str, rounds: int | None,
+                field: str | None) -> str:
+        """Draw the comparison for the write-up (spec §6.6); the line that names it."""
+        name = figures.figure_name(a, b, scorer, field, rounds)
+        measure = scorer + (f".{field}" if field else "") + (
+            f" up to round {rounds}" if rounds is not None else "")
+        try:
+            compared = self.results().compare(a, b, scorer, rounds=rounds, field=field)
+            figures.compare_figure(compared, a, b, measure, self.audit.out / name)
+        except Exception as error:  # a figure never fails the comparison
+            return f"\n(No figure: {type(error).__name__}: {error})"
+        return f"\nFigure: {name} (embed it in your write-up as ![caption]({name}))"
 
     def _field(self, results: Results, ids: Sequence[str], field: str) -> None:
         """``field`` must be one of the outcome's fields in these variants' runs."""
@@ -791,10 +807,30 @@ class Tools:
             raise Refused(str(error)) from error
         return claims_.check_claims(self, parsed)
 
-    def _draft(self, conclusions: str, claims: Any) -> dict[str, Any]:
-        """L2's draft for the reviewer: its conclusions and its claims with their verdicts."""
+    def _draft(self, conclusions: str, claims: Any, writeup: str | None = None
+               ) -> dict[str, Any]:
+        """L2's draft for the reviewer: its conclusions, its claims with their verdicts, and
+        its write-up."""
         checked = self._checked(conclusions, [] if claims is None else claims)
-        return {"conclusions": conclusions.strip(), "claims": checked}
+        return {"conclusions": conclusions.strip(), "claims": checked,
+                "writeup": self._writeup(writeup)}
+
+    def _writeup(self, writeup: Any) -> str | None:
+        """The write-up (spec §6.6), if given; ``Refused`` if it is empty or embeds a figure
+        that is not in the audit directory."""
+        if writeup is None:
+            return None
+        if not isinstance(writeup, str) or not writeup.strip():
+            raise Refused("writeup must be the write-up's markdown, not empty")
+        out = self.audit.out.resolve()
+        missing = [path for path in re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", writeup)
+                   if not (out / path).resolve().is_relative_to(out)
+                   or not (out / path).resolve().is_file()]
+        if missing:
+            raise Refused(f"the write-up embeds figures that are not in the audit directory: "
+                          f"{missing}. Embed a figure a scores result names (figures/...), or "
+                          "one you saved there with run_python.")
+        return writeup.strip()
 
     def _record_review(self, seq: int, draft: dict[str, Any], found: dict[str, Any]) -> str:
         """Save the review in ``review.json``; the text L2 sees."""
@@ -819,8 +855,8 @@ class Tools:
         (self.audit.out / "review.json").write_text(
             json.dumps(self.review, indent=2, sort_keys=True, default=str) + "\n")
 
-    def end_audit(self, conclusions: str, claims: Any = None, response: str | None = None
-                  ) -> str:
+    def end_audit(self, conclusions: str, claims: Any = None, response: str | None = None,
+                  writeup: str | None = None) -> str:
         """``claims`` (a list, or its JSON) are checked before anything ends: malformed
         claims or citations are refused, so L2 can fix them. ``None`` (no claims given)
         is kept for callers that predate them; the report says nothing was checked. When
@@ -834,6 +870,7 @@ class Tools:
             raise Refused("response is required: what you changed in answer to the review and "
                           "why, or why you kept a point as it was")
         checked = self._checked(conclusions, claims)
+        self.writeup = self._writeup(writeup)
         self.conclusions, self.claims = conclusions.strip(), checked
         if self.review is not None:
             self.review["response"] = response.strip()
@@ -847,7 +884,7 @@ class Tools:
             if self.on_end is not None:
                 self.on_end(self)
         except Exception:
-            self.conclusions = self.claims = None  # not ended: L2 can call end_audit again
+            self.conclusions = self.claims = self.writeup = None  # not ended: L2 can retry
             saved.unlink(missing_ok=True)  # no verdicts left behind for unrecorded claims
             if self.review is not None:
                 self.review["response"] = None
@@ -1240,27 +1277,29 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
     @tool
     def request_review() -> Tool:
-        async def execute(conclusions: str, claims: str | list[dict[str, Any]]) -> str:
+        async def execute(conclusions: str, claims: str | list[dict[str, Any]],
+                          writeup: str) -> str:
             """Before ending the audit, have an adversarial reviewer read your draft
-            conclusions and claims (once). The claims are first checked against the logs,
-            as end_audit checks them, and the reviewer sees their verdicts; it can read
-            the runs with the query tools but runs nothing, and its calls are paid from
-            the budget. You get its critique, then revise once with end_audit. After the
-            review no new experiment or scenario can be made.
+            conclusions, claims and write-up (once). The claims are first checked against
+            the logs, as end_audit checks them, and the reviewer sees their verdicts; it
+            can read the runs with the query tools but runs nothing, and its calls are
+            paid from the budget. You get its critique, then revise once with end_audit.
+            After the review no new experiment or scenario can be made.
 
             Args:
                 conclusions: Your draft conclusions, as you would give them to end_audit.
                 claims: Your draft claims, in end_audit's format.
+                writeup: Your draft write-up, in end_audit's format.
             """
-            refresh("request_review", {"conclusions": conclusions, "claims": claims})
-            return answer(*await tools.reviewed_call(review, conclusions=conclusions,
-                                                     claims=claims))
+            args = {"conclusions": conclusions, "claims": claims, "writeup": writeup}
+            refresh("request_review", args)
+            return answer(*await tools.reviewed_call(review, **args))
         return execute
 
     @tool
     def end_audit() -> Tool:
         async def execute(conclusions: str, claims: str | list[dict[str, Any]],
-                          response: str | None = None) -> str:
+                          writeup: str, response: str | None = None) -> str:
             """End the audit with your conclusions and claims; this writes the report and
             stops you. Each claim is checked against the logs and gets a verdict (checked,
             lead, contradicted, invalid or unchecked) in the report. Malformed claims or
@@ -1276,6 +1315,17 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     interpretation, not checked.
                 response: After a review (required then): what you changed in answer to
                     the reviewer's critique and why, or why you kept a point as it was.
+                writeup: The audit's write-up in markdown, for a reader who was not
+                    here: a results report, not a log (written to writeup.md, under a
+                    table of the audit's facts the harness adds: question, budget and
+                    spend, time, experiments, how it ended). Lead with the answer in a
+                    few sentences; then the setup (a table); the results (tables of k of
+                    n, and figures); what the results do and do not show; how the audit
+                    went, including your own mistakes; limitations; next steps. Every
+                    number must come from a tool result. Embed figures with
+                    ![caption](figures/<file>.png): every scores call with against draws
+                    one and names its file; make others with run_python (matplotlib) and
+                    save them under figures/.
                 claims: A JSON list of your findings ([] if you claim nothing). Each is
                     {"text": the claim in words, "kind", its fields, "evidence": a list
                     of references}. A reference is {"call": N} (the [call N] before a tool
@@ -1293,7 +1343,7 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     comparison for its target).
             """
             return await call("end_audit", conclusions=conclusions, claims=claims,
-                              response=response)
+                              writeup=writeup, response=response)
         return execute
 
     if by == "reviewer":

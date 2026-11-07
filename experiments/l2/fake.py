@@ -27,6 +27,18 @@ _CONCLUSIONS = ("Fake L2 (scripted): nothing is concluded; this run tests the pi
 _CLAIMS = json.dumps([{"text": "Dave's adoption is not told apart between V1 and C0.",
                        "kind": "no_difference", "a": "V1", "b": "C0", "target": "dave",
                        "evidence": [{"call": 4}]}])
+_WRITEUP = """## Summary
+
+Fake L2 (scripted): a pipeline test, nothing is concluded.
+
+## Results
+
+| target | V1 | C0 |
+|---|---|---|
+| dave | see call 4 | see call 4 |
+
+![V1 against C0, per target](figures/V1-vs-C0-probe.png)
+"""
 FULL: list[tuple[str, dict[str, Any]]] = [
     ("note_decision", {"field": "epochs", "value": "2",
                        "reason": "a pipeline test: two epochs per variant"}),
@@ -40,8 +52,8 @@ FULL: list[tuple[str, dict[str, Any]]] = [
     ("transcript", {"variant_id": "V1", "epoch": 1, "max_posts": 5}),
     ("find", {"pattern": "(?i)mfa", "agent": "dave"}),
     ("budget", {}),
-    ("request_review", {"conclusions": _CONCLUSIONS, "claims": _CLAIMS}),
-    ("end_audit", {"conclusions": _CONCLUSIONS, "claims": _CLAIMS,
+    ("request_review", {"conclusions": _CONCLUSIONS, "claims": _CLAIMS, "writeup": _WRITEUP}),
+    ("end_audit", {"conclusions": _CONCLUSIONS, "claims": _CLAIMS, "writeup": _WRITEUP,
                    "response": "Fake L2: the claim is kept as it was."}),
 ]
 ANALYSIS: list[tuple[str, dict[str, Any]]] = [
@@ -52,13 +64,16 @@ ANALYSIS: list[tuple[str, dict[str, Any]]] = [
     *[(name, {"conclusions": ("Fake L2 (scripted, analysis only): nothing is concluded. "
                               "Search: 0 variants run, 1 scorer (probe), 1 comparison."),
               "claims": json.dumps([{"text": "M1 against M0, as read in call 3.",
-                                     "kind": "other", "evidence": [{"call": 3}]}]), **more})
+                                     "kind": "other", "evidence": [{"call": 3}]}]),
+              "writeup": "Fake L2 (analysis only): nothing is concluded.\n\n"
+                         "![M1 against M0](figures/M1-vs-M0-probe.png)", **more})
       for name, more in (("request_review", {}),
                          ("end_audit", {"response": "Fake L2: nothing to revise."}))],
 ]
-END = [("request_review", {"conclusions": "Fake L2: the script is spent.", "claims": "[]"}),
-       ("end_audit", {"conclusions": "Fake L2: the script is spent.", "claims": "[]",
-                      "response": "Fake L2: nothing to revise."})]
+_SPENT = {"conclusions": "Fake L2: the script is spent.", "claims": "[]",
+          "writeup": "Fake L2: the script is spent; nothing is concluded."}
+END = [("request_review", _SPENT),
+       ("end_audit", {**_SPENT, "response": "Fake L2: nothing to revise."})]
 """After the script: ask for a review, then end the audit (a review already done is
 refused, and the audit ends)."""
 REVIEW: list[tuple[str, dict[str, Any]]] = [

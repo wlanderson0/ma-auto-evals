@@ -125,7 +125,11 @@ audit; then read what ran and conclude. If run_experiment is not among your tool
 audit is analysis only: read the runs already made.
 
 # Finishing
-When you have your answer, call request_review with your draft claims and conclusions:
+Write up the audit for a reader who was not here, as a results report (writeup.md): the
+answer first, then the setup, the results in tables and figures, what they do and do not
+show, how the audit went, limitations and next steps (end_audit's writeup says more).
+When you have your answer, call request_review with your draft claims, conclusions and
+write-up:
 an adversarial reviewer reads them, with the checker's verdicts below, and can read the
 runs but not run anything. Then revise once: call end_audit with your final claims and
 conclusions and your response to the critique. After the review no new experiment
@@ -387,7 +391,9 @@ anything in the conclusions. That is your job. Look for:
   probe answers, posts copied from another agent or written by the setup;
 - what is missing: results in the runs that the conclusions leave out, nulls not
   reported, departures from the guidance not stated, search counts that do not match
-  the record.
+  the record;
+- the write-up: numbers, tables or figure captions that do not match the tool results,
+  and a summary that says more than the claims.
 
 You can read the runs with list_runs, scores, transcript and find; each result starts
 with [call N], which L2 can cite. You cannot run experiments, and your calls are paid
@@ -423,6 +429,9 @@ def review_message(tools: Tools, draft: Mapping[str, Any]) -> str:
         lines += claim_lines(i, claim)
     if not claims:
         lines.append("L2 claims nothing.")
+    lines += ["", "# L2's draft write-up (figures are named by file; their numbers are the "
+              "scores results that drew them)", "",
+              draft.get("writeup") or "L2 gave no write-up."]
     return "\n".join(lines)
 
 

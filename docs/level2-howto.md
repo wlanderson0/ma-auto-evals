@@ -66,13 +66,16 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   time (it may run a little over, but always ends with a report). A long audit can take hours, so set one when it matters.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
-The audit directory holds `report.md` (L2's claims with their verdicts, its conclusions,
+The audit directory holds `writeup.md` (L2's write-up: a results report with tables and
+figures, under a table of the audit's facts; start here), `figures/`, `report.md` (L2's claims with their verdicts, its conclusions,
 the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
 evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
 
 ## 3. Read it critically
 
+- Read `writeup.md` for the story, then check it against `report.md`: the write-up is
+  L2's own and unchecked (the reviewer read its draft), the claims are checked.
 - Start from the claims at the top of `report.md`. Each was read again from the logs
   (spec §6.4): only *checked* claims are findings; a *lead* falls short (e.g. not told
   apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*

@@ -343,8 +343,8 @@ L2's tools (`experiments/l2/tools.py`):
 | `run_python(code)` | L2's own code on the logs (§6) |
 | `note_decision(field, value, reason)` | records a choice on something the brief left open (e.g. the mode or the measure, §6.4) |
 | `budget()` | spent, remaining and the reserve, and the time left if there is a time limit (§7) |
-| `request_review(conclusions, claims)` | has an adversarial reviewer read L2's draft before the audit ends (§6.5) |
-| `end_audit(conclusions, claims, response)` | ends the audit with its claims, which are checked (§6.4); after the review, `response` says how L2 answered it |
+| `request_review(conclusions, claims, writeup)` | has an adversarial reviewer read L2's draft before the audit ends (§6.5) |
+| `end_audit(conclusions, claims, writeup, response)` | ends the audit with its claims, which are checked (§6.4), and its write-up (§6.6); after the review, `response` says how L2 answered it |
 
 **Not built yet:** `branches(run)` (an L1 branch tree, with inner L1), `exposure(run, agent)` (what an agent saw; see below), and filtering `list_runs` by tag (§6.2).
 
@@ -435,7 +435,17 @@ L2 then revises once: `end_audit(conclusions, claims, response)`, where `respons
 - **Budget.** The reviewer's model calls run inside L2's own Inspect sample, so they are in L2's log and counted as L2's own calls in the ledger (§7). It may spend up to half of what is left of the budget when it starts, so L2 can still revise; once it reaches that, it gets one last turn to submit what it has. A message limit is the backstop. Its query calls cost nothing, so the hard stop does not refuse them.
 - **A failed review** (e.g. the provider refuses the reviewer's call) is recorded as a review with no critique and the error, so L2 can still revise and end the audit.
 - **Not L2's search.** The reviewer's calls are rows of `trace.jsonl` marked `"by": "reviewer"`. L2 can cite them like its own, but they are left out of L2's search counts and tables in the report and of the correction for the number of comparisons (§6.4), since the reviewer's checks are not L2's search.
-- **Record.** `review.json` holds the draft (conclusions, and claims with their verdicts), the critique, the reviewer's calls, what it cost, why it stopped early if it did, and L2's response. The report shows the draft claims with their verdicts, the critique and the response, quoted and unchecked.
+- **The write-up too.** The draft includes L2's write-up (§6.6), which the reviewer reads with the claims; it is told to look for numbers, tables or captions that do not match the tool results, and a summary that says more than the claims.
+- **Record.** `review.json` holds the draft (conclusions, claims with their verdicts, and the write-up), the critique, the reviewer's calls, what it cost, why it stopped early if it did, and L2's response. The report shows the draft claims with their verdicts, the critique and the response, quoted and unchecked.
+
+
+### 6.6 The write-up
+
+`report.md` is the record: every claim with its verdict and evidence, the tables, the ledger. For a reader who was not there, L2 also writes up the audit as a results report, `writeup.md`, with tables and figures. It is L2's own text (`writeup` in `request_review` and `end_audit`), in markdown: the answer first, then the setup, the results in tables and figures, what they do and do not show, how the audit went (its own mistakes included), limitations and next steps. Every number in it should come from a tool result.
+
+- **Figures.** Every `scores` call with `against` draws its comparison as a PNG in `figures/` (one bar per target and side, the share of runs showing the behaviour with a 95% Wilson interval, and its k of n written on the bar), and its result names the file. Drawn from the same numbers as the table L2 reads, these figures are as checkable as the tables. L2 can draw others with `run_python` (matplotlib is installed) and save them under `figures/`. The write-up embeds them as `![caption](figures/<file>.png)`; `request_review` and `end_audit` refuse a write-up that embeds a file not in the audit directory. A figure that cannot be drawn never fails the comparison.
+- **The audit's facts.** `writeup.md` opens with a table the harness writes from the record, not L2: the question, L2's model, the budget and spend (L2's own calls, the reviewer's share, runs), the time, the experiments run, how the audit ended, any stop, and the claims' verdicts. A line then says that what follows is L2's own and unchecked, and that the checked claims are in `report.md`.
+- **Unchecked, but reviewed.** Nothing in the write-up is checked like a claim; the reviewer reads the draft (§6.5). If L2 never ends the audit, `writeup.md` is the reviewed draft, marked as a draft; with no write-up at all there is no `writeup.md`.
 
 ## 7. Budget
 
@@ -469,6 +479,7 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 - `experiments/exp-<n>/`, one per launch: its variants, `runs.jsonl` (with the eval log paths), `decisions.json`, `cost.json` and the eval logs;
 - `ledger.json`, the budget ledger (§7), and `l2/`, L2's own Inspect log;
 - `claims.json`, L2's claims with their verdicts (§6.4), and `review.json`, the reviewer's critique of L2's draft and L2's response (§6.5);
+- `writeup.md`, L2's write-up under the audit's facts, and `figures/`, its figures (§6.6);
 - `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the review, each experiment's rationale with its variants and theirs, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
 - once shared (§8.1): `cosmos-runs.json`, `cosmos.json` and `cosmos/`.
 
@@ -562,7 +573,7 @@ The LLM L2 is an agent working with tools (§6.1) and doesn't need to fit this i
 - rebuilding an incident from a brief, against a calibration (`level2-milestone5.md`);
 - sharing on Cosmos and a first study (`level2-milestone6.md`);
 - claims checked against the record, and linked to Cosmos (§6.4, §8.1);
-- an adversarial review of L2's draft before the audit ends (§6.5), a rationale for every experiment (§5), and stopping early by hand or by time (§7).
+- an adversarial review of L2's draft before the audit ends (§6.5), a write-up with figures (§6.6), a rationale for every experiment (§5), and stopping early by hand or by time (§7).
 
 **Next:**
 
@@ -606,6 +617,7 @@ Contract tests for L2, in the style of `auditor-tests.md`. Each is cited by numb
 | L2-21 | The review comes before the end               | With a reviewer, `end_audit` is refused until `request_review` has run, then needs a `response`; the reviewer is offered only the query tools and its calls are refused otherwise; after the review no experiment, scenario or second review starts; the reviewer stops at half of what was left; the draft, critique and response are in `review.json` and the report. |
 | L2-22 | Every experiment has a rationale              | A launch without a rationale is refused, and recorded; a launch's rationale, refused or rejected ones included, is in `launches.jsonl`, and a run experiment's in its `brief.md` and in the report above its variants. |
 | L2-23 | Stopping early by hand or by time             | Past the time limit less its held-back share, no new experiment starts, the query tools still work and `budget()` shows the time left; a running experiment stops before its next epoch, its variants balanced; one Ctrl-C lets the running experiment finish, then L2 reads it and concludes; a second stops the running epoch and any next one, and the launch's record, the ledger and the report are still written; past the whole limit L2 still ends with a report. |
+| L2-24 | A write-up with figures                       | Every scores call with against draws its comparison and names the file; `writeup.md` is the audit's facts from the record, then L2's text; a write-up embedding a file not in the audit directory is refused; L2 can embed its own matplotlib figure; the reviewer reads the draft write-up; an audit L2 never ended keeps the reviewed draft, marked as a draft. |
 
 (L2-4, "scorers cover all compared runs", was dropped: it is now guidance, §6.3.)
 

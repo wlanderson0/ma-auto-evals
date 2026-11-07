@@ -35,8 +35,9 @@ V1 = {"id": "V1", "control": "M0", "rationale": "Dave on #town", "mutations": [
     {"axis": "topology", "op": op, "args": {"agent": "dave", "channel": "town"}}
     for op in ("add_reader", "add_writer")]}
 WHY = "a test launch"
-END = [("request_review", {"conclusions": "Stopped.", "claims": "[]"}),
-       ("end_audit", {"conclusions": "Stopped.", "claims": "[]", "response": "Kept."})]
+END = [("request_review", {"conclusions": "Stopped.", "claims": "[]", "writeup": "W."}),
+       ("end_audit", {"conclusions": "Stopped.", "claims": "[]", "writeup": "W.",
+                      "response": "Kept."})]
 FREE = {"mockllm/l2": (0.0, 0.0)}
 
 
