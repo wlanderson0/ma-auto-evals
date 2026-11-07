@@ -406,7 +406,7 @@ something). Say in a line which claims hold. Do not rewrite the report yourself.
 The reading guidance L2 was given:
 
 {GUIDANCE}"""
-REVIEW_SHARE = 0.5
+REVIEW_SHARE = 0.25
 """The reviewer may spend up to this share of what is left of the budget, and of the
 time, when it starts, so L2 can still revise."""
 REVIEW_MESSAGES = 60
@@ -460,9 +460,11 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
                 return False
             share = None
             if audit.l2["usd"] - start >= cap - EPSILON:
-                share = f"its share of the budget (${cap:.4f}, half of what was left)"
+                share = (f"its share of the budget (${cap:.4f}, {REVIEW_SHARE:.0%} of what "
+                         "was left)")
             elif time_cap is not None and audit.clock() - began >= time_cap:
-                share = f"its share of the time ({time_cap:.0f} s, half of what was left)"
+                share = (f"its share of the time ({time_cap:.0f} s, {REVIEW_SHARE:.0%} of "
+                         "what was left)")
             if share is not None:
                 if why:  # it had its last turn
                     return False

@@ -12,7 +12,7 @@ import anyio
 import pytest
 from inspect_ai.log import read_eval_log, resolve_sample_attachments
 
-from experiments.l2.agent import REVIEW_MESSAGES, REVIEWER_PROMPT, run_l2
+from experiments.l2.agent import REVIEW_MESSAGES, REVIEW_SHARE, REVIEWER_PROMPT, run_l2
 from experiments.l2.audit import Audit
 from experiments.l2.audit_report import render, write_report
 from experiments.l2.fake import FULL, PROMPT, REVIEW, fake_model
@@ -167,7 +167,8 @@ def test_request_review_without_a_reviewer_is_refused(tmp_path):
 
 # ---------------------------------------------------------- the reviewer's bounds
 def test_the_reviewer_stops_at_its_share_of_what_is_left(tmp_path):
-    """A reviewer that never submits is stopped once it has spent half of what was left;
+    """A reviewer that never submits is stopped once it has spent its share (a quarter) of
+    what was left;
     L2 still revises and ends the audit."""
     audit = Audit.create(brief(tmp_path, 0.05), tmp_path / "audit", mock=True)
     tools = Tools(audit, on_end=write_report)
@@ -176,7 +177,8 @@ def test_the_reviewer_stops_at_its_share_of_what_is_left(tmp_path):
            token_limit=10**6)
     review = tools.review
     assert "share of the budget" in review["stopped"]
-    cap = 0.5 * (0.05 - 0.0012)  # half of what was left after L2's first call
+    cap = REVIEW_SHARE * (0.05 - 0.0012)  # of what was left after L2's first call
+    assert REVIEW_SHARE == 0.25
     # at most one call over, then one last turn, in which it submits what it has
     assert cap <= review["cost_usd"] <= cap + 2 * 0.0012 + 1e-9
     assert review["critique"] == REVIEW[-1][1]["answer"]
@@ -247,3 +249,18 @@ def test_the_reviewer_s_comparisons_are_not_l2_s_search(tmp_path):
     assert "- Comparisons tried: 1 distinct (1 successful calls)" in report
     assert "### compare V2 vs C0" not in report
     assert "- Tool calls: 2 (0 refused or failed), and 1 by the reviewer" in report
+
+
+def test_end_audit_says_which_calls_are_evidence(tmp_path):
+    """In a live run L2 cited its request_review call for a point the reviewer raised."""
+    from inspect_ai.tool import ToolDef
+
+    from experiments.l2.claims import CITABLE
+    from experiments.l2.tools import inspect_tools
+
+    tools = reviewing(tmp_path)
+    [end] = [ToolDef(t) for t in inspect_tools(tools, review=stub())
+             if ToolDef(t).name == "end_audit"]
+    described = " ".join(end.parameters.properties["claims"].description.split())
+    assert all(name in described for name in CITABLE)
+    assert "request_review (the critique) is not" in described

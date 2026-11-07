@@ -1354,7 +1354,11 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     {"text": the claim in words, "kind", its fields, "evidence": a list
                     of references}. A reference is {"call": N} (the [call N] before a tool
                     result) or {"variant", "epoch", "post": S (from "post S"), "quote":
-                    words in that post, at least 3}. Kinds and fields:
+                    words in that post, at least 3}. Only calls that read the runs are
+                    evidence: scores, transcript, find, run_python and list_runs, the
+                    reviewer's included; request_review (the critique) is not, so for a
+                    point the reviewer raised, cite the reviewer's call that shows it.
+                    Kinds and fields:
                     "difference": "a", "b", "target", "direction" ("higher" or "lower":
                     a's rate against b's), citing the scores call with against that
                     compared them; "no_difference": "a", "b", "target", citing the same;
