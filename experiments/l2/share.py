@@ -19,12 +19,16 @@ experiment of the audit it
 Then it does the same for the audit run (``experiments.l2.study``: L2's own log, its
 claims, ledger, brief and records), in ``cosmos/audit``, uploaded as ``"<audit> audit"``
 and kept in ``cosmos-runs.json`` as ``audit``; the run Cosmos made must name the audit's
-study. It waits until Cosmos has parsed every run (status ``ready``), 15 minutes at most;
-posts the audit's ``annotations.jsonl``, if it has one, to the runs that hold their
-targets (``POST /api/runs/{slug}/annotations``: Cosmos never imports a record twice, so
-posting again changes nothing; a server without that endpoint is a warning); then
-resolves the links (``experiments.l2.cosmos_links``) and writes the claims section of
-``report.md`` again with them. It prints each run's link and the report's path.
+study. Its manifest lists the slug of every experiment already on Cosmos
+(``study.runs``), so an audit whose experiments were shared before manifests named a
+study becomes one when shared again: only the audit run is uploaded. It waits until
+Cosmos has parsed every run (status ``ready``), 15 minutes at most; posts the audit's
+``annotations.jsonl`` files, if it has any (each experiment's, and the audit's own), to
+the runs that hold their targets (``POST /api/runs/{slug}/annotations``: Cosmos never
+imports a record twice, so posting again changes nothing; a server without that endpoint
+is a warning); then resolves the links (``experiments.l2.cosmos_links``) and writes the
+claims section of ``report.md`` again with them. It prints each run's link and the
+report's path.
 """
 
 from __future__ import annotations
@@ -50,7 +54,14 @@ from experiments.l2.cosmos_links import (
     resolve,
     sign_in,
 )
-from experiments.l2.study import AUDIT_RUN, annotation_batches, export_audit, study_of
+from experiments.l2.study import (
+    AUDIT_RUN,
+    annotation_batches,
+    annotation_files,
+    audit_study,
+    export_audit,
+    study_of,
+)
 
 RUN_URL = re.compile(r"/runs/([A-Za-z0-9_-]{1,64})\s*$")
 Upload = Callable[[Path, str, int | None], str]
@@ -118,7 +129,7 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
     experiments = tools.audit.experiments()
     if not experiments:
         raise SystemExit(f"{audit_dir} has no experiments of its own to share")
-    annotated = (audit_dir / "annotations.jsonl").exists()
+    annotated = bool(annotation_files(audit_dir))
     if get is None or base_url is None or (post is None and annotated):
         url, token = sign_in()
         get, base_url = get or http_get(url, token), base_url or url
@@ -146,6 +157,7 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
         folder = audit_dir / "cosmos" / AUDIT_RUN
         if not (folder / "manifest.json").exists():
             _export(export_audit, audit_dir, folder, pr)
+        _name_study(folder, audit_study(audit_dir, runs))
         slug = upload(folder, f"{audit_dir.name} {AUDIT_RUN}", pr)
         named = (get(f"/api/runs/{slug}").get("manifest") or {}).get("study") or {}
         if named.get("id") != study["id"] or named.get("role") != "audit":
@@ -177,7 +189,7 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
 
 def post_annotations(audit_dir: Path, runs: dict[str, str], where: dict[str, str], post: Post,
                      say: Callable[[str], None] = print) -> dict[str, int]:
-    """Post the audit's ``annotations.jsonl`` to the runs that hold their targets; the
+    """Post the audit's ``annotations.jsonl`` files to the runs that hold their targets; the
     counts Cosmos gave back. A server without the import (HTTP 404 or 405) is a warning."""
     batches, problems = annotation_batches(audit_dir, where)
     total = {"created": 0, "unchanged": 0, "problems": len(problems)}
@@ -203,8 +215,9 @@ def post_annotations(audit_dir: Path, runs: dict[str, str], where: dict[str, str
     return total
 
 
-def _name_study(folder: Path, study: dict[str, str]) -> None:
-    """The export's manifest names ``study`` (an export made before studies did not)."""
+def _name_study(folder: Path, study: dict[str, Any]) -> None:
+    """The export's manifest names ``study`` (an export made before studies did not, and
+    an audit run's lists the experiments on Cosmos when it is uploaded)."""
     path = folder / "manifest.json"
     manifest = json.loads(path.read_text())
     if manifest.get("study") != study:

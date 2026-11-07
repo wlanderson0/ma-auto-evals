@@ -172,7 +172,7 @@ def test_share_uploads_the_audit_run_beside_the_experiments_once(audit):
     study = study_of(audit)
     assert [cosmos.runs[s]["manifest"]["study"] for s in ("run0", "run1", "run2")] == [
         {**study, "experiment": "exp-1"}, {**study, "experiment": "exp-2"},
-        {**study, "role": "audit"}]
+        {**study, "role": "audit", "runs": {"exp-1": "run0", "exp-2": "run1"}}]
     assert links["runs"] == {"exp-1": f"{BASE}/runs/run0", "exp-2": f"{BASE}/runs/run1"}
     assert f"audit: {BASE}/runs/run2" in said
     assert cosmos.posts == []  # no annotations.jsonl: nothing posted
@@ -268,6 +268,50 @@ def test_an_older_cosmos_without_the_import_is_a_warning(audit):
     assert any(s.startswith("annotations not posted: this Cosmos cannot import them (HTTP 404")
                for s in said)
     assert links["runs"]["exp-1"] == f"{BASE}/runs/run0"  # shared all the same
+
+
+def test_an_experiments_own_annotations_go_to_its_run(audit):
+    """L2 spec §6.2: annotations.jsonl next to an experiment's logs is that experiment's,
+    whatever its records name; the audit's own file is routed by variant beside it."""
+    mine = [{**RECORDS[3], "id": "e-1"}, {**RECORDS[0], "id": "e-2"}]  # no variant; V1
+    annotations(audit / "experiments" / "exp-2", mine)
+    annotations(audit, RECORDS[:1])
+    cosmos = FakeCosmos()
+    cosmos.share(audit)
+    posted = {path: [r["id"] for r in body["records"]] for path, body in cosmos.posts}
+    assert posted == {"/api/runs/run0/annotations": ["a-1"],
+                      "/api/runs/run1/annotations": ["e-1", "e-2"]}
+
+
+def test_resharing_an_audit_shared_before_studies_makes_it_one(audit, tmp_path):
+    """Its experiments are on Cosmos already, with manifests that name no study: only the
+    audit run is uploaded, and its manifest lists their slugs (study.runs), so Cosmos can
+    join them to the study."""
+    cosmos = FakeCosmos()
+    old = {}
+    for exp in ("exp-1", "exp-2"):
+        folder = export(audit / "experiments" / exp, tmp_path / exp)
+        manifest = json.loads((folder / "manifest.json").read_text())
+        del manifest["study"]
+        (folder / "manifest.json").write_text(json.dumps(manifest))
+        old[exp] = f"old{exp[-1]}"
+        cosmos.runs[old[exp]] = cosmos_run(folder)
+    (audit / "cosmos-runs.json").write_text(json.dumps(old))
+    links, _ = cosmos.share(audit)
+    assert [name for _, name in cosmos.uploads] == ["board-audit audit"]
+    [(folder, _)] = cosmos.uploads
+    study = json.loads((folder / "manifest.json").read_text())["study"]
+    assert study == {**study_of(audit), "role": "audit", "runs": old}
+    assert json.loads((audit / "cosmos-runs.json").read_text()) == {**old, "audit": "run0"}
+    assert links["runs"] == {exp: f"{BASE}/runs/{slug}" for exp, slug in old.items()}
+
+
+def cosmos_run(folder):
+    """A run as Cosmos keeps an uploaded experiment folder."""
+    rows = json.loads((folder / "results.json").read_text())["results"]
+    return {"manifest": json.loads((folder / "manifest.json").read_text()), "status": "ready",
+            "samples": [{"id": 900 + i, "scenario": r["scenario"], "condition": r["condition"],
+                         "epoch": r["epoch"]} for i, r in enumerate(rows)]}
 
 
 def test_the_http_layer_turns_404_and_405_into_not_on_server(monkeypatch):
