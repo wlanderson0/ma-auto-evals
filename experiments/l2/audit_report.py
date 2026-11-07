@@ -723,9 +723,9 @@ def relink(out: Path) -> Path:
 
 
 def write_report(tools: Tools, why_no_conclusions: str | None = None) -> Path:
+    write_writeup(tools, why_no_conclusions)  # first: the report's record lists it
     path = tools.audit.out / "report.md"
     path.write_text(render(tools, why_no_conclusions))
-    write_writeup(tools, why_no_conclusions)
     return path
 
 
@@ -748,30 +748,36 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
     b = audit.budget()
     usd = b["by_kind"]
     reviewer = (tools.review or {}).get("cost_usd")
-    experiments = [r for r in _jsonl(audit.out / "launches.jsonl")
-                   if r.get("status") == "ran"] if (audit.out / "launches.jsonl").exists() else []
+    ran: dict[str, list[str]] = {}
+    for v in tools.variant_rows():  # the epochs that ran, not those asked for
+        ran.setdefault(v["experiment"], []).append(f"{v['id']} × {v['epochs']}")
     t = audit.clock_state()
+    broken = tools.broken_embeds(text)
     facts = [
         ("Question", " ".join(audit.brief.question.split())),
         ("L2", ", ".join(b["l2_by_model"]) or "unknown"),
-        ("Budget", f"${audit.brief.budget_usd:.2f}; ${b['spent_usd']:.2f} spent "
-                   f"(${usd['l2']:.2f} on L2's own calls"
-                   + (f", of which ${reviewer:.2f} the reviewer" if reviewer else "")
-                   + f"; ${usd['experiments']:.2f} on runs)"),
-        ("Time", f"{t['elapsed_s'] / 60:.0f} min" + (
-            f" of a {t['time_limit_s'] / 60:.0f}-min limit" if t["time_limit_s"] else "")
+        ("Budget", f"${audit.brief.budget_usd:.2f}; ${b['spent_usd']:.4f} spent "
+                   f"(${usd['l2']:.4f} on L2's own calls"
+                   + (f", of which ${reviewer:.4f} the reviewer" if reviewer else "")
+                   + f"; ${usd['experiments']:.4f} on runs)"),
+        ("Time", f"{t['elapsed_s'] / 60:.1f} min" + (
+            f" of a {t['time_limit_s'] / 60:.1f}-min limit" if t["time_limit_s"] else "")
          if t["elapsed_s"] is not None else "not recorded"),
-        ("Experiments", "; ".join(f"{r['experiment']}: {', '.join(r['ids'])} × {r['epochs']} "
-                                  "epochs" for r in experiments) or "none run"),
+        ("Runs (variant × epochs run)",
+         ("analysis only, of " + str(audit.analysis) + ": " if audit.analysis else "")
+         + ("; ".join(f"{exp}: {', '.join(rows)}" for exp, rows in ran.items()) or "none")),
         ("How it ended", "L2 ended the audit" if tools.conclusions is not None else
          f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}"),
         ("Stopped", b["stopped"] or b["halted"] or "no"),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
+        *([("Images that will not show", ", ".join(broken))] if broken else []),
     ]
+    why_draft = ("gave no final write-up" if tools.conclusions is not None
+                 else "did not end the audit")
     lines = [f"# {audit.out.name}: L2's write-up", "",
-             *(["> **Draft:** L2 did not end the audit, so this is the draft the reviewer "
-                "read, not revised.", ""] if not final else []),
+             *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
+                "revised.", ""] if not final else []),
              "| | |", "|---|---|", *[f"| {name} | {_cell(value)} |" for name, value in facts],
              "", "The table above is the harness's, from the record. Everything below is "
              "L2's own: its numbers are not checked here; its checked claims, with their "

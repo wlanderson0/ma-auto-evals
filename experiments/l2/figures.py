@@ -45,14 +45,12 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def compare_figure(compared: Mapping[str, Mapping[str, Any]], a: str, b: str, measure: str,
                    path: Path) -> Path:
     """Draw ``compared`` (``Results.compare``) to ``path``."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
+    from matplotlib.figure import Figure  # no pyplot: no global backend or state
 
     targets = list(compared)
     width = 0.36
-    fig, ax = plt.subplots(figsize=(max(4.0, 1.6 * len(targets) + 1.5), 3.4), dpi=150)
+    fig = Figure(figsize=(max(4.0, 1.6 * len(targets) + 1.5), 3.4), dpi=150)
+    ax = fig.subplots()
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
     for i, (side, vid) in enumerate((("a", a), ("b", b))):
@@ -90,5 +88,4 @@ def compare_figure(compared: Mapping[str, Mapping[str, Any]], a: str, b: str, me
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, facecolor=SURFACE)
-    plt.close(fig)
     return path

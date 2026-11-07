@@ -42,8 +42,10 @@ import keyword
 import math
 import re
 import time
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -51,6 +53,7 @@ import anyio
 from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
+from markdown_it import MarkdownIt
 
 from experiments.l2 import claims as claims_
 from experiments.l2 import figures, workspace
@@ -176,6 +179,8 @@ class Tools:
         self.needs_review = False
         """Whether ``end_audit`` waits for a review (set by the agent, which runs the
         reviewer)."""
+        self._caller = "l2"
+        """Who makes the call running now (``numbered_call``)."""
         self.writeup: str | None = None
         """L2's final write-up (``writeup.md``), once it ends the audit with one."""
         self.review: dict[str, Any] | None = None
@@ -201,6 +206,7 @@ class Tools:
         (L2's tools are serial: Inspect runs a tool in parallel only if it says so.)"""
         self._seq += 1
         seq = self._seq
+        self._caller = by
         try:
             args = self._admit(name, args, by)
             if name == "request_review":  # it runs the reviewer: see reviewed_call
@@ -549,6 +555,8 @@ class Tools:
     def _figure(self, a: str, b: str, scorer: str, rounds: int | None,
                 field: str | None) -> str:
         """Draw the comparison for the write-up (spec §6.6); the line that names it."""
+        if self._caller == "reviewer":  # the reviewer reads; the write-up is L2's
+            return ""
         name = figures.figure_name(a, b, scorer, field, rounds)
         measure = scorer + (f".{field}" if field else "") + (
             f" up to round {rounds}" if rounds is not None else "")
@@ -816,21 +824,33 @@ class Tools:
                 "writeup": self._writeup(writeup)}
 
     def _writeup(self, writeup: Any) -> str | None:
-        """The write-up (spec §6.6), if given; ``Refused`` if it is empty or embeds a figure
-        that is not in the audit directory."""
-        if writeup is None:
-            return None
+        """The write-up (spec §6.6), if one is given. Never refused: a problem in it must
+        not cost the audit its claims; embeds that do not resolve are flagged instead
+        (``broken_embeds``)."""
         if not isinstance(writeup, str) or not writeup.strip():
-            raise Refused("writeup must be the write-up's markdown, not empty")
-        out = self.audit.out.resolve()
-        missing = [path for path in re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", writeup)
-                   if not (out / path).resolve().is_relative_to(out)
-                   or not (out / path).resolve().is_file()]
-        if missing:
-            raise Refused(f"the write-up embeds figures that are not in the audit directory: "
-                          f"{missing}. Embed a figure a scores result names (figures/...), or "
-                          "one you saved there with run_python.")
+            return None
         return writeup.strip()
+
+    def broken_embeds(self, writeup: str | None) -> list[str]:
+        """Images the write-up embeds that are not a file in the audit directory, by a
+        path relative to it (so the write-up still shows its figures once moved)."""
+        out = self.audit.out.resolve()
+        broken = []
+        for token in MarkdownIt().parse(writeup or ""):
+            for child in token.children or []:
+                if child.type != "image":
+                    continue
+                src = urllib.parse.unquote(str(child.attrGet("src") or ""))
+                path = (out / src).resolve()
+                if (Path(src).is_absolute() or "://" in src or not path.is_relative_to(out)
+                        or not path.is_file()):
+                    broken.append(src)
+        return broken
+
+    def _embeds_note(self, writeup: str | None) -> str:
+        broken = self.broken_embeds(writeup)
+        return (f" Note: the write-up embeds images that are not files in the audit directory "
+                f"(by a relative path), so they will not show: {broken}." if broken else "")
 
     def _record_review(self, seq: int, draft: dict[str, Any], found: dict[str, Any]) -> str:
         """Save the review in ``review.json``; the text L2 sees."""
@@ -842,7 +862,8 @@ class Tools:
         self._save_review()
         stopped = found.get("stopped")
         return "\n".join([
-            f"Your draft's claims, as the checker read them: {claims_.summary(draft['claims'])}.",
+            f"Your draft's claims, as the checker read them: {claims_.summary(draft['claims'])}."
+            + self._embeds_note(draft.get("writeup")),
             "", "The reviewer's critique"
             + (f" (it stopped early: {stopped})" if stopped else "") + ":", "",
             critique or "(the reviewer gave no critique)", "",
@@ -892,7 +913,9 @@ class Tools:
         self.audit.ended = True
         verdicts = ("no claims given, so nothing was checked" if checked is None
                     else f"claims: {claims_.summary(checked)} (see claims.json)")
-        return f"The audit has ended; the report is in report.md. {verdicts}."
+        return (f"The audit has ended; the report is in report.md. {verdicts}."
+                + (" The write-up is in writeup.md." if self.writeup else
+                   " No write-up was given.") + self._embeds_note(self.writeup))
 
 
 def _failure(error: Exception) -> str:
@@ -1243,7 +1266,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             runs.jsonl (one row per
             variant: its recorded variant and its eval log paths, relative to that
             directory, one per epoch). Read the logs with inspect_ai.log.read_eval_log
-            (each has one sample, with its scores and store); pandas is available.
+            (each has one sample, with its scores and store); pandas and matplotlib are
+            available (save figures for your write-up under figures/).
             There are no API keys, so model calls fail. It is stopped after 60
             seconds, and output past 3500 characters is cut: print what you need.
 

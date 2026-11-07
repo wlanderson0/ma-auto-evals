@@ -46,7 +46,7 @@ def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
     tools, _ = written
     text = (tools.audit.out / "writeup.md").read_text()
     facts, body = text.split("\n---\n", 1)
-    assert "| Experiments | exp-1: C0, V1 × 2 epochs |" in facts
+    assert "| Runs (variant × epochs run) | exp-1: C0 × 2, V1 × 2 |" in facts
     assert "| Claims | 1 checked (see report.md) |" in facts
     assert "| How it ended | L2 ended the audit |" in facts
     assert "| L2 | mockllm/l2 |" in facts and "of which $" in facts  # the reviewer's share
@@ -71,14 +71,38 @@ def tools_for(tmp_path):
     return Tools(audit, on_end=write_report)
 
 
-@pytest.mark.parametrize("path", ["figures/none.png", "../outside.png", "/etc/hosts"])
-def test_a_write_up_embedding_a_missing_or_outside_figure_is_refused(tmp_path, path):
+@pytest.mark.parametrize("path", ["figures/none.png", "../outside.png", "/etc/hosts",
+                                  "https://example.com/a.png", "ABSOLUTE"])
+def test_an_image_that_will_not_show_is_flagged_never_refused(tmp_path, path):
+    """A problem in the write-up never costs the audit its claims."""
     tools = tools_for(tmp_path)
     (tmp_path / "outside.png").write_bytes(PNG)
+    (tools.audit.out / "figures").mkdir()
+    (tools.audit.out / "figures" / "ok.png").write_bytes(PNG)
+    if path == "ABSOLUTE":  # inside the audit, but breaks once the audit is moved
+        path = str(tools.audit.out / "figures" / "ok.png")
     ok, text = tools.call("end_audit", conclusions="None.", writeup=f"![x]({path})")
-    assert not ok and "not in the audit directory" in text and not tools.audit.ended
-    ok, _ = tools.call("end_audit", conclusions="None.", writeup="No figures.")
-    assert ok and (tools.audit.out / "writeup.md").exists()
+    assert ok and tools.audit.ended and "will not show" in text and path in text
+    assert f"| Images that will not show | {path} |" in (
+        tools.audit.out / "writeup.md").read_text()
+
+
+def test_images_are_read_as_markdown_reads_them(tmp_path):
+    tools = tools_for(tmp_path)
+    (tools.audit.out / "figures").mkdir()
+    for name in ("a b.png", "p(1).png", "ok.png"):
+        (tools.audit.out / "figures" / name).write_bytes(PNG)
+    text = ("![spaced](<figures/a b.png>) ![parens](<figures/p(1).png>) "
+            "![titled](figures/ok.png \"a title\") ![encoded](figures/a%20b.png)\n\n"
+            "```\n![an example in code](figures/<file>.png)\n```\n")
+    assert tools.broken_embeds(text) == []
+
+
+def test_an_empty_write_up_is_no_write_up(tmp_path):
+    tools = tools_for(tmp_path)
+    ok, text = tools.call("end_audit", conclusions="None.", writeup="  ")
+    assert ok and "No write-up was given" in text
+    assert not (tools.audit.out / "writeup.md").exists()
 
 
 def test_l2_can_draw_its_own_figure_and_embed_it(tmp_path):
@@ -105,6 +129,9 @@ def test_an_audit_not_ended_keeps_the_reviewed_draft_marked_as_such(tmp_path):
     text = (tools.audit.out / "writeup.md").read_text()
     assert "**Draft:** L2 did not end the audit" in text and "The draft write-up." in text
     assert "not ended by L2: L2 spent the whole budget" in text
+    assert "`writeup.md`" in (tools.audit.out / "report.md").read_text()  # in its record
+    assert tools.call("end_audit", conclusions="Ended.", response="Kept.")[0]  # no write-up
+    assert "**Draft:** L2 gave no final write-up" in (tools.audit.out / "writeup.md").read_text()
 
 
 def test_no_write_up_no_file(tmp_path):
@@ -119,6 +146,27 @@ def test_figure_names_and_intervals():
     low, high = wilson(0, 2)
     assert low == 0 and high == pytest.approx(0.658, abs=1e-3)
     assert wilson(3, 0) == (0.0, 1.0)
+
+
+def test_the_facts_give_the_epochs_that_ran_and_the_reviewer_draws_nothing(tmp_path):
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
+
+    class StoppedAfterEpoch1(InProcess):
+        def __call__(self, *args, **kwargs):
+            paths = super().__call__(*args, **kwargs)
+            audit.interrupts = 2  # a second Ctrl-C: no next epoch
+            return paths
+
+    audit.launch_epoch = StoppedAfterEpoch1()
+    tools = Tools(audit, on_end=write_report)
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=3, rationale="a test")[0]
+    ok, text, _ = tools.numbered_call("scores", "reviewer", variant_ids=["V1"], against="C0",
+                                      scorer="probe")
+    assert ok and "Figure:" not in text and not (audit.out / "figures").exists()
+    assert tools.call("end_audit", conclusions="None.", writeup="W.")[0]
+    facts = (audit.out / "writeup.md").read_text()
+    assert "| Runs (variant × epochs run) | exp-1: C0 × 1, V1 × 1 |" in facts
+    assert "| Stopped | stopped by hand (Ctrl-C twice) |" in facts
 
 
 def test_a_comparison_works_when_its_figure_cannot_be_drawn(tmp_path, monkeypatch):

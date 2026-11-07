@@ -588,6 +588,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     budget = audit.budget()
     print(f"spent ${budget['spent_usd']:.4f} of ${budget['budget_usd']:.2f}")
     print(f"report: {out / 'report.md'}")
+    if (out / "writeup.md").exists():
+        print(f"write-up: {out / 'writeup.md'}")
     if tools.conclusions is None:
         if args.share:
             print("not shared on Cosmos: L2 never ended the audit")
