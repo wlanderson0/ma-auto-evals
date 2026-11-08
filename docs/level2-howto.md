@@ -90,7 +90,8 @@ uv run python -m experiments.l2.share logs/l2-audit/<name>
 ```
 
 It exports each experiment, uploads it with your `cosmos login` (each experiment is one
-Cosmos run), then uploads the audit run (L2's own log, its claims, ledger, brief and
+Cosmos run; share also reads the runs back, so the login must be a full token, not an
+upload-only one: see [`cosmos.md`](cosmos.md)), then uploads the audit run (L2's own log, its claims, ledger, brief and
 records), waits until Cosmos has processed them, and writes the report's claims section
 again with links to the runs and messages each claim rests on. Every run's manifest
 names the audit's study (`study`), so Cosmos groups them; an audit shared before studies
@@ -124,6 +125,8 @@ Step by step, the annotations are not posted.
 - `cosmos upload <folder> --dry-run` checks a folder without uploading.
 - An `HTTP 401` means the Cosmos sign-in has lapsed: sign in again on
   <https://cosmos.danhelo.com> (or `cosmos login` with a new token) and rerun.
+  An `HTTP 403` on `GET /api/runs/<slug>` means the saved token is upload-only:
+  make a full token and run `cosmos login` again.
 - Each upload prints the run's link; put the links in the PR or the write-up.
 - Then link the report to Cosmos. Give each experiment its run's slug (the end of the
   link the upload printed):

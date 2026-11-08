@@ -181,7 +181,8 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   audit run carries `study/claims.json`, `ledger.json`, `brief.json`, `decisions.json`,
   `proposed.json`, `launches.json` and `review.json`, read by name. `annotations.jsonl`
   records (each experiment's, and the audit's) are posted in Cosmos spec 13's shape
-  (`experiments.l2.share`).
+  (`experiments.l2.share`). Share reads the runs back, so it needs a full Cosmos token from
+  `cosmos login`; an upload-only token gets 403 on its first `GET /api/runs/{slug}`.
 
 cosmos also reads Orbit's own records: `orbit.communication` info events of
 kind `sent`, the `CommunicationState:messages` store key and the `experiment`
