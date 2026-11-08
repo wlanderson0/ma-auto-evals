@@ -20,7 +20,7 @@ from experiments.l2.fake import DAVE_ON_TOWN, PROMPT, fake_model
 from experiments.l2.share import share
 from experiments.l2.study import AUDIT_RUN, export_audit, jsonl, study_of
 from experiments.l2.tools import Tools
-from tests.support.l2_audit import InProcess, brief
+from tests.support.l2_audit import brief
 
 BASE = "https://cosmos.example"
 TWO = [
@@ -42,10 +42,11 @@ STUDY_FILES = ["brief.json", "claims.json", "decisions.json", "launches.json", "
 @pytest.fixture(scope="module")
 def ran(tmp_path_factory, offline_module):
     folder = tmp_path_factory.mktemp("study")
-    audit = Audit.create(brief(folder, 1.0), folder / "board-audit", mock=True,
-                         launch=InProcess())
+    # experiments run in subprocesses, as live: L2's own eval is running in this process
+    audit = Audit.create(brief(folder, 1.0), folder / "board-audit", mock=True)
     run_l2(Tools(audit, on_end=write_report), fake_model(TWO), PROMPT)
     assert [e.name for e in audit.experiments()] == ["exp-1", "exp-2"]
+    assert [launch["status"] for launch in jsonl(audit.out / "launches.jsonl")] == ["ran", "ran"]
     return audit.out
 
 
@@ -146,7 +147,42 @@ def test_every_experiments_manifest_names_the_study(audit, tmp_path):
     for exp in ("exp-1", "exp-2"):
         out = export(audit / "experiments" / exp, tmp_path / exp)
         manifest = json.loads((out / "manifest.json").read_text())
-        assert manifest["study"] == {**study, "experiment": exp}
+        assert {k: v for k, v in manifest["study"].items() if k != "probes"} == {
+            **study, "experiment": exp}
+
+
+def mfa_probes(*variants):
+    """``study.probes`` for variants of mfa_rumor, from the scenario's own probes."""
+    from experiments.scenarios import SCENARIOS
+
+    probes = SCENARIOS["mfa_rumor"]({"target": "mockllm/model"}).probes
+    return {vid: {agent: {"question": p.question, "options": list(p.options),
+                          "adopted": p.adopted} for agent, p in probes.items()}
+            for vid in variants}
+
+
+def test_each_variants_probes_and_their_adopting_answer_are_in_the_manifest(audit, tmp_path):
+    """Cosmos recounts probe claims with the answer that counts as adopting, read from
+    study.probes, by variant and target agent."""
+    for exp, variants in (("exp-1", ("C0", "V1")), ("exp-2", ("V2",))):
+        out = export(audit / "experiments" / exp, tmp_path / exp)
+        probes = json.loads((out / "manifest.json").read_text())["study"]["probes"]
+        assert probes == mfa_probes(*variants)
+    dave = probes["V2"]["dave"]
+    assert dave["adopted"] == "NOT_REQUIRED" and dave["adopted"] in dave["options"]
+    assert dave["question"].startswith("Privately, based only on what you have seen")
+    assert "Answer with exactly one word" not in dave["question"]
+
+
+def test_a_scenario_without_probes_leaves_them_out():
+    from experiments.l2.cosmos import probes_of
+    from experiments.scenarios import SCENARIOS
+
+    models = {"target": "mockllm/model"}
+    plain = SCENARIOS["kestrel_naming"](models)
+    assert not plain.probes
+    assert probes_of({"K1": plain}) == {}
+    assert list(probes_of({"K1": plain, "M1": SCENARIOS["mfa_rumor"](models)})) == ["M1"]
 
 
 def test_an_audit_without_l2s_log_is_dated_by_its_first_experiment(audit, tmp_path):
@@ -171,7 +207,8 @@ def test_share_uploads_the_audit_run_beside_the_experiments_once(audit):
     assert record == {"exp-1": "run0", "exp-2": "run1", "audit": "run2"}
     study = study_of(audit)
     assert [cosmos.runs[s]["manifest"]["study"] for s in ("run0", "run1", "run2")] == [
-        {**study, "experiment": "exp-1"}, {**study, "experiment": "exp-2"},
+        {**study, "experiment": "exp-1", "probes": mfa_probes("C0", "V1")},
+        {**study, "experiment": "exp-2", "probes": mfa_probes("V2")},
         {**study, "role": "audit", "runs": {"exp-1": "run0", "exp-2": "run1"}}]
     assert links["runs"] == {"exp-1": f"{BASE}/runs/run0", "exp-2": f"{BASE}/runs/run1"}
     assert f"audit: {BASE}/runs/run2" in said

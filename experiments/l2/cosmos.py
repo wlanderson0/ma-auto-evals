@@ -46,7 +46,11 @@ One experiment is one Cosmos run; each of its samples is one L2 run. The folder 
   several models and so without them (extra fields; Cosmos keeps the manifest as given).
   ``--pr`` decides which PR Cosmos files the run under. For an experiment of an L2 audit,
   ``study: {id, name, experiment}`` names the audit's study and the experiment's
-  ``exp-<n>`` (``experiments.l2.study``), so Cosmos groups the audit's runs.
+  ``exp-<n>`` (``experiments.l2.study``), so Cosmos groups the audit's runs, and
+  ``study.probes`` gives each variant's probes as its built scenario has them:
+  ``{"<variant id>": {"<target agent>": {"question", "options", "adopted"}}}``, where
+  ``adopted`` is the answer that counts as adopting (Cosmos recounts probe claims with
+  it). A variant without probes is left out; with none at all, so is ``probes``.
 - For an experiment of an L2 audit (the directory two levels up has ``brief.md`` and
   ``report.md``): ``report.html`` (Cosmos's "Open report"), the audit's report followed
   by its brief, the experiment's variants (``variants.jsonl``, one record each) and the
@@ -64,6 +68,7 @@ import sys
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from inspect_ai.log import read_eval_log, write_eval_log
 from markdown_it import MarkdownIt
@@ -148,12 +153,23 @@ def export(experiment: Path, out: Path, *, pr: int | None = None,
                     without_run_config=decisions.get("without_run_config"))
     if audit is not None:
         manifest["study"] = {**study_of(audit), "experiment": experiment.resolve().name}
+        if probes := probes_of(built):
+            manifest["study"]["probes"] = probes
     write_manifest(out, manifest)
 
     if audit is not None:
         ran = sorted({s.base for s in built.values()} & set(written))
         (out / "report.html").write_text(report_html(audit, experiment, ran))
     return out
+
+
+def probes_of(built: dict[str, Scenario]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Each variant's probes, by target agent: the question, its options and the answer
+    that counts as adopting."""
+    return {vid: {agent: {"question": probe.question, "options": list(probe.options),
+                          "adopted": probe.adopted}
+                  for agent, probe in scenario.probes.items()}
+            for vid, scenario in built.items() if scenario.probes}
 
 
 def _iso(stamp: str | None) -> str | None:

@@ -236,8 +236,9 @@ def _name_study(folder: Path, study: dict[str, Any]) -> None:
     an audit run's lists the experiments on Cosmos when it is uploaded)."""
     path = folder / "manifest.json"
     manifest = json.loads(path.read_text())
-    if manifest.get("study") != study:
-        manifest["study"] = study
+    named = {**(manifest.get("study") or {}), **study}  # what the export added is kept
+    if manifest.get("study") != named:
+        manifest["study"] = named
         path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 

@@ -175,8 +175,9 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   change too. cosmos does not check it, so the matching cosmos change is still
   required.
 - **L2 studies** (`experiments/l2/study.py`, Cosmos spec 12 §12.1): an L2 audit's
-  runs name it in their manifest's `study` (`{id, name, experiment}` on an experiment,
-  `{id, name, role: "audit", runs: {"exp-<n>": "<slug>"}}` on the audit run), and the
+  runs name it in their manifest's `study` (`{id, name, experiment, probes}` on an
+  experiment, where `probes` gives each variant's probe question, options and `adopted`
+  answer; `{id, name, role: "audit", runs: {"exp-<n>": "<slug>"}}` on the audit run), and the
   audit run carries `study/claims.json`, `ledger.json`, `brief.json`, `decisions.json`,
   `proposed.json`, `launches.json` and `review.json`, read by name. `annotations.jsonl`
   records (each experiment's, and the audit's) are posted in Cosmos spec 13's shape
