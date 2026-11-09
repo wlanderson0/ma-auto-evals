@@ -533,8 +533,11 @@ class AuditController(RuntimeController):
         unknown = [agent for agent in op.agents() if known and agent not in known]
         if unknown:
             return f"unknown agents {unknown}"
+        # An op acting on an agent applies to the boundary's agent (the request, activation
+        # or call), so it must name exactly that agent: the scope check above judged the
+        # name, and this makes the name the agent actually changed.
         targeted = not isinstance(op, MessageOp)
-        if targeted and view.agent is not None and op.agents() and op.agents() != (view.agent,):
+        if targeted and view.agent is not None and op.agents() != (view.agent,):
             return f"{op.name} targets {list(op.agents())} but this boundary is {view.agent!r}'s"
         pinned = getattr(op, "tool_call_id", None)
         if pinned is not None and pinned != view.tool_call_id:

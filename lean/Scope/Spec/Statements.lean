@@ -18,9 +18,11 @@ Decisions encoded here (`lean/scope-map.md`):
   rollback's own effect, and whether the fork reproduces the parent's world, are not
   modelled (the model's branches restart from `w0` with arbitrary `Env` steps).
 * D2 (a), D3 — fixed by the definition of `view` (View.lean).
-* G1, G2 — the model mirrors the current Python, where `Frame` is false
-  (`Proofs/Main.lean`: `bug_G1_amend_pending`, `bug_G2_empty_agent`). `FrameUpToGaps`
-  bounds what each gap can reach (`gapLeak`) instead of excluding the op.
+* G1 — the model mirrors the current Python, where `Frame` is false
+  (`Proofs/Main.lean`: `bug_G1_amend_pending`). `FrameUpToGaps` bounds what the gap can
+  reach (`gapLeak`) instead of excluding the op.
+* G2 — fixed: an op cannot name no agent, and must name the boundary's agent
+  (`G2Fixed`).
 
 What these statements do not say (see `lean/ASSURANCE.md`): anything about effects that
 travel through later steps (a post the seat writes, a forged `channel_read` result), the
@@ -39,15 +41,14 @@ def carvedOut : Op → Bool
   | .halt | .rollback .. => true
   | _ => false
 
-/-- Agents a known gap can reach outside `affected`. G1: `amend_pending` replaces every
-pending step, so it can reach every agent in them. G2: an op with an empty `agent` is
-applied to the boundary's agent. Empty for every other op. -/
-def gapLeak (ctx : Ctx) (w : World) : Op → List Agent
+/-- Agents the known gap G1 can reach outside `affected`: `amend_pending` replaces every
+pending step, so it can reach every agent in them. Empty for every other op. -/
+def gapLeak (_ctx : Ctx) (w : World) : Op → List Agent
   | .amendPending .. =>
     match w.schedule with
     | none => []
     | some s => s.pending.flatten
-  | op => if op.agentField? == some "" then ctx.agent.toList else []
+  | _ => []
 
 /-- Message ids are unique, as in Orbit (A1) and the Python's `{m.id: m}` world. -/
 def World.WF (w : World) : Prop :=
@@ -81,19 +82,27 @@ def ScopeSound : Prop :=
     (∀ iv ∈ op.interventions, s.problem w iv = none)
 
 /-- Property 2, as intended: an op that passes the controller's other checks and applies
-leaves the view of every agent outside `affected` unchanged. False at `b7b1eeb` (G1, G2). -/
+leaves the view of every agent outside `affected` unchanged. False while G1 is open. -/
 def Frame : Prop :=
   ∀ (ctx : Ctx) (ok : Bool) (op : Op) (w w' : World) (a : Agent),
     w.WF → checkProblem none ctx op w = none → carvedOut op = false →
     applyRaw ctx ok op w = .ok w' → a ∉ op.affected w → view w' a = view w a
 
 /-- Property 2 for the Python as it is: the same, for agents outside `affected` and outside
-what a known gap can reach. -/
+what the known gap can reach. -/
 def FrameUpToGaps : Prop :=
   ∀ (ctx : Ctx) (ok : Bool) (op : Op) (w w' : World) (a : Agent),
     w.WF → checkProblem none ctx op w = none → carvedOut op = false →
     applyRaw ctx ok op w = .ok w' → a ∉ op.affected w → a ∉ gapLeak ctx w op →
     view w' a = view w a
+
+/-- G2 is fixed: the controller refuses an op that names no agent, and one that names an
+agent other than the boundary's, before it can act. -/
+def G2Fixed : Prop :=
+  ∀ (ctx : Ctx) (op : Op) (w : World) (b : Agent),
+    (op.agentField? = some "" → checkProblem none ctx op w ≠ none) ∧
+    (ctx.agent = some b → op.family ≠ .message → checkProblem none ctx op w = none →
+      op.agentField?.isSome → op.agents = [b])
 
 /-- Property 3. Every op an audit applies, live, replayed or at a fork, passed the scope
 check in the world it was applied to. -/
@@ -142,7 +151,7 @@ def Confined : Prop :=
 
 /-- The headline. In any audit under scope `s`, every applied op was checked against `s` in
 the world it changed; and, unless it is `halt` or `rollback`, it left every agent outside
-`s`'s agent limit, and outside what a known gap reaches, seeing exactly what it saw
+`s`'s agent limit, and outside what the known gap G1 reaches, seeing exactly what it saw
 before: the same own generations, context and tool results, the same deliveries through
 the overlay, the same pending turns, the same halt flag, and the same words attributed to
 it. Effects that travel through later steps are not covered (see the header). -/

@@ -11,7 +11,7 @@ Each test generates a world, a scope, a boundary and an op, asks the Lean model
   the Python views computed through ``DeliveryOverlay.deliver``; for ``halt`` and
   ``amend_pending``, the same against Orbit's ``ScheduleRuntime``;
 * for every other op, that the agents Lean's effect changes are within the Python's
-  ``affected`` or a documented exception (G1, G2, D1).
+  ``affected`` or a documented exception (G1, D1).
 
 Not compared yet: the effects of generation, activation and tool ops against the Python
 (their effect is in the controller's boundary methods, with Inspect objects), absolute
@@ -210,9 +210,9 @@ def python_op(op: dict[str, Any]):
         data["calls"] = [{"function": f, "arguments": {}} for f in data["calls"]]
     if "replacements" in data:
         data["replacements"] = [{"old": o, "new": n} for o, n in data["replacements"]]
-    if "interventions" in data:
-        data["interventions"] = [_python_data(iv) for iv in data["interventions"]]
     try:
+        if "interventions" in data:
+            data["interventions"] = [_python_data(iv) for iv in data["interventions"]]
         return parse_op(data)
     except (ValidationError, OpError, ValueError):
         return None
@@ -400,14 +400,11 @@ def compare_decide(lean, world, scope, boundaries, agent, tool_call_id, ops) -> 
 def known_leak(world: dict[str, Any], ctx: dict[str, Any], op: dict[str, Any]) -> set[str]:
     """Agents a documented exception may reach outside ``affected``, computed on the
     Python side (independently of Lean's ``gapLeak``): D1 halt reaches everyone; G1
-    amend_pending reaches every agent in the pending steps it replaces; G2 an empty
-    ``agent`` reaches the boundary agent."""
+    amend_pending reaches every agent in the pending steps it replaces."""
     if op["op"] == "halt":
         return {"*"}
     if op["op"] == "amend_pending":
         return {a for step in (world["schedule"] or {"pending": []})["pending"] for a in step}
-    if op.get("agent") == "" and ctx["agent"] is not None:
-        return {ctx["agent"]}
     return set()
 
 
@@ -488,7 +485,6 @@ def _world(**overrides) -> dict[str, Any]:
 SEAT = {"ops": None, "agents": ["alice"]}
 EXAMPLES = [  # (world, scope, op): representation and gap cases kept in every run
     (_world(), SEAT, {"op": "amend_pending", "steps": [["alice"]], "schedule_revision": 0}),
-    (_world(), SEAT, {"op": "replace_generation", "agent": "", "content": "x", "tool_calls": []}),
     (_world(), {"ops": [], "agents": None}, {"op": "halt"}),
     (_world(), {"ops": None, "agents": []}, {"op": "halt"}),
     (_world(), SEAT, {"op": "drop_message", "message_id": "m0", "recipients": None}),
@@ -508,9 +504,9 @@ AT_BOB_CALL = {"boundary": "tool_call", "revision": 5, "agent": "bob", "tool_cal
 CHECK_EXAMPLES = [  # (scope, ctx, op): controller checks the generators rarely reach
     (None, AT_BOB_CALL, {"op": "block_tool_call", "agent": "bob", "tool_call_id": "call-2",
                          "message": "no"}),
-    (None, AT_BOB_CALL, {"op": "block_tool_call", "agent": "", "tool_call_id": None,
+    (None, AT_BOB_CALL, {"op": "block_tool_call", "agent": "alice", "tool_call_id": None,
                          "message": "no"}),
-    (SEAT, AT_BOB_CALL, {"op": "simulate_tool_result", "agent": "", "tool_call_id": None,
+    (SEAT, AT_BOB_CALL, {"op": "simulate_tool_result", "agent": "bob", "tool_call_id": None,
                          "result": "ok"}),
     (None, {"boundary": "between_turns", "revision": 5, "agent": None, "tool_call_id": None},
      {"op": "amend_pending", "steps": [["alice"], ["zed"]], "schedule_revision": 0}),
@@ -608,6 +604,19 @@ def test_decide(lean, data):
     agent = None if boundaries[-1] == "between_turns" else data.draw(st.sampled_from(AGENTS))
     assert compare_decide(lean, world, data.draw(st.none() | scopes()), boundaries, agent,
                           data.draw(st.none() | st.just("call-1")), ops) == []
+
+
+@pytest.mark.parametrize("op", [
+    {"op": "replace_generation", "agent": "", "content": "x", "tool_calls": []},
+    {"op": "stage_input", "agent": "", "content": "x"},
+    {"op": "block_tool_call", "agent": "", "tool_call_id": None, "message": "no"},
+])
+def test_g2_an_op_naming_no_agent_is_refused_on_both_sides(lean, op):
+    assert python_op(op) is None  # pydantic refuses it
+    reply = lean.ask({"cmd": "check", "world": _world(), "scope": None, "op": op,
+                      "ctx": {"boundary": "generation", "revision": 5, "agent": "bob",
+                              "tool_call_id": None}})
+    assert reply["problem"] == "invalid"
 
 
 def test_codec_keeps_null_empty_and_missing_apart(lean):

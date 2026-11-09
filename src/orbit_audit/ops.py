@@ -92,7 +92,8 @@ Proceed = Callable[..., Awaitable[ModelOutput]]
 class GenerationOp(ControlOp):
     boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.GENERATION})
 
-    agent: str
+    agent: str = Field(min_length=1)
+    """The agent whose boundary this is; checked against it (controller._problem)."""
 
     async def produce(
         self, request: GenerationRequest, proceed: Proceed
@@ -185,7 +186,8 @@ class ForceToolCall(GenerationOp):
 class ActivationOp(ControlOp):
     boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.BEFORE_ACTIVATION})
 
-    agent: str
+    agent: str = Field(min_length=1)
+    """The agent whose boundary this is; checked against it (controller._problem)."""
 
     def apply(self, activation: ActivationContext) -> Any:
         """Mutate the activation's conversation; return what was added."""
@@ -216,7 +218,8 @@ class StageInput(ActivationOp):
 
 # ---------------------------------------------------------------------- tools
 class ToolOp(ControlOp):
-    agent: str
+    agent: str = Field(min_length=1)
+    """The agent whose boundary this is; checked against it (controller._problem)."""
     tool_call_id: str | None = None
     """If set, the operation applies only to this exact tool call."""
 

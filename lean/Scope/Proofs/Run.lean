@@ -38,9 +38,12 @@ theorem checkProblem_some {s : AuditScope} {ctx : Ctx} {op : Op} {w : World}
     (h : checkProblem (some s) ctx op w = none) :
     s.problem w op = none ∧ checkProblem none ctx op w = none := by
   unfold checkProblem at h ⊢
-  cases hp : s.problem w op with
-  | some p => simp [hp] at h
-  | none => simp only [Option.bind, hp] at h; exact ⟨rfl, h⟩
+  cases he : (op.agentField? == some "")
+  · simp only [he, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    cases hp : s.problem w op with
+    | some p => simp [hp] at h
+    | none => simp only [Option.bind, hp] at h; exact ⟨rfl, h⟩
+  · simp [he] at h
 
 theorem checkProblem_congr {w w' : World} (h : w.agents = w'.agents) (ctx : Ctx) (op : Op) :
     checkProblem none ctx op w = checkProblem none ctx op w' := by

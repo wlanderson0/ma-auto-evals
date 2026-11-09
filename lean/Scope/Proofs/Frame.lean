@@ -44,6 +44,8 @@ theorem targeted_ok {ctx : Ctx} {op : Op} {w : World} (h : checkProblem none ctx
   · cases h
   split at h
   · cases h
+  split at h
+  · cases h
   rename_i hc
   simp [hb, hf, hne] at hc
   simpa [hb] using hc
@@ -294,32 +296,24 @@ theorem positions_nil {a : Agent} : ∀ {steps : List (List Agent)} {i : Nat},
     simp only [World.positions, indicesOf_nil h.1, List.map_nil, List.nil_append]
     exact positions_nil h.2
 
-/-- An op with an empty `agent` changes only the boundary agent (bounds G2). -/
-theorem frame_empty_agent {ctx : Ctx} {op : Op} {w w' : World} {a : Agent}
-    (ht : touchOwn ctx op w = .ok w') (ha : a ∉ ctx.agent.toList) : view w' a = view w a := by
-  refine view_touchOwn ht ?_
-  intro e; rw [e] at ha; simp at ha
+theorem checkProblem_empty_agent {ctx : Ctx} {op : Op} {w : World}
+    (h : op.agentField? = some "") : checkProblem none ctx op w ≠ none := by
+  unfold checkProblem
+  simp [h]
 
-/-- The seven ops on the boundary agent, with an agent field `x`: either `x` is empty
-(G2, bounded by `gapLeak`) or the frame holds outside `affected`. -/
+/-- The seven ops on the boundary agent, with an agent field `x`: an empty `x` is refused
+(G2 fixed), otherwise the frame holds outside `affected`. -/
 theorem frame_own' {ctx : Ctx} {op : Op} {w w' : World} {a x : Agent}
+    (hx : op.agentField? = some x)
     (hagents : op.agents = Op.agentTuple x) (haff : op.affected w = op.agents)
-    (hfam : op.family ≠ .message) (hgap : gapLeak ctx w op = if x = "" then ctx.agent.toList else [])
-    (hck : checkProblem none ctx op w = none)
-    (ht : touchOwn ctx op w = .ok w') (ha : a ∉ op.affected w) (hl : a ∉ gapLeak ctx w op) :
-    view w' a = view w a := by
+    (hfam : op.family ≠ .message) (hck : checkProblem none ctx op w = none)
+    (ht : touchOwn ctx op w = .ok w') (ha : a ∉ op.affected w) : view w' a = view w a := by
   by_cases hxe : x = ""
-  · rw [hgap] at hl
-    simp only [hxe, ↓reduceIte] at hl
-    exact frame_empty_agent ht hl
+  · exact absurd hck (checkProblem_empty_agent (hxe ▸ hx))
   · exact frame_own hagents haff hfam hxe hck ht ha
 
 theorem frameUpToGaps : FrameUpToGaps := by
   intro ctx ok op w w' a hwf hck hcarve h ha hl
-  have hgap : ∀ x, op.agentField? = some x → op.family ≠ .message → op.family ≠ .turn →
-      gapLeak ctx w op = if x = "" then ctx.agent.toList else [] := by
-    intro x hx hm ht
-    cases op <;> simp_all [gapLeak, Op.agentField?, Op.family]
   cases op with
   | replaceGeneration x content calls =>
     simp only [applyRaw] at h
@@ -327,36 +321,29 @@ theorem frameUpToGaps : FrameUpToGaps := by
     · cases h
     split at h
     · cases h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | editGeneration x r =>
     simp only [applyRaw] at h
     split at h
     · cases h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | forceToolCall x r =>
     simp only [applyRaw] at h
     split at h
     · cases h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | stageInput x r =>
     simp only [applyRaw] at h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | blockToolCall x t r =>
     simp only [applyRaw] at h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | simulateToolResult x t r =>
     simp only [applyRaw] at h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | overrideToolResult x t r =>
     simp only [applyRaw] at h
-    exact frame_own' (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family])
-      (hgap x rfl (by simp [Op.family]) (by simp [Op.family])) hck h ha hl
+    exact frame_own' rfl (by simp [Op.agents]) (by simp [Op.affected]) (by simp [Op.family]) hck h ha
   | rewriteMessage id rs c => exact frame_rewrite hwf h ha
   | dropMessage id rs => exact frame_drop hwf h ha
   | injectMessage ch snd rs c ov => exact frame_inject h ha

@@ -1,7 +1,7 @@
 import Scope.Proofs.Frame
 import Scope.Spec.Witnesses
 
-/-! The headline theorem and the known gaps. -/
+/-! The headline theorem, the open gap G1, and the fixed G2. -/
 
 namespace Scope
 
@@ -28,15 +28,18 @@ theorem bug_G1_amend_pending : ¬ Frame := by
   have := congrArg AgentView.turns this
   exact absurd this (by decide)
 
-open Witness in
-/-- G2: an op with an empty `agent` has an empty `affected`, passes the controller's
-targeted check, and is applied to whichever agent's boundary it is given at. -/
-theorem bug_G2_empty_agent : ¬ Frame := by
-  intro hF
-  have := hF atBob true (.replaceGeneration "" "all tests pass" []) w0
-    { w0 with own := fun a => if a == "bob" then ["replace_generation"] else [] } "bob" w0_wf
-    (by decide) rfl rfl (by decide)
-  have := congrArg AgentView.own this
-  exact absurd this (by decide)
+/-- G2 is fixed: an op naming no agent is refused, and one that passes at an agent's
+boundary names exactly that agent. -/
+theorem g2Fixed : G2Fixed := by
+  intro ctx op w b
+  refine ⟨fun h => checkProblem_empty_agent h, fun hb hf hck hs => ?_⟩
+  obtain ⟨x, hx⟩ := Option.isSome_iff_exists.1 hs
+  have hxe : x ≠ "" := fun e => checkProblem_empty_agent (e ▸ hx) hck
+  have hag : op.agents = [x] := by
+    cases op <;> simp_all [Op.agentField?, Op.agents, agentTuple_of_ne hxe]
+  have hall := targeted_ok hck hf hb (by simp [hag])
+  rw [hag] at hall ⊢
+  simp at hall
+  rw [hall]
 
 end Scope

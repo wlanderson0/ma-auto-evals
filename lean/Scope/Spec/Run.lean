@@ -34,15 +34,18 @@ inductive Problem where
   | boundary | unknownAgents | targeted | pinned | sole
   | extra (reason : String)
   | rollbackInReplay | rollbackNotAlone | rollForward | interventionBoundary
-  /-- A payload pydantic refuses before the op exists: `to_revision < 1` (ops.py:437) or a
-  rollback inside a rollback (ops.py:444-445). -/
+  /-- A payload pydantic refuses before the op exists: an empty `agent`, `to_revision < 1` (ops.py:440) or a
+  rollback inside a rollback (ops.py:447-448). -/
   | invalid
   deriving DecidableEq, Repr
 
--- mirrors: AuditController._problem, controller.py:524-541. The stale-revision check
+-- mirrors: AuditController._problem, controller.py:524-544. The stale-revision check
 -- (530-531) is part of `Hooks.extra`. `scope = none` means no scope check (526).
+-- An op with an empty `agent` cannot be built (`Field(min_length=1)`, ops.py:95, 189, 221):
+-- the model rejects it as an invalid payload, ahead of every check.
 def checkProblem (scope : Option AuditScope) (ctx : Ctx) (op : Op) (w : World) :
     Option Problem :=
+  if op.agentField? == some "" then some .invalid else
   match scope.bind (fun s => s.problem w op) with
   | some p => some (.scope p)
   | none =>
@@ -51,9 +54,10 @@ def checkProblem (scope : Option AuditScope) (ctx : Ctx) (op : Op) (w : World) :
       some .boundary
     else if !w.agents.isEmpty && op.agents.any (fun a => !w.agents.contains a) then
       some .unknownAgents
-    -- Python compares the sorted, deduplicated tuple with `(view.agent,)`.
-    else if op.family != .message && ctx.agent.isSome && !op.agents.isEmpty
-        && !op.agents.all (· == ctx.agent.getD "") then
+    -- Python compares the sorted, deduplicated tuple with `(view.agent,)`: an op that
+    -- names no agent, or another agent, is refused at an agent's boundary.
+    else if op.family != .message && ctx.agent.isSome
+        && (op.agents.isEmpty || !op.agents.all (· == ctx.agent.getD "")) then
       some .targeted
     else
       match op.toolCallId? with

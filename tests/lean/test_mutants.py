@@ -68,16 +68,6 @@ def _rollback_without_scope(original):
     return problem
 
 
-def _agent_required(original):
-    """The G2 fix: an op naming no agent is refused. The model mirrors today's code, so the
-    differential tests must notice the fix (and the model must then be updated)."""
-    def problem(self, op, world=None):
-        if getattr(op, "agent", None) == "":
-            return f"{op.name} is outside this audit's scope (no agent)"
-        return original(self, op, world)
-    return problem
-
-
 MUTANTS = [
     ("scope ignores agents", lambda p: p.setattr(scope_module.AuditScope, "problem",
                                                   _ignore_agents),
@@ -107,12 +97,6 @@ MUTANTS = [
      lambda lean: compare_problem(lean, _world(), SEAT,
                                   {"op": "drop_message", "message_id": "missing",
                                    "recipients": []})),
-    ("G2 fixed in the Python only",
-     lambda p: p.setattr(scope_module.AuditScope, "problem",
-                         _agent_required(scope_module.AuditScope.problem)),
-     lambda lean: compare_problem(lean, _world(), SEAT,
-                                  {"op": "replace_generation", "agent": "", "content": "x",
-                                   "tool_calls": []})),
 ]
 
 

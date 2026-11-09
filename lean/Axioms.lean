@@ -14,7 +14,7 @@ example : OnlyApplied := onlyApplied
 example : Confined := confined
 example : ScopeRespected := scopeRespected
 example : ¬ Frame := bug_G1_amend_pending
-example : ¬ Frame := bug_G2_empty_agent
+example : G2Fixed := g2Fixed
 example : Witness.RunWitness := Witness.runWitness
 example : Witness.FrameWitness := Witness.frameWitness
 example : Witness.SeatWitness := Witness.seatWitness
@@ -35,7 +35,7 @@ example : Witness.HaltWitness := Witness.haltWitness
 #print axioms confined
 #print axioms scopeRespected
 #print axioms bug_G1_amend_pending
-#print axioms bug_G2_empty_agent
+#print axioms g2Fixed
 #print axioms Witness.runWitness
 #print axioms Witness.frameWitness
 #print axioms Witness.seatWitness

@@ -43,7 +43,7 @@ structure Channel where
   writers : List Agent
   deriving DecidableEq, Repr, Inhabited
 
--- mirrors: ops.py:62-453, the 13 ops registered at ops.py:481-484.
+-- mirrors: ops.py:62-456, the 13 ops registered at ops.py:484-487.
 -- `expected_revision` and `reason` are not modelled: the stale-revision check can only
 -- add rejections and is part of `Hooks.extra` (Run.lean).
 inductive Op where
@@ -65,7 +65,7 @@ inductive Op where
 
 namespace Op
 
--- mirrors: the `name` ClassVar of each op class, ops.py:114-434
+-- mirrors: the `name` ClassVar of each op class, ops.py:115-437
 def name : Op → String
   | .replaceGeneration .. => "replace_generation"
   | .editGeneration .. => "edit_generation"
@@ -97,7 +97,7 @@ def family : Op → Family
 def allBoundaries : List Boundary :=
   [.generation, .beforeActivation, .toolCall, .toolResult, .betweenTurns]
 
--- mirrors: the `boundaries` ClassVar, ops.py:93, 186, 228, 237, 246, 255, 386, 435
+-- mirrors: the `boundaries` ClassVar, ops.py:93, 187, 231, 240, 249, 258, 389, 438
 def boundaries : Op → List Boundary
   | .replaceGeneration .. | .editGeneration .. | .forceToolCall .. => [.generation]
   | .stageInput .. => [.beforeActivation]
@@ -113,7 +113,7 @@ def agentField? : Op → Option String
   | .blockToolCall a .. | .simulateToolResult a .. | .overrideToolResult a .. => some a
   | _ => none
 
--- mirrors: `getattr(op, "tool_call_id", None)`, controller.py:539
+-- mirrors: `getattr(op, "tool_call_id", None)`, controller.py:542
 def toolCallId? : Op → Option String
   | .blockToolCall _ t _ | .simulateToolResult _ t _ | .overrideToolResult _ t _ => t
   | _ => none
@@ -123,9 +123,9 @@ def agentTuple (agent : String) : List Agent :=
   if agent.isEmpty then [] else [agent]
 
 mutual
-  -- mirrors: ControlOp.agents ops.py:75-78; _ExistingMessageOp.agents ops.py:267-268;
-  -- InjectMessage.agents ops.py:351-352; AmendPending.agents ops.py:410-411;
-  -- Rollback.agents ops.py:448-449. Python sorts and dedupes; only membership matters here.
+  -- mirrors: ControlOp.agents ops.py:75-78; _ExistingMessageOp.agents ops.py:270-271;
+  -- InjectMessage.agents ops.py:354-355; AmendPending.agents ops.py:413-414;
+  -- Rollback.agents ops.py:451-452. Python sorts and dedupes; only membership matters here.
   def agents : Op → List Agent
     | .replaceGeneration a .. | .editGeneration a .. | .forceToolCall a .. | .stageInput a ..
     | .blockToolCall a .. | .simulateToolResult a .. | .overrideToolResult a .. => agentTuple a
@@ -171,7 +171,7 @@ structure World where
 
 namespace World
 
--- mirrors: `world.messages.get(id)`, ops.py:278, 286, 313, where `world.messages` is
+-- mirrors: `world.messages.get(id)`, ops.py:281, 289, 316, where `world.messages` is
 -- `{m.id: m for m in state.messages}` (delivery.py:77): with a repeated id the last wins.
 def findMsg (w : World) (id : MsgId) : Option Message :=
   w.messages.reverse.find? (·.id == id)
@@ -197,8 +197,8 @@ def recipientsOrAll (m : Message) (recipients : Option (List Agent)) : List Agen
 
 namespace Op
 
--- mirrors: ControlOp.affected ops.py:80-82; _ExistingMessageOp.affected ops.py:270-281;
--- RewriteMessage.affected ops.py:311-315. The world is always given (the controller
+-- mirrors: ControlOp.affected ops.py:80-82; _ExistingMessageOp.affected ops.py:273-284;
+-- RewriteMessage.affected ops.py:314-318. The world is always given (the controller
 -- passes `CommunicationWorld.current()`).
 def affected (w : World) : Op → List Agent
   | .rewriteMessage id rs c =>
@@ -290,7 +290,7 @@ def touchOwn (ctx : Ctx) (op : Op) (w : World) : Except ApplyError World :=
   | none => .error .noBoundaryAgent
   | some b => .ok { w with own := fun a => if a == b then w.own a ++ [op.name] else w.own a }
 
--- mirrors: _ExistingMessageOp._target, ops.py:283-301. Returns the message and the
+-- mirrors: _ExistingMessageOp._target, ops.py:286-304. Returns the message and the
 -- overlay keys; `None` recipient means every recipient.
 def target (w : World) (id : MsgId) (recipients : Option (List Agent)) :
     Except ApplyError (Message × List (MsgId × Option Agent)) :=
@@ -315,33 +315,33 @@ def injectedId (w : World) : MsgId :=
 whether an edit's text occurs); `false` means the op raises `OpError` there.
 Rollback is not an effect: the run handles it (Run.lean). -/
 def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
-  -- mirrors: ReplaceGeneration.produce ops.py:119-128, applied at controller.py:215-230
+  -- mirrors: ReplaceGeneration.produce ops.py:120-129, applied at controller.py:215-230
   | op@(.replaceGeneration _ content calls), w =>
     if content.isEmpty && calls.isEmpty then .error .needsContent
     else if !ok then .error .hidden
     else touchOwn ctx op w
-  -- mirrors: EditGeneration.produce ops.py:150-164; ForceToolCall.produce ops.py:174-181.
+  -- mirrors: EditGeneration.produce ops.py:151-165; ForceToolCall.produce ops.py:175-182.
   -- On failure the agent gets the model's own output (controller.py:218-223): no effect.
   | op@(.editGeneration ..), w | op@(.forceToolCall ..), w =>
     if !ok then .error .hidden else touchOwn ctx op w
-  -- mirrors: StageInput.apply ops.py:209-214, applied at controller.py:236-242
+  -- mirrors: StageInput.apply ops.py:211-216, applied at controller.py:236-242
   | op@(.stageInput ..), w => touchOwn ctx op w
   -- mirrors: controller.py:252-259 (block, simulate) and 270-276 (override)
   | op@(.blockToolCall ..), w | op@(.simulateToolResult ..), w
   | op@(.overrideToolResult ..), w => touchOwn ctx op w
-  -- mirrors: RewriteMessage.apply ops.py:317-322
+  -- mirrors: RewriteMessage.apply ops.py:320-325
   | .rewriteMessage id rs content, w =>
     match target w id rs with
     | .error e => .error e
     | .ok (_, keys) =>
       .ok { w with overlay := { w.overlay with
         rewrites := keys.map (fun k => (k, content)) ++ w.overlay.rewrites } }
-  -- mirrors: DropMessage.apply ops.py:330-333
+  -- mirrors: DropMessage.apply ops.py:333-336
   | .dropMessage id rs, w =>
     match target w id rs with
     | .error e => .error e
     | .ok (_, keys) => .ok { w with overlay := { w.overlay with drops := keys ++ w.overlay.drops } }
-  -- mirrors: InjectMessage.apply ops.py:354-381
+  -- mirrors: InjectMessage.apply ops.py:357-384
   | .injectMessage channel sender recipients content override, w =>
     match w.findChannel channel with
     | none => .error .noChannel
@@ -355,9 +355,9 @@ def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
           let m : Message := { id := injectedId w, channel := channel, sender := sender,
                                recipients := recipients, content := content }
           .ok { w with overlay := { w.overlay with injections := w.overlay.injections ++ [m] } }
-  -- mirrors: Halt.apply ops.py:397-398 (Orbit `runtime.halt`)
+  -- mirrors: Halt.apply ops.py:400-401 (Orbit `runtime.halt`)
   | .halt, w => .ok { w with halted := true }
-  -- mirrors: AmendPending.apply ops.py:413-422 and Orbit ScheduleRuntime.amend_pending
+  -- mirrors: AmendPending.apply ops.py:416-425 and Orbit ScheduleRuntime.amend_pending
   -- (execution/plans.py:255-267): `_check_amendment` (220-230), then each step's
   -- `distinct_agents` (configs/scheduling.py:44-51; `not name.strip()`, read as "all
   -- whitespace" with Lean's `Char.isWhitespace`), then `_validate_steps` (134-140).
