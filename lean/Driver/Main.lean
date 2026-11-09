@@ -13,6 +13,9 @@ Commands:
 * `problem`: `AuditScope.problem` and `Op.affected`.
 * `check`: `checkProblem` (the controller's `_problem`).
 * `apply`: `applyRaw`, and which agents' views changed (`changedAgents`).
+* `decide`: one boundary's batch through `decide` (the controller's `_decide`, its
+  rollback path and the boundary method): whether it rolls back, the message ops applied,
+  and the family ops handed on to the boundary.
 -/
 
 namespace Driver
@@ -46,6 +49,11 @@ def hexVal (c : Char) : P Nat :=
   else if 'A' ≤ c && c ≤ 'F' then pure (c.toNat - 'A'.toNat + 10)
   else throw s!"bad hex digit {c}"
 
+def hex4 : P Nat := do
+  let mut n := 0
+  for _ in [0:4] do n := n * 16 + (← hexVal (← next))
+  return n
+
 partial def strBody (acc : List Char) : P String := do
   let c ← next
   if c == '"' then return String.ofList acc.reverse
@@ -56,9 +64,15 @@ partial def strBody (acc : List Char) : P String := do
     | 'n' => strBody ('\n' :: acc) | 't' => strBody ('\t' :: acc) | 'r' => strBody ('\r' :: acc)
     | 'b' => strBody ((Char.ofNat 8) :: acc) | 'f' => strBody ((Char.ofNat 12) :: acc)
     | 'u' => do
-      let mut n := 0
-      for _ in [0:4] do n := n * 16 + (← hexVal (← next))
-      strBody ((Char.ofNat n) :: acc)
+      let n ← hex4
+      if 0xD800 ≤ n && n < 0xDC00 then
+        -- a UTF-16 surrogate pair, as json.dumps writes characters outside the BMP
+        expect '\\'; expect 'u'
+        let lo ← hex4
+        if !(0xDC00 ≤ lo && lo < 0xE000) then throw "unpaired surrogate"
+        strBody ((Char.ofNat (0x10000 + (n - 0xD800) * 0x400 + (lo - 0xDC00))) :: acc)
+      else if 0xDC00 ≤ n && n < 0xE000 then throw "unpaired surrogate"
+      else strBody ((Char.ofNat n) :: acc)
     | _ => throw s!"bad escape {e}"
   else strBody (c :: acc)
 
@@ -94,6 +108,7 @@ mutual
     expect '"'
     let k ← strBody []
     ws; expect ':'
+    if acc.any (·.1 == k) then throw s!"duplicate key {k}"
     let v ← value
     ws
     match ← next with
@@ -215,9 +230,37 @@ def problemKind : Problem → String
 def candidates (w : World) (o : Op) : List Agent :=
   (w.agents ++ o.agents ++ w.messages.flatMap (fun m => m.sender :: m.recipients)).eraseDups
 
+def record (c : Ctx) (o : Op) (pre post : World) : Entry :=
+  { branch := 0, revision := c.revision, source := .live, scope := none, ctx := c, op := o,
+    pre := pre, post := post }
+
+def okHooks : Hooks := { extra := fun _ _ _ => none, applyOk := fun _ _ _ => true }
+
+def runDecide (j : J) (w : World) : D String := do
+  let s ← asOpt scope (← field j "scope")
+  let bounds ← (← strs j "boundaries").mapM boundary
+  let some b := bounds.getLast? | throw "no boundaries"
+  let c : Ctx := { boundary := b, revision := bounds.length, agent := ← optStr j "agent",
+                   toolCallId := ← optStr j "tool_call_id" }
+  let ops ← asList op (← field j "ops")
+  let out := decide s okHooks (record c) c false (fun t => bounds[t - 1]?) ops w
+  match out with
+  | .rollback es _ _ =>
+    return "{\"rollback\": true, \"messages\": [], \"family\": [], \"applied\": " ++
+      encStrs (es.map (·.op.name)) ++ "}"
+  | .next _ es =>
+    -- The family ops reach the boundary only when the whole batch passed the checks.
+    let rejected := ops.any (fun o => (checkProblem s c o w).isSome) ||
+      ((ops.filter (fun o => o.family == familyAt c.boundary)).length > 1 && soleBoundary c.boundary)
+    let family := if rejected then [] else (ops.filter (fun o => o.family != .message)).map (·.name)
+    let messages := (es.filter (fun e => e.op.family == .message)).map (·.op.name)
+    return "{\"rollback\": false, \"messages\": " ++ encStrs messages ++ ", \"family\": " ++
+      encStrs family ++ ", \"applied\": []}"
+
 def run (line : String) : D String := do
   let j ← parse line
   let w ← world (← field j "world")
+  if (← str j "cmd") == "decide" then return ← runDecide j w
   let o ← op (← field j "op")
   match ← str j "cmd" with
   | "problem" =>
