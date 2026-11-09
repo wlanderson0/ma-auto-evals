@@ -44,7 +44,7 @@ From the step 1 map, settled before step 3 and recorded in the assurance stateme
 
 ## Steps
 
-1. **Read and map.** Done: `lean/scope-map.md`. Add an AST inventory of every `apply` call and every write to the overlay, schedule or `runtime.halt`, to back T1 in CI.
+1. **Read and map.** Done: `lean/scope-map.md`, and the AST inventory backing T1 (`lean/scope-inventory.json`, checked by `tests/structural/test_scope_inventory.py`).
 2. **Lean model.** Lean 4 (pin a stable toolchain, currently 4.35.0), core and `Std` only, no Mathlib, in `lean/`. Two kinds of definition:
    - *mirror*: one per Python function, each with a file:line header, keeping `None` vs empty and the `if agent` truthiness test exactly;
    - *specification*: `view`, the log, `changedAgents`, each with a short prose justification.
