@@ -2,3 +2,9 @@ import Scope.Spec.Model
 import Scope.Spec.View
 import Scope.Spec.Run
 import Scope.Spec.Statements
+import Scope.Spec.Witnesses
+import Scope.Proofs.Check
+import Scope.Proofs.Run
+import Scope.Proofs.Frame
+import Scope.Proofs.Main
+import Scope.Proofs.Sanity

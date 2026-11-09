@@ -23,7 +23,7 @@ Code at `b7b1eeb` (`sarah/l2-review-and-stops`), Orbit fork `Danhelo/orbit@dc4ea
 | `drop_message` | any | recipients, as above, without sender | `overlay.drops` (`ops.py:330-333`) | recipients | ✓ |
 | `inject_message` | any | sender ∪ recipients (`ops.py:351-352`) | `overlay.injections` (`ops.py:354-381`) | recipients; sender by attribution | ✓ |
 | `halt` | BETWEEN_TURNS | `()` | stops the run (`ops.py:397-398`) | every agent's remaining turns | ? D1 |
-| `amend_pending` | BETWEEN_TURNS | agents in the **new** steps (`ops.py:410-411`) | replaces **all** pending steps of the current cycle (`ops.py:413-422`, Orbit `execution/plans.py:255-268`) | new-step agents ∪ old-pending agents | ✗ G1 |
+| `amend_pending` | BETWEEN_TURNS | agents in the **new** steps (`ops.py:410-411`) | replaces **all** pending steps of the current cycle (`ops.py:413-422`, Orbit `execution/plans.py:255-267`) | new-step agents ∪ old-pending agents | ✗ G1 |
 | `rollback` | any | interventions' `agents()` (`ops.py:448-449`), plus recursion on each intervention with `world` (`scope.py:66-70`) | ends the branch; child replays to `to_revision` and applies interventions (`runner.py:135-140`) | interventions' agents | ✓ N3 |
 
 ## Enforcement path
@@ -44,7 +44,7 @@ Code at `b7b1eeb` (`sarah/l2-review-and-stops`), Orbit fork `Danhelo/orbit@dc4ea
   - a controller is installed (`runtime.py:300-302`).
   Our scenarios use observation `none` and `delivery="auto"` (`experiments/scenarios.py:365, 678`).
 - **A2.** `controlled_delivery` rejects a rewrite that changes anything but content, or a message from another channel (`execution/control.py:461-490`). It does not check an added message's sender or recipients (`control.py:483-486`).
-- **A3.** `amend_pending` replaces the current cycle's pending steps wholesale; the current step's remaining agents and later cycles are untouched (`execution/plans.py:255-268`). Before that it rejects (ValueError, caught) a stale revision, a blank reason, an empty step, a blank name, a repeated agent in a step and unknown agents (`plans.py:220-226, 134-140`, `configs/scheduling.py:44-51`). A non-quiescent or terminated schedule raises RuntimeError, which `controller.py:291` does not catch: the branch errors instead of recording a rejection.
+- **A3.** `amend_pending` replaces the current cycle's pending steps wholesale; the current step's remaining agents and later cycles are untouched (`execution/plans.py:255-267`). Before that it rejects (ValueError, caught) a stale revision, a blank reason, an empty step, a blank name, a repeated agent in a step and unknown agents (`plans.py:220-226, 134-140`, `configs/scheduling.py:44-51`). A non-quiescent or terminated schedule raises RuntimeError, which `controller.py:291` does not catch: the branch errors instead of recording a rejection.
 - **A4.** Within one batch, the world `scope.problem` sees is the world `apply` sees: message ops write the overlay, never `state.messages`. At a fork, the replay fingerprint (`controller.py:374-379`) makes the child's messages equal the parent's.
 - **A5.** One agent runs at a time: explicit plans with concurrent steps are refused (`controller.py:190, 601-610`); the other schedulers are sequential (`agent_scheduler.py:83`).
 - **A6.** No `ScheduleConfig.after_activation` callback (it can change the schedule outside ops: `agent_scheduler.py:147-154, 344`).

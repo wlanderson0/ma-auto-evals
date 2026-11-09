@@ -17,5 +17,6 @@ for module in "${modules[@]}"; do
   src="${module//.//}.lean"
   olean="$OUT/${module//.//}.olean"
   mkdir -p "$(dirname "$olean")"
-  "$LEAN" -R . -o "$olean" "$src"
+  out=$("$LEAN" -R . -o "$olean" "$src" 2>&1) || { echo "$out"; exit 1; }
+  if [ -n "$out" ]; then echo "$out"; echo "$src: warnings fail the build (like lake --wfail)"; exit 1; fi
 done

@@ -358,7 +358,7 @@ def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
   -- mirrors: Halt.apply ops.py:397-398 (Orbit `runtime.halt`)
   | .halt, w => .ok { w with halted := true }
   -- mirrors: AmendPending.apply ops.py:413-422 and Orbit ScheduleRuntime.amend_pending
-  -- (execution/plans.py:255-268): `_check_amendment` (220-230), then each step's
+  -- (execution/plans.py:255-267): `_check_amendment` (220-230), then each step's
   -- `distinct_agents` (configs/scheduling.py:44-51; `not name.strip()`, read as "all
   -- whitespace" with Lean's `Char.isWhitespace`), then `_validate_steps` (134-140).
   -- `ok = false` stands for the checks on data the model does not hold: a blank reason
