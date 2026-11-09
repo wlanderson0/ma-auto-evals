@@ -5,12 +5,12 @@ name: Lean scope proofs
 on:
   pull_request:
     paths: ["src/orbit_audit/**", "lean/**", "tests/lean/**", "tests/structural/**",
-            "uv.lock", "pyproject.toml",
+            "experiments/**", "uv.lock", "pyproject.toml",
             ".github/workflows/lean.yml"]
   push:
     branches: [main]
     paths: ["src/orbit_audit/**", "lean/**", "tests/lean/**", "tests/structural/**",
-            "uv.lock", "pyproject.toml",
+            "experiments/**", "uv.lock", "pyproject.toml",
             ".github/workflows/lean.yml"]
   schedule:
     - cron: "43 2 * * *"  # nightly: the long Hypothesis profile
@@ -43,6 +43,9 @@ jobs:
           lake-package-directory: lean
           build-args: "--wfail"
           leanchecker: true
+          # A restored .lake keeps old mtimes, which tests/lean/driver.py reads as a stale
+          # model; the build takes seconds, so build fresh.
+          use-github-cache: "false"
       - name: Proof gate (spec hash, forbidden constructs, axiom allow-list)
         working-directory: lean
         run: LEAN="$(command -v lean)" ./check.sh

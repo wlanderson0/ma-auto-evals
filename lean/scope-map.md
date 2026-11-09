@@ -1,6 +1,6 @@
 # Scope enforcement: code map (plan step 1)
 
-Code at `b7b1eeb` (`sarah/l2-review-and-stops`), Orbit fork `Danhelo/orbit@dc4ea5e`. All paths are under `src/orbit_audit/` unless prefixed. Orbit paths are under `orbit/` in site-packages. Reviewed adversarially once; G2 reproduced.
+Code at `b7b1eeb` (`sarah/l2-review-and-stops`), Orbit fork `Danhelo/orbit@dc4ea5e`. All paths are under `src/orbit_audit/` unless prefixed. Orbit paths are under `orbit/` in site-packages. Step 1 reviewed adversarially; later steps reviewed separately (see `ASSURANCE.md`).
 
 ## What "affect" means
 
@@ -50,10 +50,18 @@ Code at `b7b1eeb` (`sarah/l2-review-and-stops`), Orbit fork `Danhelo/orbit@dc4ea
 - **A6.** No `ScheduleConfig.after_activation` callback (it can change the schedule outside ops: `agent_scheduler.py:147-154, 344`).
 - **A7.** Policies only return ops; the op set is the 13 registered at `ops.py:481-484`.
 
-## Findings
+## Findings (step 6)
 
-- **G1. `amend_pending` under-reports `affected`** (confirmed in code). Under `agents={"alice"}` with `amend_pending` allowed, `AmendPending(steps=(("alice",),))` passes the check and replaces every other agent's pending turns in the cycle. The scripted-helper path is guarded (`experiments/l2/validity.py:83-89` forces `agents=None` for activations). Still open: an `l1` inner with a custom scope (`experiments/l2/brief.py:274-291`) and a direct `audit_task(scope=...)`; the LLM auditor offers `amend_pending` whenever the scope allows it (`auditor/llm.py:203-207`).
-- **G2. An empty `agent` bypasses the agents limit** (reproduced, mock run). `agents()` is `(agent,) if agent else ()` and `agent: str` has no `min_length` (`ops.py:77-78, 95, 188, 219`). Both agent checks in `_problem` are skipped when `agents()` is empty (`controller.py:533, 537`), and apply sites act on the boundary's agent. Under `agents={"pm"}`, `ReplaceGeneration(agent="", content=...)` at the coder's generation is applied: the coder's model is not called and the coder outputs the auditor's text (ledger `agents=()`). Same for `stage_input` and the three tool ops. Reachable by the LLM auditor via rollback to another agent's boundary (`list_checkpoints` shows them). Fix: `agent: str = Field(min_length=1)`, and check `affected` against the boundary's agent rather than `op.agent`.
+Each reproduces on the unmodified code. Classes: *reachable* (a scenario or brief in the repo builds the scope), *latent* (reproduces, nothing builds it yet), *model-only*.
+
+- **G1. `amend_pending` under-reports `affected`: latent.** `affected` lists only the agents in the new steps (`ops.py:410-411`), but the op replaces every pending step. Reproduced in a mock run (`tests/contract/test_scope_gaps.py`; release team, scope `ops={amend_pending}, agents={pm}`): the amendment is applied with `affected=(pm,)` and coder and reviewer never run again. No brief in the repo builds such a scope: the L1 seat brief does not allow `amend_pending` (`experiments/scenarios.py:221-224`), and L2 forces `agents=None` for activations (`experiments/l2/validity.py:83-89`). It is reachable through an L2 `l1` inner condition with a custom scope (`experiments/l2/brief.py:274-291`) or a direct `audit_task(scope=...)`, and the LLM auditor offers the tool whenever the scope allows it (`auditor/llm.py:203-207`). Lean: `bug_G1_amend_pending`. Fix: `affected` = new-step agents ∪ current pending agents (needs the schedule at check time).
+- **G2. An empty `agent` bypasses the agent limit: reachable.** `agents()` is `(agent,) if agent else ()` and `agent: str` has no `min_length` (`ops.py:77-78, 95, 188, 219`), so the scope's agent limit sees nothing to check (`scope.py:61-65`); the controller's own unknown-agent and targeted checks are skipped too (`controller.py:533, 537`), and apply sites act on the boundary's agent. Reproduced in a mock run (`tests/contract/test_scope_gaps.py`): under `agents={pm}`, `ReplaceGeneration(agent="")` at the coder's generation is applied and the coder outputs the auditor's text. Route for the LLM auditor under the L1 seat brief (`agents={seat}`, with `replace_generation`, `edit_generation`, `rollback`): roll back, with no interventions, to another agent's generation boundary (`list_checkpoints` shows them); it is woken there as the new branch's first boundary (`auditor/llm.py`, `always = new_branch`); it can then send `replace_generation(agent="")`. This needs the auditor's model to choose an empty agent, and has not been seen in a real run. Lean: `bug_G2_empty_agent`. Fix: `agent: str = Field(min_length=1)`, and check `affected` against the boundary's agent rather than `op.agent`.
+- **G3. A schedule error is not a rejection: latent.** A non-quiescent or terminated schedule makes Orbit raise `RuntimeError`, which `controller.py:291` does not catch, so the branch errors instead of recording a rejected `amend_pending` (A3). Probably unreachable from `after_turn`.
+
+Design observations for the team (not bugs):
+
+- **Forging without counting the forged agent.** Under `agents={alice}`, `override_tool_result` or `simulate_tool_result` on Alice's `channel_read` can show her words attributed to Carol, while the equivalent `rewrite_message(recipients=("alice",))` is rejected because it counts Carol. Under D2 (a) this is outside the theorem; deciding D2 (b) would make it a finding.
+- **Nested scopes are unbounded.** An L2 inner scope comes from its brief and is not bounded by any parent scope; for activations L2 requires `agents=None`, wider than the helper's seat scope.
 
 ## Model notes (step 2 review)
 
