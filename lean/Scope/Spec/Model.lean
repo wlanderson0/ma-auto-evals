@@ -359,8 +359,8 @@ def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
   | .halt, w => .ok { w with halted := true }
   -- mirrors: AmendPending.apply ops.py:413-422 and Orbit ScheduleRuntime.amend_pending
   -- (execution/plans.py:255-268): `_check_amendment` (220-230), then each step's
-  -- `distinct_agents` (configs/scheduling.py:44-51; Python strips Unicode whitespace,
-  -- the model ASCII), then `_validate_steps` (134-140).
+  -- `distinct_agents` (configs/scheduling.py:44-51; `not name.strip()`, read as "all
+  -- whitespace" with Lean's `Char.isWhitespace`), then `_validate_steps` (134-140).
   -- `ok = false` stands for the checks on data the model does not hold: a blank reason
   -- (ValueError), and a non-quiescent or terminated schedule (RuntimeError, which the
   -- controller does not catch: the branch errors, so no later op is applied).
@@ -370,7 +370,7 @@ def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
     | some s =>
       if rev != s.revision then .error .staleSchedule
       else if !ok then .error .hidden
-      else if steps.any (fun st => st.isEmpty || st.any (fun a => a.trimAscii.isEmpty)
+      else if steps.any (fun st => st.isEmpty || st.any (fun a => a.toList.all Char.isWhitespace)
           || st.eraseDups.length != st.length) then .error .invalidStep
       else if steps.flatten.any (fun a => !w.agents.contains a) then .error .unknownAgents
       else .ok { w with schedule := some { revision := s.revision + 1, pending := steps } }

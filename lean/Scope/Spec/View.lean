@@ -4,15 +4,17 @@ import Scope.Spec.Model
 # What each agent sees (specification)
 
 `view w a` is a specification definition: it has no Python counterpart and is defined
-from the world alone, never from `Op.affected`. It collects everything an op can
-directly change for agent `a`, under the decisions recorded in `lean/scope-map.md`:
+from the world alone, never from `Op.affected`. It collects what an op can directly
+change for agent `a`, under the decisions recorded in `lean/scope-map.md`, except the
+shared id and sequence counters and `schedule.revision`, which the model does not hold
+per agent:
 
 * D2 (a): deliveries are what the delivery overlay changes. A post the agent's model
   makes is that agent's own output; its spread is for the later information-flow work.
 * D3: an agent's pending turns, with their positions, are part of its view.
 * `halted` is shared by every agent: halting ends everyone's remaining turns (D1).
-* `voiced`: what other agents are shown as `a`'s words that `a` never wrote (an
-  injection as `a`, a rewrite of `a`'s message). This is the "sender by attribution" of
+* `rewrittenAs`, `injectedAs`: words the overlay attributes to `a` that `a` never wrote:
+  the current rewrite under each key on one of `a`'s messages, and injections sent as `a`. This is the "sender by attribution" of
   ops.py:311-315, 351-352. Withholding `a`'s message is not in it: it puts no words in
   `a`'s mouth, and `drop_message` does not count the sender (ops.py:325-333).
 
@@ -48,15 +50,19 @@ def selected (w : World) (a : Agent) : List Message :=
   w.messages.filter fun m =>
     w.canRead a m.channel && (m.sender == a || (m.recipients.contains a && w.routeAllowed m.sender a))
 
+/-- What `a` is shown for canonical message `m` (delivery.py:40-49): its own messages as
+sent; otherwise nothing if dropped, else the rewrite for `a` if any. -/
+def shownOne (w : World) (a : Agent) (m : Message) : Option Message :=
+  if m.sender == a then some m
+  else if w.dropped m.id a then none
+  else match w.rewriteFor m.id a with
+    | some c => some { m with content := c }
+    | none => some m
+
 /-- Every channel message `a` is shown, after the overlay. -/
 def inbox (w : World) (a : Agent) : List Message :=
-  let shown := (w.selected a).filterMap fun m =>
-    if m.sender == a then some m
-    else if w.dropped m.id a then none
-    else match w.rewriteFor m.id a with
-      | some c => some { m with content := c }
-      | none => some m
-  shown ++ w.overlay.injections.filter (fun m => w.canRead a m.channel && m.recipients.contains a)
+  (w.selected a).filterMap (w.shownOne a)
+    ++ w.overlay.injections.filter (fun m => w.canRead a m.channel && m.recipients.contains a)
 
 def indicesOf (a : Agent) : List Agent → Nat → List Nat
   | [], _ => []
@@ -72,11 +78,18 @@ def turns (w : World) (a : Agent) : List (Nat × Nat) :=
   | none => []
   | some s => positions a s.pending 0
 
-/-- `(reader, message)` for every message a setup agent is shown as `a`'s that is not one
-of `a`'s canonical messages as sent. -/
-def voiced (w : World) (a : Agent) : List (Agent × Message) :=
-  w.agents.flatMap fun r =>
-    ((w.inbox r).filter (fun m => m.sender == a && !w.messages.contains m)).map (r, ·)
+/-- The current rewrite stored under an overlay key (the Python dict's value). -/
+def rewriteAt (w : World) (k : MsgId × Option Agent) : Option String :=
+  (w.overlay.rewrites.find? (·.1 == k)).map (·.2)
+
+/-- Rewrites attributed to `a`: for each overlay key on one of `a`'s messages, the text
+stored there. -/
+def rewrittenAs (w : World) (a : Agent) (k : MsgId × Option Agent) : Option String :=
+  if (w.findMsg k.1).any (·.sender == a) then w.rewriteAt k else none
+
+/-- Injections sent as `a`. -/
+def injectedAs (w : World) (a : Agent) : List Message :=
+  w.overlay.injections.filter (·.sender == a)
 
 end World
 
@@ -85,16 +98,21 @@ structure AgentView where
   inbox : List Message
   turns : List (Nat × Nat)
   halted : Bool
-  voiced : List (Agent × Message)
-  deriving DecidableEq, Repr
+  rewrittenAs : MsgId × Option Agent → Option String
+  injectedAs : List Message
 
 def view (w : World) (a : Agent) : AgentView :=
   { own := w.own a, inbox := w.inbox a, turns := w.turns a, halted := w.halted,
-    voiced := w.voiced a }
+    rewrittenAs := w.rewrittenAs a, injectedAs := w.injectedAs a }
 
 /-- Agents among `candidates` whose view differs between two worlds; the differential
-tests compare it with the Python's per-agent diff. -/
+tests compare it with the Python's per-agent diff. `rewrittenAs` can only differ at keys
+stored in one of the two overlays, so comparing it there decides it. -/
 def changedAgents (w w' : World) (candidates : List Agent) : List Agent :=
-  candidates.filter (fun a => view w a != view w' a)
+  let keys := (w.overlay.rewrites ++ w'.overlay.rewrites).map (·.1)
+  candidates.filter fun a =>
+    w.own a != w'.own a || w.inbox a != w'.inbox a || w.turns a != w'.turns a
+      || w.halted != w'.halted || w.injectedAs a != w'.injectedAs a
+      || keys.any (fun k => w.rewrittenAs a k != w'.rewrittenAs a k)
 
 end Scope
