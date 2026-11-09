@@ -142,20 +142,20 @@ def run_models(built: Scenario, models: dict[str, Any]) -> tuple[Scenario, Model
     """``(built, default)``: the variant to run and its task's default model, with
     ``RUN_CONFIG`` attached (the judge's and probes' roles: ``run_roles``).
 
-    Orbit builds an agent's model from its name alone, without settings, so the
-    settings reach agents through the task's default model: when every agent runs on
-    one model, their names are cleared and that model is the default (probes then ask
-    it too, as the agent's own model). Agents on several models keep their names and
-    run without the settings (recorded in ``decisions.json``)."""
-    default = one_model(built, models["target"])
-    if default is None:
-        default = models["target"]
-    else:
-        setup = built.task["setup"]
-        setup = setup.model_copy(update={"agents": [
-            spec.model_copy(update={"model": None}) for spec in setup.agents]})
-        built = dataclasses.replace(built, task={**built.task, "setup": setup})
-    return built, configured(default)
+    Every agent's spec carries ``RUN_CONFIG`` as its ``generate_config``, which Orbit
+    merges over the agent's model, so agents on several models run under the same
+    settings as agents on one. When every agent runs on one model, their names are also
+    cleared and that model is the default (probes then ask it too, as the agent's own
+    model)."""
+    one = one_model(built, models["target"])
+    setup = built.task["setup"]
+    setup = setup.model_copy(update={"agents": [
+        spec.model_copy(update={
+            "generate_config": (spec.generate_config or GenerateConfig()).merge(RUN_CONFIG),
+            **({"model": None} if one is not None else {})})
+        for spec in setup.agents]})
+    built = dataclasses.replace(built, task={**built.task, "setup": setup})
+    return built, configured(models["target"] if one is None else one)
 
 
 def run_roles(models: dict[str, Any]) -> dict[str, Model]:
@@ -474,7 +474,6 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
     decisions: dict[str, Any] = {
         "mode": brief.mode, "epochs": epochs, "mock": mock, "budget_usd": brief.budget_usd,
         "run_config": RUN_CONFIG.model_dump(exclude_none=True),
-        "without_run_config": [v.id for v, b in accepted if one_model(b, AUDITOR) is None],
         "estimate": guess, "over_budget": over, "confirmed": confirm,
         "launched": bool(accepted) and (not over or confirm),
         "accepted": [v.id for v, _ in accepted],

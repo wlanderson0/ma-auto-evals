@@ -41,9 +41,8 @@ One experiment is one Cosmos run; each of its samples is one L2 run. The folder 
   built scenario, so per-agent models are as run (written scenarios and ``set_model``
   included). It describes the run, not the export: the commit, the dirty flag and the
   start and end times come from the experiment's ``decisions.json`` (the branch only
-  when the checkout is at that commit, else null), as do ``run_config``, the settings
-  the runs' models had, and ``without_run_config``, the variants whose agents ran on
-  several models and so without them (extra fields; Cosmos keeps the manifest as given).
+  when the checkout is at that commit, else null), as does ``run_config``, the settings
+  the runs' models had (an extra field; Cosmos keeps the manifest as given).
   ``--pr`` decides which PR Cosmos files the run under.
 - For an experiment of an L2 audit (the directory two levels up has ``brief.md`` and
   ``report.md``): ``report.html`` (Cosmos's "Open report"), the audit's report followed
@@ -141,8 +140,7 @@ def export(experiment: Path, out: Path, *, pr: int | None = None,
     manifest.update(sha=run["commit"], short_sha=run["commit"] and run["commit"][:7],
                     dirty=run["dirty"], started_at=_iso(decisions["started"]),
                     finished_at=_iso(decisions.get("finished")),
-                    run_config=decisions.get("run_config"),
-                    without_run_config=decisions.get("without_run_config"))
+                    run_config=decisions.get("run_config"))
     write_manifest(out, manifest)
 
     if audit is not None:
