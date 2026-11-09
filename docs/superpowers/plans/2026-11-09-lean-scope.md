@@ -17,7 +17,7 @@ The step 1 map is `lean/scope-map.md` (A1–A7, findings G1–G2, N1–N4, decis
 
 The model has one world-changing primitive, `applyRaw`, reachable only through `applyChecked`, which logs every applied op as `(op, source, preWorld)` with `source ∈ {live, replay, fork}`. `view a w` is a specification definition (no Python counterpart): everything an op can directly change for agent `a`, per D2 and D3. It is defined from the world state, never from `affected`.
 
-1. **Check is sound.** If `problem(op, w) = none`, then `op.name ∈ ops` (or `ops = none`) and `affected(op, w) ⊆ agents` (or `agents = none`). For rollback, each intervention is checked recursively, in the world it will run in.
+1. **Check is sound.** If `problem(op, w) = none`, then `op.name ∈ ops` (or `ops = none`) and `affected(op, w) ⊆ agents` (or `agents = none`). For rollback, each intervention is checked recursively in the world at the rollback (`_rollback_problem`), and the controller checks it again in the fork's world before applying it (property 3).
 2. **Frame.** If `apply op w = ok w'` and `a ∉ affected(op, w)`, then `view a w' = view a w`. This is `affected` completeness stated as a frame condition (seL4 integrity, Nickel's local respect). It makes G1 and G2 fail the theorem rather than depend on inspection.
 3. **Enforcement.** For every policy, every LLM generation function and every run of the model, each log entry `(op, source, pre)` has `problem(scope, op, pre) = none`. The check uses the world `apply` consumes (A4), with a fresh check on replay and at a fork.
 4. **Narrowing is monotone.** If scope `s ≤ s'`, everything `s` allows, `s'` allows. `allows (s ⊓ t) ↔ allows s ∧ allows t`, including through the rollback recursion. Plus: a rejected op (at check time or at apply time) leaves every view unchanged, which is what lets an arbitrary auditor under a wider scope do everything one under a narrower scope can.
@@ -45,7 +45,7 @@ From the step 1 map, settled before step 3 and recorded in the assurance stateme
 ## Steps
 
 1. **Read and map.** Done: `lean/scope-map.md`, and the AST inventory backing T1 (`lean/scope-inventory.json`, checked by `tests/structural/test_scope_inventory.py`).
-2. **Lean model.** Lean 4 (pin a stable toolchain, currently 4.35.0), core and `Std` only, no Mathlib, in `lean/`. Two kinds of definition:
+2. **Lean model.** Done: `lean/Scope/Spec/{Model,View,Run}.lean`. Lean 4 (pinned 4.35.0), core and `Std` only, no Mathlib, in `lean/`. Two kinds of definition:
    - *mirror*: one per Python function, each with a file:line header, keeping `None` vs empty and the `if agent` truthiness test exactly;
    - *specification*: `view`, the log, `changedAgents`, each with a short prose justification.
    Scopes as `Option (List String)` with `Bool` membership, `≤` defined by membership, not list equality. Ops as an inductive with `Op.name` returning the Python strings. Recursion into rollback interventions is structural (mutual over `Op` and `List Op`), so concrete checks close with `decide`.
