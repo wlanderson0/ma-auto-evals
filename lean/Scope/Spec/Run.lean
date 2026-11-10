@@ -34,8 +34,8 @@ inductive Problem where
   | boundary | unknownAgents | targeted | pinned | sole
   | extra (reason : String)
   | rollbackInReplay | rollbackNotAlone | rollForward | interventionBoundary
-  /-- A payload pydantic refuses before the op exists: an empty `agent`, `to_revision < 1` (ops.py:449) or a
-  rollback inside a rollback (ops.py:456-457). -/
+  /-- A payload pydantic refuses before the op exists: an empty `agent`, `to_revision < 1` (ops.py:454) or a
+  rollback inside a rollback (ops.py:461-462). -/
   | invalid
   deriving DecidableEq, Repr
 

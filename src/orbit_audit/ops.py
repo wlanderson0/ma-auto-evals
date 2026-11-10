@@ -427,10 +427,15 @@ class AmendPending(TurnOp):
         if schedule is None:
             raise OpError("amend_pending requires an explicit activation plan")
         before = [step.model_dump(mode="json") for step in schedule.pending_steps]
-        schedule.amend_pending(
-            [list(step) for step in self.steps], actor=actor,
-            reason=self.reason or "auditor amendment", expected_revision=self.schedule_revision,
-        )
+        try:
+            schedule.amend_pending(
+                [list(step) for step in self.steps], actor=actor,
+                reason=self.reason or "auditor amendment", expected_revision=self.schedule_revision,
+            )
+        except RuntimeError as error:
+            # Orbit refuses an amendment at a non-quiescent boundary or on a terminated
+            # schedule before changing anything; that is a rejection, not a failed branch.
+            raise OpError(f"amend_pending refused by the schedule: {error}") from None
         return {"before": before}
 
 

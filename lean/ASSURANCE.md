@@ -1,6 +1,6 @@
 # Assurance statement: audit scope
 
-**Pinned to:** branch `sarah/scope-gap-fixes`: the Python of `src/orbit_audit/` with the G1 and G2 fixes, and the specification and proofs updated with them; Lean `v4.35.0`, core and `Std` only; Orbit fork `Danhelo/orbit@dc4ea5e`. Specification: `lean/Scope/Spec/*.lean`, listed in `lean/Scope/Spec/SHA256SUMS` (sha256 `b9b8bb1525eba96d001f7e4d4d245306eb76156dff4968b9b7a99d7dd47ae8e3`). Gate: `lean/check.sh` and the files it runs, listed in `lean/GATE.SHA256SUMS` (sha256 `bda6595d2578afd9777baf7e96115a51611cd02764db1d83b5a4e22b675f089a`).
+**Pinned to:** branch `sarah/scope-gap-fixes`: the Python of `src/orbit_audit/` with the G1, G2 and G3 fixes, and the specification and proofs updated with them; Lean `v4.35.0`, core and `Std` only; Orbit fork `Danhelo/orbit@dc4ea5e`. Specification: `lean/Scope/Spec/*.lean`, listed in `lean/Scope/Spec/SHA256SUMS` (sha256 `7e37d87e4a5cf32f26f6604eccc450a27cab4f63e6c672dfc262ab169ce11662`). Gate: `lean/check.sh` and the files it runs, listed in `lean/GATE.SHA256SUMS` (sha256 `692e9fba84780779e2b37a24ebb109799696d5b651d746f7b5bca51f6dbac2c5`).
 
 **Status:** the theorem statements have had three adversarial reviews by AI agents. They have **not yet had the human review** the plan requires before the claim is relied on.
 
@@ -115,9 +115,9 @@
 See `lean/scope-map.md`, "Findings (step 6)":
 - **G1** (fixed on `sarah/scope-gap-fixes`): `amend_pending` under-reported `affected`.
 - **G2** (fixed on `sarah/scope-gap-fixes`): an empty `agent` bypassed the agent limit.
-- **G3** (latent): an uncaught schedule error.
+- **G3** (fixed on `sarah/scope-gap-fixes`): an uncaught schedule error.
 
-G3 has a suggested fix.
+All three are fixed on `sarah/scope-gap-fixes`.
 
 ## Open decisions
 

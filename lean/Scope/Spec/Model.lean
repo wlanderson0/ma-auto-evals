@@ -43,7 +43,7 @@ structure Channel where
   writers : List Agent
   deriving DecidableEq, Repr, Inhabited
 
--- mirrors: ops.py:62-465, the 13 ops registered at ops.py:493-496.
+-- mirrors: ops.py:62-470, the 13 ops registered at ops.py:498-501.
 -- `expected_revision` and `reason` are not modelled: the stale-revision check can only
 -- add rejections and is part of `Hooks.extra` (Run.lean).
 inductive Op where
@@ -65,7 +65,7 @@ inductive Op where
 
 namespace Op
 
--- mirrors: the `name` ClassVar of each op class, ops.py:117-446
+-- mirrors: the `name` ClassVar of each op class, ops.py:117-451
 def name : Op → String
   | .replaceGeneration .. => "replace_generation"
   | .editGeneration .. => "edit_generation"
@@ -97,7 +97,7 @@ def family : Op → Family
 def allBoundaries : List Boundary :=
   [.generation, .beforeActivation, .toolCall, .toolResult, .betweenTurns]
 
--- mirrors: the `boundaries` ClassVar, ops.py:95, 189, 233, 242, 251, 260, 392, 447
+-- mirrors: the `boundaries` ClassVar, ops.py:95, 189, 233, 242, 251, 260, 392, 452
 def boundaries : Op → List Boundary
   | .replaceGeneration .. | .editGeneration .. | .forceToolCall .. => [.generation]
   | .stageInput .. => [.beforeActivation]
@@ -125,7 +125,7 @@ def agentTuple (agent : String) : List Agent :=
 mutual
   -- mirrors: ControlOp.agents ops.py:75-78; _ExistingMessageOp.agents ops.py:272-273;
   -- InjectMessage.agents ops.py:357-358; AmendPending.agents ops.py:416-417;
-  -- Rollback.agents ops.py:460-461. Python sorts and dedupes; only membership matters here.
+  -- Rollback.agents ops.py:465-466. Python sorts and dedupes; only membership matters here.
   def agents : Op → List Agent
     | .replaceGeneration a .. | .editGeneration a .. | .forceToolCall a .. | .stageInput a ..
     | .blockToolCall a .. | .simulateToolResult a .. | .overrideToolResult a .. => agentTuple a
@@ -363,13 +363,13 @@ def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
           .ok { w with overlay := { w.overlay with injections := w.overlay.injections ++ [m] } }
   -- mirrors: Halt.apply ops.py:403-404 (Orbit `runtime.halt`)
   | .halt, w => .ok { w with halted := true }
-  -- mirrors: AmendPending.apply ops.py:425-434 and Orbit ScheduleRuntime.amend_pending
+  -- mirrors: AmendPending.apply ops.py:425-439 and Orbit ScheduleRuntime.amend_pending
   -- (execution/plans.py:255-267): `_check_amendment` (220-230), then each step's
   -- `distinct_agents` (configs/scheduling.py:44-51; `not name.strip()`, read as "all
   -- whitespace" with Lean's `Char.isWhitespace`), then `_validate_steps` (134-140).
   -- `ok = false` stands for the checks on data the model does not hold: a blank reason
-  -- (ValueError), and a non-quiescent or terminated schedule (RuntimeError, which the
-  -- controller does not catch: the branch errors, so no later op is applied).
+  -- (ValueError), and a non-quiescent or terminated schedule (Orbit's RuntimeError, which
+  -- `AmendPending.apply` turns into an `OpError`). Each is a rejection that changes nothing.
   | .amendPending steps rev, w =>
     match w.schedule with
     | none => .error .noSchedule
