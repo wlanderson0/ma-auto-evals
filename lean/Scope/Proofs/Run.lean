@@ -18,21 +18,81 @@ theorem applyRaw_preserves {ctx : Ctx} {ok : Bool} {op : Op} {w w' : World}
     | exact touchOwn_preserves h
     | (repeat' split at h) <;> first | exact touchOwn_preserves h | (cases h <;> exact ⟨rfl, rfl⟩) | simp_all
 
-theorem affected_congr {w w' : World} (h : w.messages = w'.messages) (op : Op) :
-    op.affected w = op.affected w' := by
-  cases op <;> simp [Op.affected, World.findMsg, h]
+theorem affected_congr {w w' : World} (h : w.messages = w'.messages)
+    (hs : w.schedule = w'.schedule) (op : Op) : op.affected w = op.affected w' := by
+  cases op <;> simp [Op.affected, World.findMsg, h, hs]
 
-theorem ownProblem_congr {w w' : World} (h : w.messages = w'.messages) (s : AuditScope)
-    (op : Op) : s.ownProblem w op = s.ownProblem w' op := by
-  simp [AuditScope.ownProblem, affected_congr h]
+theorem ownProblem_congr {w w' : World} (h : w.messages = w'.messages)
+    (hs : w.schedule = w'.schedule) (s : AuditScope) (op : Op) :
+    s.ownProblem w op = s.ownProblem w' op := by
+  simp [AuditScope.ownProblem, affected_congr h hs]
 
-theorem problem_congr {w w' : World} (h : w.messages = w'.messages) (s : AuditScope) :
+theorem problem_congr {w w' : World} (h : w.messages = w'.messages)
+    (hs : w.schedule = w'.schedule) (s : AuditScope) :
     ∀ op, s.problem w op = none → s.problem w' op = none
   | op, hp => by
     rw [AuditScope.problem_none] at hp ⊢
-    refine ⟨(ownProblem_congr h s op) ▸ hp.1, fun iv hiv => problem_congr h s iv (hp.2 iv hiv)⟩
+    refine ⟨(ownProblem_congr h hs s op) ▸ hp.1,
+      fun iv hiv => problem_congr h hs s iv (hp.2 iv hiv)⟩
 termination_by op => sizeOf op
 decreasing_by exact sizeOf_lt_of_intervention hiv
+
+/-- A clean check survives a world whose `affected` sets only grow by allowed agents. -/
+theorem problem_transfer {s : AuditScope} {w w' : World}
+    (hsub : ∀ (op : Op) (a : Agent), a ∈ op.affected w' →
+      a ∈ op.affected w ∨ s.allowsAgent a = true) :
+    ∀ op, s.problem w op = none → s.problem w' op = none
+  | op, hp => by
+    rw [AuditScope.problem_none, AuditScope.ownProblem_none] at hp ⊢
+    refine ⟨⟨hp.1.1, fun a ha => (hsub op a ha).elim (hp.1.2 a) id⟩,
+      fun iv hiv => problem_transfer hsub iv (hp.2 iv hiv)⟩
+termination_by op => sizeOf op
+decreasing_by exact sizeOf_lt_of_intervention hiv
+
+theorem touchOwn_schedule {ctx : Ctx} {op : Op} {w w' : World}
+    (h : touchOwn ctx op w = .ok w') : w'.schedule = w.schedule := by
+  unfold touchOwn at h
+  split at h
+  · cases h
+  · cases h; rfl
+
+/-- Only an amendment changes the schedule, and then to its own steps. -/
+theorem applyRaw_schedule {ctx : Ctx} {ok : Bool} {op : Op} {w w' : World}
+    (h : applyRaw ctx ok op w = .ok w') :
+    w'.schedule = w.schedule ∨
+      ∃ steps rev r, op = .amendPending steps rev ∧ w'.schedule = some ⟨r, steps⟩ := by
+  cases op <;> simp only [applyRaw] at h
+  all_goals first
+    | exact Or.inl (touchOwn_schedule h)
+    | (repeat' split at h) <;> first
+        | exact Or.inl (touchOwn_schedule h)
+        | (cases h; done)
+        | (cases h; exact Or.inl rfl)
+        | (cases h; exact Or.inr ⟨_, _, _, rfl, rfl⟩)
+
+theorem affected_after {w w' : World} {steps : List (List Agent)} {r : Nat}
+    (hm : w'.messages = w.messages) (hs : w'.schedule = some ⟨r, steps⟩) :
+    ∀ (op : Op) (a : Agent), a ∈ op.affected w' → a ∈ op.affected w ∨ a ∈ steps.flatten := by
+  intro op a ha
+  cases op with
+  | amendPending st rev =>
+    simp only [Op.affected, Op.agents, hs, List.mem_append] at ha ⊢
+    rcases ha with h | h
+    · exact Or.inl (Or.inl h)
+    · exact Or.inr h
+  | _ => simp_all [Op.affected, World.findMsg]
+
+/-- An op applied earlier in a checked batch keeps the later ops' checks clean. -/
+theorem step_preserves {s : AuditScope} {ctx : Ctx} {ok : Bool} {op1 op2 : Op}
+    {w w' : World} (h1 : s.problem w op1 = none) (ha : applyRaw ctx ok op1 w = .ok w')
+    (h2 : s.problem w op2 = none) : s.problem w' op2 = none := by
+  have hm := (applyRaw_preserves ha).1
+  rcases applyRaw_schedule ha with hs | ⟨steps, rev, r, rfl, hs⟩
+  · exact problem_congr hm.symm hs.symm s op2 h2
+  · have hall : ∀ a ∈ steps.flatten, s.allowsAgent a = true := fun a hin =>
+      (scopeSound s w _ h1).2.1 a (by simp [Op.affected, Op.agents, hin])
+    exact problem_transfer (fun op a hin =>
+      (affected_after hm hs op a hin).elim Or.inl (fun h => Or.inr (hall a h))) op2 h2
 
 theorem checkProblem_some {s : AuditScope} {ctx : Ctx} {op : Op} {w : World}
     (h : checkProblem (some s) ctx op w = none) :
@@ -95,6 +155,24 @@ theorem applyOps_entries {mk : Op → World → World → Entry} (hmk : MkOk mk)
         have hp := applyRaw_preserves hw'
         exact ⟨op', List.mem_cons_of_mem _ hop', ok, h1, h2, h3.trans hp.1, h4.trans hp.2⟩
 
+theorem applyOps_checked {mk : Op → World → World → Entry} (hmk : MkOk mk) (ctx : Ctx)
+    (hooks : Hooks) (s : AuditScope) : ∀ (ops : List Op) (w : World),
+      (∀ op ∈ ops, s.problem w op = none) →
+      ∀ e ∈ (applyOps mk ctx hooks ops w).2, s.problem e.pre e.op = none
+  | [], _, _ => by simp [applyOps]
+  | op :: rest, w, hall => by
+    intro e he
+    simp only [applyOps] at he
+    split at he
+    · exact applyOps_checked hmk ctx hooks s rest w
+        (fun o ho => hall o (List.mem_cons_of_mem _ ho)) e he
+    · rename_i w' hw'
+      rcases List.mem_cons.1 he with rfl | he
+      · rw [hmk.pre, hmk.op]; exact hall op (List.mem_cons_self ..)
+      · exact applyOps_checked hmk ctx hooks s rest w'
+          (fun o ho => step_preserves (hall op (List.mem_cons_self ..)) hw'
+            (hall o (List.mem_cons_of_mem _ ho))) e he
+
 def Outcome.entries : Outcome → List Entry
   | .next _ es => es
   | .rollback es _ _ => es
@@ -152,16 +230,22 @@ theorem decide_entries {scope : Option AuditScope} {hooks : Hooks}
       obtain ⟨op, hop, ok, h1, h2, h3, h4⟩ := applyOps_entries hmk ctx hooks _ w e he
       have hmem : op ∈ ops := by
         rcases List.mem_append.1 hop with h | h <;> exact (List.mem_filter.1 h).1
-      have hck : checkProblem scope ctx op w = none := by
+      have hall : ∀ o ∈ ops, checkProblem scope ctx o w = none := by
         have : (ops.any (fun op => (checkProblem scope ctx op w).isSome)) = false := by
           simp only [Bool.or_eq_true, not_or] at hc
           simpa using hc.1.1
         simp only [List.any_eq_false] at this
-        simpa using this op hmem
-      have hn := checked_none hck
-      refine ⟨op, h1, fun s hs => problem_congr h3.symm s op (hn.1 s hs), Or.inr ⟨ok, h2, ?_⟩⟩
-      rw [checkProblem_congr h4]
-      exact hn.2
+        intro o ho
+        simpa using this o ho
+      have hn := checked_none (hall op hmem)
+      have heop : e.op = op := by rw [h1, hmk.op]
+      refine ⟨op, h1, fun s hs => ?_, Or.inr ⟨ok, h2, ?_⟩⟩
+      · have := applyOps_checked hmk ctx hooks s _ w (fun o ho => (checked_none (hall o (by
+          rcases List.mem_append.1 ho with h | h <;> exact (List.mem_filter.1 h).1))).1 s hs) e he
+        rw [heop] at this
+        exact this
+      · rw [checkProblem_congr h4]
+        exact hn.2
 
 theorem decide_good {scope : Option AuditScope} {hooks : Hooks}
     {mk : Op → World → World → Entry} (hmk : MkOk mk) {ctx : Ctx}

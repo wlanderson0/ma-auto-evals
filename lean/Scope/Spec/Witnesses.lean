@@ -52,21 +52,20 @@ def appliedCount : Outcome → Nat
 
 /-- The run theorems and the headline are about a non-empty log: an audit under
 `{alice, bob}` applies one op, a drop to Bob, which passes the scope, has
-`affected = [bob]`, no gap leak, a well-formed world, and changes Bob's view only. -/
+`affected = [bob]`, a well-formed world, and changes Bob's view only. -/
 def RunWitness : Prop :=
   let log := runAudit (some seatBob) env policy w0 1 3
   log.map (·.op.name) = ["drop_message"] ∧
     log.map (fun e => changedAgents e.pre e.post cands) = [["bob"]] ∧
     log.map (fun e => e.op.affected e.pre) = [["bob"]] ∧
-    log.map (fun e => gapLeak e.ctx e.pre e.op) = [[]] ∧
     log.map (fun e => Decidable.decide ((e.pre.messages.map (·.id)).Nodup)) = [true] ∧
     log.map (fun e => seatBob.problem e.pre e.op) = [none]
 
-/-- Every hypothesis of `FrameUpToGaps` holds for the drop to Bob, and its conclusion is
-not a no-op: Bob changes, Carol (outside `affected` and `gapLeak`) does not. -/
+/-- Every hypothesis of `Frame` holds for the drop to Bob, and its conclusion is not a
+no-op: Bob changes, Carol (outside `affected`) does not. -/
 def FrameWitness : Prop :=
   w0.WF ∧ checkProblem none atAlice dropToBob w0 = none ∧ carvedOut dropToBob = false ∧
-    "carol" ∉ dropToBob.affected w0 ∧ "carol" ∉ gapLeak atAlice w0 dropToBob ∧
+    "carol" ∉ dropToBob.affected w0 ∧
     ∃ w', applyRaw atAlice true dropToBob w0 = .ok w' ∧ changedAgents w0 w' cands = ["bob"]
 
 /-- Precision: an op on the seat is accepted under the seat scope and lands on the seat. -/
@@ -129,6 +128,12 @@ def RepresentationWitness : Prop :=
     some (.agentsOutside "rollback" ["carol"]) ∧
   rollbackProblem (some { ops := none, agents := none }) okHooks atBob (fun _ => some .generation)
     (.rollback 1 [.rollback 1 []]) w0 = some .invalid
+
+/-- G1 is fixed: an amendment that leaves Bob out of the new steps counts Bob, whose
+pending turn it removes; under the seat scope it is refused. -/
+def G1Witness : Prop :=
+  "bob" ∈ (Op.amendPending [["alice"]] 0).affected w0 ∧
+    seat.problem w0 (.amendPending [["alice"]] 0) ≠ none
 
 /-- D1 is needed: `halt` lists no agents but changes every agent's view. -/
 def HaltWitness : Prop :=

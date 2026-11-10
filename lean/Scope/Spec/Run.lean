@@ -3,28 +3,28 @@ import Scope.Spec.Model
 /-!
 # Mirror of the controller's decision path and the branch loop
 
-`decide` mirrors `AuditController._decide` (controller.py:412-458) with `_problem`
+`decide` mirrors `AuditController._decide` (controller.py:416-462) with `_problem`
 (524-541), `_rollback` (460-476) and `_rollback_problem` (479-501). `runBranch` and
 `runAudit` mirror one branch of `audit_solver` and its fork loop (runner.py:99-147).
 
 The policy, the LLMs and Orbit's own steps between boundaries are arguments, so every
 theorem about a run holds for all of them. A function of (branch, revision, world) is
 enough: in any one run, a stateful policy's output at each boundary is such a function.
-Replay is modelled without its fingerprint check (controller.py:374-379), which only
+Replay is modelled without its fingerprint check (controller.py:378-383), which only
 ends branches: the model's runs include every run the Python can make.
 -/
 
 namespace Scope
 
 -- mirrors: the `family` argument each boundary method passes to `_decide`
--- (controller.py:211, 236, 251, 270, 288)
+-- (controller.py:214, 239, 254, 273, 291)
 def familyAt : Boundary → Op.Family
   | .generation => .generation
   | .beforeActivation => .activation
   | .toolCall | .toolResult => .tool
   | .betweenTurns => .turn
 
--- mirrors: _SOLE, controller.py:93-97
+-- mirrors: _SOLE, controller.py:96-100
 def soleBoundary : Boundary → Bool
   | .generation | .toolCall | .toolResult => true
   | _ => false
@@ -34,14 +34,14 @@ inductive Problem where
   | boundary | unknownAgents | targeted | pinned | sole
   | extra (reason : String)
   | rollbackInReplay | rollbackNotAlone | rollForward | interventionBoundary
-  /-- A payload pydantic refuses before the op exists: an empty `agent`, `to_revision < 1` (ops.py:440) or a
-  rollback inside a rollback (ops.py:447-448). -/
+  /-- A payload pydantic refuses before the op exists: an empty `agent`, `to_revision < 1` (ops.py:449) or a
+  rollback inside a rollback (ops.py:456-457). -/
   | invalid
   deriving DecidableEq, Repr
 
--- mirrors: AuditController._problem, controller.py:524-544. The stale-revision check
+-- mirrors: AuditController._problem, controller.py:528-548. The stale-revision check
 -- (530-531) is part of `Hooks.extra`. `scope = none` means no scope check (526).
--- An op with an empty `agent` cannot be built (`Field(min_length=1)`, ops.py:95, 189, 221):
+-- An op with an empty `agent` cannot be built (`Field(min_length=1)`, ops.py:97, 191, 223):
 -- the model rejects it as an invalid payload, ahead of every check.
 def checkProblem (scope : Option AuditScope) (ctx : Ctx) (op : Op) (w : World) :
     Option Problem :=
@@ -67,7 +67,7 @@ def checkProblem (scope : Option AuditScope) (ctx : Ctx) (op : Op) (w : World) :
 /-- Checks the model does not mirror. Each can only add rejections. -/
 structure Hooks where
   /-- Batch-level: stale `expected_revision`, the intervention budget, the approver's
-  veto (controller.py:442-449, 530-531); for a rollback also branch and intervention
+  veto (controller.py:446-453, 534-535); for a rollback also branch and intervention
   budgets, defences and `fork_problem` (490-501). -/
   extra : Ctx → List Op → World → Option String
   /-- Apply-time checks on data the model does not hold (`applyRaw`'s `ok`). -/
@@ -77,7 +77,7 @@ def Op.isRollback : Op → Bool
   | .rollback .. => true
   | _ => false
 
--- mirrors: AuditController._rollback_problem, controller.py:479-501.
+-- mirrors: AuditController._rollback_problem, controller.py:483-505.
 -- `boundaryAt t` is the boundary recorded at revision `t` of this branch.
 def rollbackProblem (scope : Option AuditScope) (hooks : Hooks) (ctx : Ctx)
     (boundaryAt : Nat → Option Boundary) (op : Op) (w : World) : Option Problem :=
@@ -112,7 +112,7 @@ structure Entry where
   post : World
 
 /-- Apply a checked batch's ops one by one. An op whose effect fails is rejected alone and
-changes nothing (controller.py:218-223, 239-241, 291-294, 519-521). -/
+changes nothing (controller.py:221-226, 242-244, 295-298, 523-525). -/
 def applyOps (mk : Op → World → World → Entry) (ctx : Ctx) (hooks : Hooks) :
     List Op → World → World × List Entry
   | [], w => (w, [])
@@ -127,13 +127,13 @@ inductive Outcome where
   | next (w : World) (entries : List Entry)
   | rollback (entries : List Entry) (toRevision : Nat) (interventions : List Op)
 
--- mirrors: AuditController._decide, controller.py:412-458, and the boundary method that
+-- mirrors: AuditController._decide, controller.py:416-462, and the boundary method that
 -- applies the returned family ops. Message ops go first (455-457), then the family's.
 def decide (scope : Option AuditScope) (hooks : Hooks) (mk : Op → World → World → Entry)
     (ctx : Ctx) (replaying : Bool) (boundaryAt : Nat → Option Boundary) (ops : List Op)
     (w : World) : Outcome :=
   if ops.any Op.isRollback then
-    -- mirrors: AuditController._rollback, controller.py:460-476
+    -- mirrors: AuditController._rollback, controller.py:464-480
     if replaying then .next w []
     else
       match ops with
@@ -186,7 +186,7 @@ def sourceAt (replay : Option Replay) (rev : Nat) : Source :=
   | none => .live
   | some r => if rev < r.fork then .replay else if rev == r.fork then .fork else .live
 
--- mirrors: the batch `_decide` takes, controller.py:419-429
+-- mirrors: the batch `_decide` takes, controller.py:423-433
 def batchAt (policy : Policy) (b : Nat) (replay : Option Replay) (rev : Nat) (w : World) :
     List Op :=
   match replay with

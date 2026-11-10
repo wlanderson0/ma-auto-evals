@@ -54,7 +54,7 @@
       "file": "src/orbit_audit/controller.py",
       "function": "AuditController.after_turn",
       "kind": "apply-call",
-      "expr": "self._apply_record(view, op, original=original)",
+      "expr": "self._apply_record(view, op, pending=pending, original=original)",
       "role": "record: applied turn op"
     },
     {

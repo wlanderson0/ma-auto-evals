@@ -11,7 +11,7 @@ Each test generates a world, a scope, a boundary and an op, asks the Lean model
   the Python views computed through ``DeliveryOverlay.deliver``; for ``halt`` and
   ``amend_pending``, the same against Orbit's ``ScheduleRuntime``;
 * for every other op, that the agents Lean's effect changes are within the Python's
-  ``affected`` or a documented exception (G1, D1).
+  ``affected`` or a documented exception (D1, ``halt``).
 
 Not compared yet: the effects of generation, activation and tool ops against the Python
 (their effect is in the controller's boundary methods, with Inspect objects), absolute
@@ -254,10 +254,26 @@ FAMILY = {Boundary.GENERATION: GenerationOp, Boundary.BEFORE_ACTIVATION: Activat
           Boundary.BETWEEN_TURNS: TurnOp}
 
 
+def pending(world: dict[str, Any]) -> tuple[tuple[str, ...], ...] | None:
+    """The schedule's pending steps, as the controller passes them to the scope check."""
+    schedule = world["schedule"]
+    return None if schedule is None else tuple(tuple(step) for step in schedule["pending"])
+
+
+def fake_runtime(world: dict[str, Any]) -> SimpleNamespace:
+    """What the controller's checks read from Orbit's runtime handles."""
+    steps = pending(world)
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            setup=SimpleNamespace(agents=[SimpleNamespace(name=a) for a in world["agents"]]),
+            defenses=[]),
+        schedule=None if steps is None else SimpleNamespace(
+            pending_steps=[SimpleNamespace(agents=step) for step in steps]))
+
+
 def controller_problem(scope, ctx, op, world) -> str | None:
     controller = AuditController(ScriptedPolicy(), scope=scope)
-    controller.runtime = SimpleNamespace(config=SimpleNamespace(setup=SimpleNamespace(
-        agents=[SimpleNamespace(name=a) for a in world["agents"]])))
+    controller.runtime = fake_runtime(world)
     pyworld = python_world(world)
     boundary = Boundary(ctx["boundary"])
     view = BoundaryView(boundary=boundary, revision=ctx["revision"], turn=None,
@@ -306,13 +322,14 @@ def compare_problem(lean, world, scope, op) -> list[str]:
     py = python_op(op)
     pyworld = python_world(world)
     reply = lean.ask({"cmd": "problem", "world": world, "scope": scope, "op": op})
-    expected = scope_kind(AuditScope(**scope).problem(py, pyworld))
+    expected = scope_kind(AuditScope(**scope).problem(py, pyworld, pending(world)))
     event(f"problem: {expected}")
     diffs = []
     if reply["problem"] != expected:
         diffs.append(f"problem: lean {reply['problem']}, python {expected}")
-    if set(reply["affected"]) != set(py.affected(pyworld)):
-        diffs.append(f"affected: lean {reply['affected']}, python {py.affected(pyworld)}")
+    affected = py.affected(pyworld, pending(world))
+    if set(reply["affected"]) != set(affected):
+        diffs.append(f"affected: lean {reply['affected']}, python {affected}")
     return diffs
 
 
@@ -349,8 +366,9 @@ def compare_effects(lean, world, op) -> list[str]:
     diffs = []
     if changed != set(reply["changed"]):
         diffs.append(f"changed: lean {reply['changed']}, python {sorted(changed)}")
-    if not changed <= set(py.affected(pyworld)):  # property 2 on the Python itself
-        diffs.append(f"python changed {sorted(changed)} outside affected {py.affected(pyworld)}")
+    affected = py.affected(pyworld, pending(world))
+    if not changed <= set(affected):  # property 2 on the Python itself
+        diffs.append(f"python changed {sorted(changed)} outside affected {affected}")
     return diffs
 
 
@@ -363,9 +381,7 @@ def python_decide(world, scope, boundaries, agent, tool_call_id, ops) -> dict[st
     revision = len(boundaries)
     policy = ScriptedPolicy(lambda v: built if v.revision == revision else None)
     controller = AuditController(policy, scope=scope)
-    controller.runtime = SimpleNamespace(config=SimpleNamespace(
-        setup=SimpleNamespace(agents=[SimpleNamespace(name=a) for a in world["agents"]]),
-        defenses=[]))
+    controller.runtime = fake_runtime(world)
     controller.overlay = python_overlay(world)
     pyworld = python_world(world)
     with pytest.MonkeyPatch.context() as patch:
@@ -398,14 +414,9 @@ def compare_decide(lean, world, scope, boundaries, agent, tool_call_id, ops) -> 
 
 
 def known_leak(world: dict[str, Any], ctx: dict[str, Any], op: dict[str, Any]) -> set[str]:
-    """Agents a documented exception may reach outside ``affected``, computed on the
-    Python side (independently of Lean's ``gapLeak``): D1 halt reaches everyone; G1
-    amend_pending reaches every agent in the pending steps it replaces."""
-    if op["op"] == "halt":
-        return {"*"}
-    if op["op"] == "amend_pending":
-        return {a for step in (world["schedule"] or {"pending": []})["pending"] for a in step}
-    return set()
+    """Agents a documented exception may reach outside ``affected``: D1 halt reaches
+    everyone."""
+    return {"*"} if op["op"] == "halt" else set()
 
 
 def compare_frame(lean, world, ctx, op, ok) -> list[str]:
@@ -419,11 +430,11 @@ def compare_frame(lean, world, ctx, op, ok) -> list[str]:
     if reply["error"] is not None:
         event(f"frame {op['op']}: lean refused")
         return []
-    outside = set(reply["changed"]) - set(py.affected(python_world(world)))
+    outside = set(reply["changed"]) - set(py.affected(python_world(world), pending(world)))
     leak = known_leak(world, ctx, op)
-    event(f"frame {op['op']}: {'gap reached' if outside else 'within affected'}")
+    event(f"frame {op['op']}: {'exception reached' if outside else 'within affected'}")
     if outside and "*" not in leak and not outside <= leak:
-        return [f"{op['op']} changed {sorted(outside)} outside affected and known gaps"]
+        return [f"{op['op']} changed {sorted(outside)} outside affected and the exceptions"]
     return []
 
 
@@ -483,7 +494,7 @@ def _world(**overrides) -> dict[str, Any]:
 
 
 SEAT = {"ops": None, "agents": ["alice"]}
-EXAMPLES = [  # (world, scope, op): representation and gap cases kept in every run
+EXAMPLES = [  # (world, scope, op): representation and fixed-gap cases kept in every run
     (_world(), SEAT, {"op": "amend_pending", "steps": [["alice"]], "schedule_revision": 0}),
     (_world(), {"ops": [], "agents": None}, {"op": "halt"}),
     (_world(), {"ops": None, "agents": []}, {"op": "halt"}),

@@ -43,7 +43,7 @@ structure Channel where
   writers : List Agent
   deriving DecidableEq, Repr, Inhabited
 
--- mirrors: ops.py:62-456, the 13 ops registered at ops.py:484-487.
+-- mirrors: ops.py:62-465, the 13 ops registered at ops.py:493-496.
 -- `expected_revision` and `reason` are not modelled: the stale-revision check can only
 -- add rejections and is part of `Hooks.extra` (Run.lean).
 inductive Op where
@@ -65,7 +65,7 @@ inductive Op where
 
 namespace Op
 
--- mirrors: the `name` ClassVar of each op class, ops.py:115-437
+-- mirrors: the `name` ClassVar of each op class, ops.py:117-446
 def name : Op → String
   | .replaceGeneration .. => "replace_generation"
   | .editGeneration .. => "edit_generation"
@@ -97,7 +97,7 @@ def family : Op → Family
 def allBoundaries : List Boundary :=
   [.generation, .beforeActivation, .toolCall, .toolResult, .betweenTurns]
 
--- mirrors: the `boundaries` ClassVar, ops.py:93, 187, 231, 240, 249, 258, 389, 438
+-- mirrors: the `boundaries` ClassVar, ops.py:95, 189, 233, 242, 251, 260, 392, 447
 def boundaries : Op → List Boundary
   | .replaceGeneration .. | .editGeneration .. | .forceToolCall .. => [.generation]
   | .stageInput .. => [.beforeActivation]
@@ -113,7 +113,7 @@ def agentField? : Op → Option String
   | .blockToolCall a .. | .simulateToolResult a .. | .overrideToolResult a .. => some a
   | _ => none
 
--- mirrors: `getattr(op, "tool_call_id", None)`, controller.py:542
+-- mirrors: `getattr(op, "tool_call_id", None)`, controller.py:546
 def toolCallId? : Op → Option String
   | .blockToolCall _ t _ | .simulateToolResult _ t _ | .overrideToolResult _ t _ => t
   | _ => none
@@ -123,9 +123,9 @@ def agentTuple (agent : String) : List Agent :=
   if agent.isEmpty then [] else [agent]
 
 mutual
-  -- mirrors: ControlOp.agents ops.py:75-78; _ExistingMessageOp.agents ops.py:270-271;
-  -- InjectMessage.agents ops.py:354-355; AmendPending.agents ops.py:413-414;
-  -- Rollback.agents ops.py:451-452. Python sorts and dedupes; only membership matters here.
+  -- mirrors: ControlOp.agents ops.py:75-78; _ExistingMessageOp.agents ops.py:272-273;
+  -- InjectMessage.agents ops.py:357-358; AmendPending.agents ops.py:416-417;
+  -- Rollback.agents ops.py:460-461. Python sorts and dedupes; only membership matters here.
   def agents : Op → List Agent
     | .replaceGeneration a .. | .editGeneration a .. | .forceToolCall a .. | .stageInput a ..
     | .blockToolCall a .. | .simulateToolResult a .. | .overrideToolResult a .. => agentTuple a
@@ -171,7 +171,7 @@ structure World where
 
 namespace World
 
--- mirrors: `world.messages.get(id)`, ops.py:281, 289, 316, where `world.messages` is
+-- mirrors: `world.messages.get(id)`, ops.py:284, 292, 319, where `world.messages` is
 -- `{m.id: m for m in state.messages}` (delivery.py:77): with a repeated id the last wins.
 def findMsg (w : World) (id : MsgId) : Option Message :=
   w.messages.reverse.find? (·.id == id)
@@ -197,9 +197,10 @@ def recipientsOrAll (m : Message) (recipients : Option (List Agent)) : List Agen
 
 namespace Op
 
--- mirrors: ControlOp.affected ops.py:80-82; _ExistingMessageOp.affected ops.py:273-284;
--- RewriteMessage.affected ops.py:314-318. The world is always given (the controller
--- passes `CommunicationWorld.current()`).
+-- mirrors: ControlOp.affected ops.py:80-84; _ExistingMessageOp.affected ops.py:275-287;
+-- RewriteMessage.affected ops.py:317-321; AmendPending.affected ops.py:419-423. The world
+-- is always given: the controller passes `CommunicationWorld.current()` and the schedule's
+-- pending steps (`AuditController._pending`), which here are `w.schedule`.
 def affected (w : World) : Op → List Agent
   | .rewriteMessage id rs c =>
     match w.findMsg id with
@@ -209,17 +210,22 @@ def affected (w : World) : Op → List Agent
     match w.findMsg id with
     | none => (Op.dropMessage id rs).agents
     | some m => (recipientsOrAll m rs).filter (· != m.sender)
+  | .amendPending steps rev =>
+    (Op.amendPending steps rev).agents ++
+      (match w.schedule with
+       | none => []
+       | some s => s.pending.flatten)
   | op => op.agents
 
 end Op
 
--- mirrors: AuditScope, scope.py:24-34
+-- mirrors: AuditScope, scope.py:25-35
 structure AuditScope where
   ops : Option (List String)
   agents : Option (List Agent)
   deriving DecidableEq, Repr, Inhabited
 
-/-- Why an op is outside a scope (scope.py:52-71); the text is not modelled. -/
+/-- Why an op is outside a scope (scope.py:53-75); the text is not modelled. -/
 inductive ScopeProblem where
   | opOutside (name : String)
   | agentsOutside (name : String) (outside : List Agent)
@@ -228,7 +234,7 @@ inductive ScopeProblem where
 
 namespace AuditScope
 
--- mirrors: AuditScope.allows_op, scope.py:49-50
+-- mirrors: AuditScope.allows_op, scope.py:50-51
 def allowsOp (s : AuditScope) (name : String) : Bool :=
   match s.ops with
   | none => true
@@ -239,7 +245,7 @@ def allowsAgent (s : AuditScope) (a : Agent) : Bool :=
   | none => true
   | some names => names.contains a
 
-/-- The checks of scope.py:58-65, before the rollback recursion. -/
+/-- The checks of scope.py:62-69, before the rollback recursion. -/
 def ownProblem (s : AuditScope) (w : World) (op : Op) : Option ScopeProblem :=
   if !s.allowsOp op.name then some (.opOutside op.name)
   else
@@ -247,14 +253,14 @@ def ownProblem (s : AuditScope) (w : World) (op : Op) : Option ScopeProblem :=
     if !outside.isEmpty then some (.agentsOutside op.name outside) else none
 
 mutual
-  -- mirrors: AuditScope.problem, scope.py:52-71
+  -- mirrors: AuditScope.problem, scope.py:53-75
   def problem (s : AuditScope) (w : World) : Op → Option ScopeProblem
     | op@(.rollback _ ivs) =>
       match ownProblem s w op with
       | some p => some p
       | none => (problemList s w ivs).map .intervention
     | op => ownProblem s w op
-  /-- The first intervention's problem, in order (scope.py:66-70). -/
+  /-- The first intervention's problem, in order (scope.py:70-74). -/
   def problemList (s : AuditScope) (w : World) : List Op → Option ScopeProblem
     | [] => none
     | op :: rest =>
@@ -284,13 +290,13 @@ inductive ApplyError where
 
 /-- Effect of an op that changes the boundary agent's own generation, context or tool
 call: the controller acts on the boundary's agent (`request`, `activation`, `call`),
-never on `op.agent` (controller.py:198-277). -/
+never on `op.agent` (controller.py:201-280). -/
 def touchOwn (ctx : Ctx) (op : Op) (w : World) : Except ApplyError World :=
   match ctx.agent with
   | none => .error .noBoundaryAgent
   | some b => .ok { w with own := fun a => if a == b then w.own a ++ [op.name] else w.own a }
 
--- mirrors: _ExistingMessageOp._target, ops.py:286-304. Returns the message and the
+-- mirrors: _ExistingMessageOp._target, ops.py:289-307. Returns the message and the
 -- overlay keys; `None` recipient means every recipient.
 def target (w : World) (id : MsgId) (recipients : Option (List Agent)) :
     Except ApplyError (Message × List (MsgId × Option Agent)) :=
@@ -315,33 +321,33 @@ def injectedId (w : World) : MsgId :=
 whether an edit's text occurs); `false` means the op raises `OpError` there.
 Rollback is not an effect: the run handles it (Run.lean). -/
 def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
-  -- mirrors: ReplaceGeneration.produce ops.py:120-129, applied at controller.py:215-230
+  -- mirrors: ReplaceGeneration.produce ops.py:122-131, applied at controller.py:218-233
   | op@(.replaceGeneration _ content calls), w =>
     if content.isEmpty && calls.isEmpty then .error .needsContent
     else if !ok then .error .hidden
     else touchOwn ctx op w
-  -- mirrors: EditGeneration.produce ops.py:151-165; ForceToolCall.produce ops.py:175-182.
-  -- On failure the agent gets the model's own output (controller.py:218-223): no effect.
+  -- mirrors: EditGeneration.produce ops.py:153-167; ForceToolCall.produce ops.py:177-184.
+  -- On failure the agent gets the model's own output (controller.py:221-226): no effect.
   | op@(.editGeneration ..), w | op@(.forceToolCall ..), w =>
     if !ok then .error .hidden else touchOwn ctx op w
-  -- mirrors: StageInput.apply ops.py:211-216, applied at controller.py:236-242
+  -- mirrors: StageInput.apply ops.py:213-218, applied at controller.py:239-245
   | op@(.stageInput ..), w => touchOwn ctx op w
-  -- mirrors: controller.py:252-259 (block, simulate) and 270-276 (override)
+  -- mirrors: controller.py:255-262 (block, simulate) and 270-276 (override)
   | op@(.blockToolCall ..), w | op@(.simulateToolResult ..), w
   | op@(.overrideToolResult ..), w => touchOwn ctx op w
-  -- mirrors: RewriteMessage.apply ops.py:320-325
+  -- mirrors: RewriteMessage.apply ops.py:323-328
   | .rewriteMessage id rs content, w =>
     match target w id rs with
     | .error e => .error e
     | .ok (_, keys) =>
       .ok { w with overlay := { w.overlay with
         rewrites := keys.map (fun k => (k, content)) ++ w.overlay.rewrites } }
-  -- mirrors: DropMessage.apply ops.py:333-336
+  -- mirrors: DropMessage.apply ops.py:336-339
   | .dropMessage id rs, w =>
     match target w id rs with
     | .error e => .error e
     | .ok (_, keys) => .ok { w with overlay := { w.overlay with drops := keys ++ w.overlay.drops } }
-  -- mirrors: InjectMessage.apply ops.py:357-384
+  -- mirrors: InjectMessage.apply ops.py:360-387
   | .injectMessage channel sender recipients content override, w =>
     match w.findChannel channel with
     | none => .error .noChannel
@@ -355,9 +361,9 @@ def applyRaw (ctx : Ctx) (ok : Bool) : Op → World → Except ApplyError World
           let m : Message := { id := injectedId w, channel := channel, sender := sender,
                                recipients := recipients, content := content }
           .ok { w with overlay := { w.overlay with injections := w.overlay.injections ++ [m] } }
-  -- mirrors: Halt.apply ops.py:400-401 (Orbit `runtime.halt`)
+  -- mirrors: Halt.apply ops.py:403-404 (Orbit `runtime.halt`)
   | .halt, w => .ok { w with halted := true }
-  -- mirrors: AmendPending.apply ops.py:416-425 and Orbit ScheduleRuntime.amend_pending
+  -- mirrors: AmendPending.apply ops.py:425-434 and Orbit ScheduleRuntime.amend_pending
   -- (execution/plans.py:255-267): `_check_amendment` (220-230), then each step's
   -- `distinct_agents` (configs/scheduling.py:44-51; `not name.strip()`, read as "all
   -- whitespace" with Lean's `Char.isWhitespace`), then `_validate_steps` (134-140).

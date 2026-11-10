@@ -28,11 +28,11 @@ DROP_BOB = {"op": "drop_message", "message_id": "m0", "recipients": ["bob"]}
 AT_BOB = {"boundary": "generation", "revision": 5, "agent": "bob", "tool_call_id": None}
 
 
-def _ignore_agents(self, op, world=None):
+def _ignore_agents(self, op, world=None, pending=None):
     return None if self.allows_op(op.name) else f"{op.name} is outside this audit's scope"
 
 
-def _explicit_only(self, world):
+def _explicit_only(self, world, pending=None):
     return self.agents()
 
 
@@ -91,6 +91,12 @@ MUTANTS = [
      lambda p: p.setattr(AuditController, "_rollback_problem",
                          _rollback_without_scope(AuditController._rollback_problem)),
      _decide_example(6)),
+    ("amend_pending counts only its new steps (G1)",
+     lambda p: p.setattr(ops_module.AmendPending, "affected",
+                         lambda self, world, pending=None: self.agents()),
+     lambda lean: compare_problem(lean, _world(), SEAT,
+                                  {"op": "amend_pending", "steps": [["alice"]],
+                                   "schedule_revision": 0})),
     ("recipients [] read as None",
      lambda p: p.setattr(ops_module._ExistingMessageOp, "agents",
                          lambda self: tuple(sorted(self.recipients or ())) or ("bob", "carol")),

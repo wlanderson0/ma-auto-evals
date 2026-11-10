@@ -1,8 +1,6 @@
-"""Gaps in the scope check (lean/scope-map.md): G1 open, G2 fixed.
+"""Gaps found in the scope check (lean/scope-map.md, G1 and G2), now fixed.
 
-Each test asserts the behaviour the scope promises. An open gap is a strict expected
-failure, so its fix shows up as an unexpected pass and the Lean model and its ``bug_``
-theorem are updated with it.
+Each test asserts the behaviour the scope promises, on a mock run.
 """
 
 from __future__ import annotations
@@ -32,12 +30,29 @@ class DropOthersTurns(AuditPolicy):
         return []
 
 
-@pytest.mark.xfail(strict=True, reason="G1: amend_pending lists only the new steps' agents")
 def test_g1_amend_pending_cannot_remove_out_of_scope_turns(tmp_path):
     scope = AuditScope(ops={"amend_pending"}, agents={"pm"})
     _, [controller] = run_branches(tmp_path, DropOthersTurns, scope=scope)
     assert controller.ledger.applied() == ()
+    [record] = controller.ledger.rejected()
+    assert "affects ['coder', 'reviewer']" in record.reason
     assert {"coder", "reviewer"} <= {trace.agent for trace in controller.generations}
+
+
+def test_g1_amend_pending_counts_the_turns_it_replaces():
+    amend = AmendPending(steps=(("pm",),), schedule_revision=0)
+    assert amend.affected(None) == ("pm",)  # no schedule given: only the new steps
+    assert amend.affected(None, (("coder",), ("reviewer", "pm"))) == ("coder", "pm", "reviewer")
+    assert AuditScope(agents={"pm"}).problem(amend, None, (("coder",),)) is not None
+    assert AuditScope(agents={"pm", "coder"}).problem(amend, None, (("coder",),)) is None
+
+
+def test_g1_amend_pending_within_scope_still_applies(tmp_path):
+    scope = AuditScope(ops={"amend_pending"}, agents=None)
+    _, [controller] = run_branches(tmp_path, DropOthersTurns, scope=scope)
+    [record] = controller.ledger.applied()
+    assert record.op == "amend_pending"
+    assert set(record.agents) >= {"pm", "coder", "reviewer"}
 
 
 @pytest.mark.parametrize("name,fields", [

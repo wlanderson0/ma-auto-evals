@@ -312,8 +312,8 @@ theorem frame_own' {ctx : Ctx} {op : Op} {w w' : World} {a x : Agent}
   · exact absurd hck (checkProblem_empty_agent (hxe ▸ hx))
   · exact frame_own hagents haff hfam hxe hck ht ha
 
-theorem frameUpToGaps : FrameUpToGaps := by
-  intro ctx ok op w w' a hwf hck hcarve h ha hl
+theorem frame : Frame := by
+  intro ctx ok op w w' a hwf hck hcarve h ha
   cases op with
   | replaceGeneration x content calls =>
     simp only [applyRaw] at h
@@ -364,8 +364,9 @@ theorem frameUpToGaps : FrameUpToGaps := by
     · cases h
     simp only [Except.ok.injEq] at h
     subst h
-    have hnew : a ∉ steps.flatten := by simpa [Op.affected, Op.agents] using ha
-    have hold : a ∉ sch.pending.flatten := by simpa [gapLeak, hsch] using hl
+    simp only [Op.affected, Op.agents, hsch, List.mem_append, not_or] at ha
+    have hnew : a ∉ steps.flatten := ha.1
+    have hold : a ∉ sch.pending.flatten := ha.2
     have hturns : World.turns { w with schedule := some ⟨sch.revision + 1, steps⟩ } a
         = w.turns a := by
       simp only [World.turns, hsch, positions_nil hnew, positions_nil hold]

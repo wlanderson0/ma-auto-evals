@@ -18,9 +18,7 @@ Decisions encoded here (`lean/scope-map.md`):
   rollback's own effect, and whether the fork reproduces the parent's world, are not
   modelled (the model's branches restart from `w0` with arbitrary `Env` steps).
 * D2 (a), D3 — fixed by the definition of `view` (View.lean).
-* G1 — the model mirrors the current Python, where `Frame` is false
-  (`Proofs/Main.lean`: `bug_G1_amend_pending`). `FrameUpToGaps` bounds what the gap can
-  reach (`gapLeak`) instead of excluding the op.
+* G1 — fixed: `amend_pending` counts every agent in the pending steps it replaces.
 * G2 — fixed: an op cannot name no agent, and must name the boundary's agent
   (`G2Fixed`).
 
@@ -40,15 +38,6 @@ def Op.interventions : Op → List Op
 def carvedOut : Op → Bool
   | .halt | .rollback .. => true
   | _ => false
-
-/-- Agents the known gap G1 can reach outside `affected`: `amend_pending` replaces every
-pending step, so it can reach every agent in them. Empty for every other op. -/
-def gapLeak (_ctx : Ctx) (w : World) : Op → List Agent
-  | .amendPending .. =>
-    match w.schedule with
-    | none => []
-    | some s => s.pending.flatten
-  | _ => []
 
 /-- Message ids are unique, as in Orbit (A1) and the Python's `{m.id: m}` world. -/
 def World.WF (w : World) : Prop :=
@@ -81,20 +70,12 @@ def ScopeSound : Prop :=
     s.allowsOp op.name = true ∧ (∀ a ∈ op.affected w, s.allowsAgent a = true) ∧
     (∀ iv ∈ op.interventions, s.problem w iv = none)
 
-/-- Property 2, as intended: an op that passes the controller's other checks and applies
-leaves the view of every agent outside `affected` unchanged. False while G1 is open. -/
+/-- Property 2: an op that passes the controller's other checks and applies leaves the view
+of every agent outside `affected` unchanged. -/
 def Frame : Prop :=
   ∀ (ctx : Ctx) (ok : Bool) (op : Op) (w w' : World) (a : Agent),
     w.WF → checkProblem none ctx op w = none → carvedOut op = false →
     applyRaw ctx ok op w = .ok w' → a ∉ op.affected w → view w' a = view w a
-
-/-- Property 2 for the Python as it is: the same, for agents outside `affected` and outside
-what the known gap can reach. -/
-def FrameUpToGaps : Prop :=
-  ∀ (ctx : Ctx) (ok : Bool) (op : Op) (w w' : World) (a : Agent),
-    w.WF → checkProblem none ctx op w = none → carvedOut op = false →
-    applyRaw ctx ok op w = .ok w' → a ∉ op.affected w → a ∉ gapLeak ctx w op →
-    view w' a = view w a
 
 /-- G2 is fixed: the controller refuses an op that names no agent, and one that names an
 agent other than the boundary's, before it can act. -/
@@ -151,16 +132,15 @@ def Confined : Prop :=
 
 /-- The headline. In any audit under scope `s`, every applied op was checked against `s` in
 the world it changed; and, unless it is `halt` or `rollback`, it left every agent outside
-`s`'s agent limit, and outside what the known gap G1 reaches, seeing exactly what it saw
-before: the same own generations, context and tool results, the same deliveries through
-the overlay, the same pending turns, the same halt flag, and the same words attributed to
-it. Effects that travel through later steps are not covered (see the header). -/
+`s`'s agent limit seeing exactly what it saw before: the same own generations, context and
+tool results, the same deliveries through the overlay, the same pending turns, the same
+halt flag, and the same words attributed to it. Effects that travel through later steps are
+not covered (see the header). -/
 def ScopeRespected : Prop :=
   ∀ (s : AuditScope) (env : Env) (policy : Policy) (w0 : World) (maxBranches fuel : Nat),
     ∀ e ∈ runAudit (some s) env policy w0 maxBranches fuel,
       e.scope = some s ∧ s.problem e.pre e.op = none ∧
       (e.pre.WF → carvedOut e.op = false →
-        ∀ a, s.allowsAgent a = false → a ∉ gapLeak e.ctx e.pre e.op →
-          view e.post a = view e.pre a)
+        ∀ a, s.allowsAgent a = false → view e.post a = view e.pre a)
 
 end Scope

@@ -11,6 +11,7 @@ out-of-scope attempt is always reported as such.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -49,23 +50,26 @@ class AuditScope(BaseModel):
     def allows_op(self, name: str) -> bool:
         return self.ops is None or name in self.ops
 
-    def problem(self, op: ControlOp, world: CommunicationWorld | None = None) -> str | None:
+    def problem(self, op: ControlOp, world: CommunicationWorld | None = None,
+                pending: Sequence[Sequence[str]] | None = None) -> str | None:
         """Why ``op`` is outside this scope, or ``None``.
 
         ``world`` resolves a message op that leaves its recipients implicit
-        (``recipients=None``) to every recipient it would reach.
+        (``recipients=None``) to every recipient it would reach. ``pending`` (the
+        schedule's pending steps) makes ``amend_pending`` affect every agent whose turns it
+        replaces; without it, only the agents in its new steps are counted.
         """
         if not self.allows_op(op.name):
             return (f"{op.name} is outside this audit's scope "
                     f"(allowed operations: {sorted(self.ops or ())})")
         if self.agents is not None:
-            outside = sorted(set(op.affected(world)) - self.agents)
+            outside = sorted(set(op.affected(world, pending)) - self.agents)
             if outside:
                 return (f"{op.name} affects {outside}, outside this audit's scope "
                         f"(allowed agents: {sorted(self.agents)})")
         if isinstance(op, Rollback):
             for intervention in op.interventions:
-                problem = self.problem(intervention, world)
+                problem = self.problem(intervention, world, pending)
                 if problem:
                     return f"rollback intervention: {problem}"
         return None

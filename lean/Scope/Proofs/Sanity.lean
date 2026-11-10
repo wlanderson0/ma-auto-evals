@@ -7,7 +7,7 @@ namespace Scope.Witness
 theorem runWitness : RunWitness := by unfold RunWitness; decide
 
 theorem frameWitness : FrameWitness :=
-  ⟨w0_wf, by decide, rfl, by decide, by decide, _, rfl, by decide⟩
+  ⟨w0_wf, by decide, rfl, by decide, _, rfl, by decide⟩
 
 theorem seatWitness : SeatWitness := ⟨by decide, _, rfl, by decide⟩
 
@@ -29,6 +29,8 @@ theorem agentsMutantWitness : AgentsMutantWitness := by
   exact absurd this (by decide)
 
 theorem representationWitness : RepresentationWitness := by unfold RepresentationWitness; decide
+
+theorem g1Witness : G1Witness := by unfold G1Witness; decide
 
 theorem haltWitness : HaltWitness := by unfold HaltWitness; decide
 

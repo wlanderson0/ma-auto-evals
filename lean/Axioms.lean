@@ -6,14 +6,13 @@ depends only on the standard axioms. -/
 open Scope
 
 example : ScopeSound := scopeSound
-example : FrameUpToGaps := frameUpToGaps
+example : Frame := frame
 example : Enforced := enforced
 example : Monotone := monotone
 example : Meet := meet
 example : OnlyApplied := onlyApplied
 example : Confined := confined
 example : ScopeRespected := scopeRespected
-example : ¬ Frame := bug_G1_amend_pending
 example : G2Fixed := g2Fixed
 example : Witness.RunWitness := Witness.runWitness
 example : Witness.FrameWitness := Witness.frameWitness
@@ -24,17 +23,17 @@ example : Witness.OnlyAppliedWitness := Witness.onlyAppliedWitness
 example : Witness.ReplayMutantWitness := Witness.replayMutantWitness
 example : Witness.AgentsMutantWitness := Witness.agentsMutantWitness
 example : Witness.RepresentationWitness := Witness.representationWitness
+example : Witness.G1Witness := Witness.g1Witness
 example : Witness.HaltWitness := Witness.haltWitness
 
 #print axioms scopeSound
-#print axioms frameUpToGaps
+#print axioms frame
 #print axioms enforced
 #print axioms monotone
 #print axioms meet
 #print axioms onlyApplied
 #print axioms confined
 #print axioms scopeRespected
-#print axioms bug_G1_amend_pending
 #print axioms g2Fixed
 #print axioms Witness.runWitness
 #print axioms Witness.frameWitness
@@ -45,4 +44,5 @@ example : Witness.HaltWitness := Witness.haltWitness
 #print axioms Witness.replayMutantWitness
 #print axioms Witness.agentsMutantWitness
 #print axioms Witness.representationWitness
+#print axioms Witness.g1Witness
 #print axioms Witness.haltWitness

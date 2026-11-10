@@ -1,12 +1,12 @@
 # Assurance statement: audit scope
 
-**Pinned to:** branch `sarah/scope-g2-fix`: the Python of `src/orbit_audit/` with the G2 fix, and the specification and proofs updated with it, in the same commit; Lean `v4.35.0`, core and `Std` only; Orbit fork `Danhelo/orbit@dc4ea5e`. Specification: `lean/Scope/Spec/*.lean`, listed in `lean/Scope/Spec/SHA256SUMS` (sha256 `5902c390853d28f880424001d34361ead908ad19ee5ad5068953f6bcb6753fed`). Gate: `lean/check.sh` and the files it runs, listed in `lean/GATE.SHA256SUMS` (sha256 `853d462059725e87c4108496bd64b8374221d03bdaa7f23036b931d2f0fda323`).
+**Pinned to:** branch `sarah/scope-gap-fixes`: the Python of `src/orbit_audit/` with the G1 and G2 fixes, and the specification and proofs updated with them; Lean `v4.35.0`, core and `Std` only; Orbit fork `Danhelo/orbit@dc4ea5e`. Specification: `lean/Scope/Spec/*.lean`, listed in `lean/Scope/Spec/SHA256SUMS` (sha256 `b9b8bb1525eba96d001f7e4d4d245306eb76156dff4968b9b7a99d7dd47ae8e3`). Gate: `lean/check.sh` and the files it runs, listed in `lean/GATE.SHA256SUMS` (sha256 `bda6595d2578afd9777baf7e96115a51611cd02764db1d83b5a4e22b675f089a`).
 
 **Status:** the theorem statements have had three adversarial reviews by AI agents. They have **not yet had the human review** the plan requires before the claim is relied on.
 
 ## The claim
 
-> `Scope.scopeRespected`: in every run of the model of an audit under an `AuditScope s`, every op the controller applies was checked against `s` in the world it changed. And every applied op other than `halt` and `rollback` leaves each agent outside `s`'s agent limit, and outside what the open gap G1 can reach, seeing exactly what it saw before. This is proved about the Lean model. That the model agrees with the Python is tested, not proved.
+> `Scope.scopeRespected`: in every run of the model of an audit under an `AuditScope s`, every op the controller applies was checked against `s` in the world it changed. And every applied op other than `halt` and `rollback` leaves each agent outside `s`'s agent limit seeing exactly what it saw before. This is proved about the Lean model. That the model agrees with the Python is tested, not proved.
 
 "Seeing" means the specification `view` (`View.lean`):
 - the agent's own generations, staged context and tool results;
@@ -17,7 +17,7 @@
 
 ## Limits of the claim, up front
 
-- **The open gap G1.** For `amend_pending` the claim says only that the damage is bounded: it reaches at most the agents in the pending steps it replaces. The intended frame (`Frame`) is false while G1 is open (`bug_G1_amend_pending`). G2 is fixed (`G2Fixed`).
+- **G1 and G2 are fixed**, so the frame (`Frame`) holds with no gap allowance.
 - **`halt` and `rollback`** are exempt by name. `rollback`'s own effect, and whether a fork reproduces its parent's world, are not modelled.
 - **Only the immediate effect of each op.** The frame covers what an op changes at once. Words an op causes to be posted later are not covered: a seat's generation that posts to a channel, or a forged `channel_read` result.
 - **Unique message ids.** The frame assumes them (`World.WF`). The model does not derive this for the worlds a run reaches, because the steps between boundaries are arbitrary.
@@ -28,8 +28,8 @@
 | # | English | Lean statement | Proof | Python | Tied to the Python by | Witness |
 |---|---|---|---|---|---|---|
 | 1 | A clean scope check means the op name and every affected agent are allowed, and so is each rollback intervention | `ScopeSound` | `scopeSound` | `scope.py:52-71` | `test_problem_and_affected`, saved examples | `AgentsMutantWitness` |
-| 2 | An op that passes the controller's other checks and applies leaves every agent outside `affected` and `gapLeak` unchanged | `FrameUpToGaps` | `frameUpToGaps` | `ops.py`, `controller.py:198-298`, `delivery.py:37-58` | `test_message_op_effects`, `test_turn_op_effects`, `test_frame_on_python_affected` | `FrameWitness`, `SeatWitness`, `HaltWitness` |
-| 2′ | Without the G1 allowance, 2 is false | `¬ Frame` | `bug_G1_amend_pending` | G1 | `tests/contract/test_scope_gaps.py` (strict expected failure on a mock run) | — |
+| 2 | An op that passes the controller's other checks and applies leaves every agent outside `affected` unchanged | `Frame` | `frame` | `ops.py`, `controller.py:198-298`, `delivery.py:37-58` | `test_message_op_effects`, `test_turn_op_effects`, `test_frame_on_python_affected` | `FrameWitness`, `SeatWitness`, `HaltWitness` |
+| 2′ | G1 fixed: `amend_pending` counts every agent whose pending turns it replaces | (part of `Frame`) | `frame` | `ops.py:419-423`, `controller.py` `_pending` | `test_g1_*` in `tests/contract/test_scope_gaps.py`; differential tests with the schedule passed | `G1Witness` |
 | 2″ | G2 fixed: an op naming no agent is refused, and one accepted at an agent's boundary names exactly that agent | `G2Fixed` | `g2Fixed` | `ops.py:95-96, 189-190, 221-222`, `controller.py:536-541` | `test_g2_*` in `tests/contract/test_scope_gaps.py` and `tests/lean/test_differential.py` | — |
 | 3 | Every op an audit applies, live, replayed or at a fork, passed the scope check in the world it changed | `Enforced` | `enforced` | `controller.py:412-541`, `runner.py:99-147` | live batches: `test_controller_problem`, `test_decide`; replay and fork paths (`controller.py:419-429`): source reference only; AST inventory (T1) | `RunWitness`, `ReplayMutantWitness` |
 | 4a | Widening a scope never rejects more | `Monotone` | `monotone` | `scope.py:49-71` | — | `MonotoneWitness` |
@@ -54,7 +54,7 @@
 | Statement | Specification definitions it rests on | Axioms | Statement reviewer |
 |---|---|---|---|
 | `ScopeSound` | `AuditScope.problem`, `Op.affected`, `Op.interventions` | propext, Classical.choice, Quot.sound | AI only |
-| `FrameUpToGaps` | `applyRaw`, `checkProblem`, `view`, `gapLeak`, `carvedOut`, `World.WF` | same | AI only |
+| `Frame` | `applyRaw`, `checkProblem`, `view`, `carvedOut`, `World.WF` | same | AI only |
 | `Enforced` | `runAudit`, `decide`, `rollbackProblem`, `AuditScope.problem` | same | AI only |
 | `Monotone`, `Meet` | `AuditScope.Le`, `AuditScope.meet`, `AuditScope.problem` | same | AI only |
 | `OnlyApplied` | `decide`, `Chain` | same | AI only |
@@ -71,16 +71,17 @@
   - a check that every registered op has a Lean counterpart.
 
   The tests take about 45 seconds locally.
-- **Mutation adequacy.** 7 mutants of the Python are each caught:
+- **Mutation adequacy.** 8 mutants of the Python are each caught:
   - the scope check ignoring agents;
   - `affected` ignoring implicit recipients;
   - no targeted check;
   - delivery ignoring per-recipient drops;
   - no sole-producer rule;
   - rollback skipping the scope check;
+  - `amend_pending` counting only its new steps (G1);
   - `[]` read as `None`.
 
-  The plan's G1, D1 and replay-skips-the-check mutants are not among them (G1 is a strict expected failure in `tests/contract/test_scope_gaps.py`; the replay mutant is a Lean witness). An earlier review ran 20 mutants by hand. Two survived 300 examples but were killed at 3000: an injection ignoring routes, and one ignoring readers. One was never killed: delivery not recording `delivered`.
+  The plan's D1 and replay-skips-the-check mutants are not among them (the replay mutant is a Lean witness). An earlier review ran 20 mutants by hand. Two survived 300 examples but were killed at 3000: an injection ignoring routes, and one ignoring readers. One was never killed: delivery not recording `delivered`.
 - **Inventory.** `tests/structural/test_scope_inventory.py` lists all 24 sites that apply an op or write delivery, schedule, scope or message state (T1).
 - **CI.** `.github/workflows/lean.yml` is meant to run the gate and these tests on changes to the Python, the experiments, the Lean files or the lockfile, with a longer run nightly, and to treat missing Lean as an error. It has not run on GitHub yet.
 
@@ -112,16 +113,15 @@
 ## Findings
 
 See `lean/scope-map.md`, "Findings (step 6)":
-- **G1** (latent, reproduced): `amend_pending` under-reports `affected`.
-- **G2** (fixed on `sarah/scope-g2-fix`): an empty `agent` bypassed the agent limit.
+- **G1** (fixed on `sarah/scope-gap-fixes`): `amend_pending` under-reported `affected`.
+- **G2** (fixed on `sarah/scope-gap-fixes`): an empty `agent` bypassed the agent limit.
 - **G3** (latent): an uncaught schedule error.
 
-G1 and G3 each have a suggested fix, for a separate PR.
+G3 has a suggested fix.
 
 ## Open decisions
 
 - **D1.** Keep `halt` exempt, or count it as affecting every agent and carve it out of the seat brief.
 - **D2.** What a delivery is. Option (a), only overlay changes, is the current choice and matches the seat test. Option (b), anything another agent reads, would make the tool-result forgery a finding.
 - **D3.** Turns are in the view. Keep that.
-- **Fixing G1.** Fixing it in the Python changes the model: `bug_G1_amend_pending` then becomes a `G1Fixed` statement, `gapLeak` becomes empty and `Frame` itself can be proved.
 - **Nested scopes.** If an L2 helper and an inner L1 ever share a controller, scopes must become per-policy, and property 5 needs a real statement.

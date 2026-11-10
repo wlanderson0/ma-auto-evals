@@ -90,6 +90,9 @@ Approver = Callable[[BoundaryView, ControlOp], Awaitable[str | None]]
 _VETTED = (GenerationOp, ActivationOp, ToolOp, RewriteMessage, InjectMessage)
 """Operations that put auditor-written content in front of agents."""
 
+_CURRENT = object()
+"""``_record``'s default: the schedule's pending steps as they are now."""
+
 _SOLE = {
     Boundary.GENERATION: "at most one operation may produce a generation",
     Boundary.TOOL_CALL: "at most one operation may decide a tool call",
@@ -286,13 +289,14 @@ class AuditController(RuntimeController):
             if schedule else (),
         )
         for op in await self._decide(view, TurnOp):
+            pending = self._pending()  # what an amendment replaces, recorded as affected
             try:
                 original = op.apply(self.runtime, actor=self.actor)
             except (OpError, ValueError) as error:
                 # Orbit validates schedule amendments before mutating them.
                 self._reject(view, op, str(error))
                 continue
-            self._apply_record(view, op, original=original)
+            self._apply_record(view, op, pending=pending, original=original)
 
     def deliver(self, request: DeliveryRequest):
         return self.overlay.deliver(request)
@@ -478,7 +482,7 @@ class AuditController(RuntimeController):
 
     def _rollback_problem(self, view: BoundaryView, op: Rollback) -> str | None:
         world = CommunicationWorld.current()
-        if self.scope is not None and (problem := self.scope.problem(op, world)):
+        if self.scope is not None and (problem := self.scope.problem(op, world, self._pending())):
             return problem
         if op.expected_revision is not None and op.expected_revision != view.revision:
             return f"stale: prepared for revision {op.expected_revision}, now {view.revision}"
@@ -523,7 +527,7 @@ class AuditController(RuntimeController):
 
     def _problem(self, view: BoundaryView, op: ControlOp, family: type[ControlOp]) -> str | None:
         world = CommunicationWorld.current()
-        if self.scope is not None and (problem := self.scope.problem(op, world)):
+        if self.scope is not None and (problem := self.scope.problem(op, world, self._pending())):
             return problem
         if view.boundary not in op.boundaries or not isinstance(op, family | MessageOp):
             return f"{op.name} is not allowed at boundary {view.boundary.value}"
@@ -557,6 +561,12 @@ class AuditController(RuntimeController):
                 return {id(op): reason}
         return {}
 
+    def _pending(self) -> tuple[tuple[str, ...], ...] | None:
+        """The schedule's pending steps, which an ``amend_pending`` replaces; ``None``
+        without an explicit activation plan."""
+        schedule = getattr(self.runtime, "schedule", None) if self.runtime else None
+        return None if schedule is None else tuple(tuple(s.agents) for s in schedule.pending_steps)
+
     def _reject(self, view: BoundaryView, op: ControlOp, reason: str) -> None:
         self._record(view, op, outcome="rejected", reason=reason)
 
@@ -569,10 +579,14 @@ class AuditController(RuntimeController):
             self.budget.interventions += 1
         self._record(view, op, outcome="applied", reason=op.reason, **fields)
 
-    def _record(self, view: BoundaryView, op: ControlOp, **fields: Any) -> None:
+    def _record(self, view: BoundaryView, op: ControlOp, *,
+                pending: tuple[tuple[str, ...], ...] | None | object = _CURRENT,
+                **fields: Any) -> None:
+        if pending is _CURRENT:
+            pending = self._pending()
         record = self.ledger.record(
             op=op.name, op_version=op.version, boundary=view.boundary, actor=self.actor,
-            agents=op.affected(CommunicationWorld.current()), turn=view.turn,
+            agents=op.affected(CommunicationWorld.current(), pending), turn=view.turn,
             revision=view.revision, branch=self.branch,
             replayed=self.replaying(view),
             payload={"op": op.name, **op.payload()}, **fields,

@@ -15,8 +15,8 @@ per agent:
 * `halted` is shared by every agent: halting ends everyone's remaining turns (D1).
 * `rewrittenAs`, `injectedAs`: words the overlay attributes to `a` that `a` never wrote:
   the current rewrite under each key on one of `a`'s messages, and injections sent as `a`. This is the "sender by attribution" of
-  ops.py:314-318, 354-355. Withholding `a`'s message is not in it: it puts no words in
-  `a`'s mouth, and `drop_message` does not count the sender (ops.py:328-336).
+  ops.py:317-321, 357-358. Withholding `a`'s message is not in it: it puts no words in
+  `a`'s mouth, and `drop_message` does not count the sender (ops.py:331-339).
 
 Lists are compared as lists. Python's delivery sorts by message sequence
 (`execution/control.py:488`), which the model does not hold; the differential tests
