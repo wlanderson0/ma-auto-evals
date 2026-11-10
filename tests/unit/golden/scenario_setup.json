@@ -260,6 +260,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4.1-nano",
@@ -277,6 +278,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4o-mini",
@@ -294,6 +296,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
@@ -311,6 +314,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/meta-llama/llama-3.3-70b-instruct",
@@ -590,6 +594,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4.1-nano",
@@ -607,6 +612,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4o-mini",
@@ -624,6 +630,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
@@ -641,6 +648,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/meta-llama/llama-3.3-70b-instruct",
@@ -939,6 +947,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4.1-nano",
@@ -954,6 +963,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4o-mini",
@@ -969,6 +979,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
@@ -984,6 +995,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/meta-llama/llama-3.3-70b-instruct",
@@ -1229,6 +1241,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4.1-nano",
@@ -1244,6 +1257,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4o-mini",
@@ -1259,6 +1273,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
@@ -1274,6 +1289,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/meta-llama/llama-3.3-70b-instruct",
@@ -1460,6 +1476,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4.1-nano",
@@ -1475,6 +1492,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4o-mini",
@@ -1492,6 +1510,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/meta-llama/llama-3.3-70b-instruct",
@@ -1792,6 +1811,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4.1-nano",
@@ -1810,6 +1830,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/openai/gpt-4o-mini",
@@ -1828,6 +1849,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/mistralai/mistral-small-3.2-24b-instruct",
@@ -1846,6 +1868,7 @@
     {
      "framework": "inspect",
      "framework_config": {},
+     "generate_config": null,
      "is_compromised": false,
      "max_messages": 50,
      "model": "openrouter/meta-llama/llama-3.3-70b-instruct",

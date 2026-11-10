@@ -32,8 +32,10 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
 uv sync
 ```
 
-Orbit comes from the pinned fork [`Danhelo/orbit`](https://github.com/Danhelo/orbit)
-(`[tool.uv.sources]` in `pyproject.toml`). To change Orbit at the same time,
+Orbit comes from a pinned fork (`[tool.uv.sources]` in `pyproject.toml`): currently
+[`jrhender/orbit`](https://github.com/jrhender/orbit) branch `l2/agent-generate-config`,
+which is [`Danhelo/orbit`](https://github.com/Danhelo/orbit)'s pin plus a per-agent
+`generate_config`. To change Orbit at the same time,
 follow "Working on Orbit and orbit_audit together" in the README: clone the
 fork to `../orbit`, `uv pip install -e ../orbit`, and use `uv run --no-sync` so
 the editable install is kept. To move the pin, push the Orbit change to the

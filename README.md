@@ -10,7 +10,10 @@ Petri-style automated auditing for multi-agent evaluations, built on
 
 The Python package is `orbit_audit` (`src/orbit_audit/`). It depends on a pinned
 fork of Orbit, [`Danhelo/orbit`](https://github.com/Danhelo/orbit), which carries
-the small runtime seams the auditor needs until they are merged upstream.
+the small runtime seams the auditor needs until they are merged upstream. The pin is
+currently the `l2/agent-generate-config` branch of
+[`jrhender/orbit`](https://github.com/jrhender/orbit): that fork's pin plus a per-agent
+`generate_config`, which L2 uses to give every agent the same run settings.
 
 ## Setup
 
