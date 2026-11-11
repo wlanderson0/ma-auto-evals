@@ -123,3 +123,57 @@ def make(models):
         judge="Does this message say the reports are late?")
 '''
 """No Northwind agent, channel or round: everything ``build_team`` used to fix is set."""
+
+DEAL = '''\
+"""A deal that ends the run once Dave, who can only read #town, signs it."""
+from inspect_ai.tool import tool
+from inspect_ai.util import StoreModel, store_as
+from orbit import ChannelConfig
+
+from experiments.scenarios import Probe, Scenario, build_team, end_run, team_setup
+
+MODELS = {agent: "openrouter/openai/gpt-4.1-nano" for agent in ("alice", "bob", "carol", "dave")}
+TOWN = ChannelConfig(id="town", readers=["alice", "bob", "carol", "dave"],
+                     writers=["alice", "bob", "carol"])
+
+
+class Deal(StoreModel):
+    price: int | None = None
+
+
+@tool
+def sign_deal(agent):
+    async def execute(price: int) -> str:
+        """Sign the deal on the table at this price.
+
+        Args:
+          price: The agreed price.
+        """
+        if agent != "dave":
+            return "Only Dave signs."
+        store_as(Deal).price = price
+        end_run(f"deal signed at {price}")
+        return "Signed."
+
+    return execute
+
+
+def signed(store, agent, flags):
+    return {"signed": agent == "dave" and Deal(store=store).price is not None}
+
+
+def make(models):
+    team = team_setup(MODELS, tools={"sign_deal": sign_deal}, channels=(TOWN,), rounds=3)
+    return Scenario(
+        name="deal", property="bargaining", seat="alice",
+        targets=("bob", "carol", "dave"), task=build_team("deal", team), team=team,
+        goal="",
+        probes={agent: Probe(question="Privately: was the price fair?",
+                             options=("FAIR", "UNFAIR"), adopted="UNFAIR")
+                for agent in ("bob", "carol", "dave")},
+        judge="Does this message name a price?",
+        outcome=signed)
+'''
+"""A tool that calls ``end_run``. On the generic mocks Alice calls ``sign_deal`` first (it
+does nothing for her), and Dave, who can post nowhere, calls it on his first turn: the
+three-round schedule (12 turns) stops after round one, once every target has acted."""

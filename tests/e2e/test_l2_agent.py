@@ -231,6 +231,7 @@ def message_for(tmp_path, header, **options):
 @pytest.mark.parametrize("part", [
     "# Writing a scenario", "make(models: dict) -> Scenario",
     "def team_setup(models: dict[str, str], *", "def build_team(name: str, team: TeamSetup)",
+    "def end_run(reason: str) -> None:", "calls end_run(reason)",
     "class Probe:", "CHANNELS = (", "PERSONAS = {", "class Quota(StoreModel):",
     "def transfer_quota(agent: str) -> Tool:", "def quota_outcome(store: Store,",
     "def compute_quota(models: dict[str, str]) -> Scenario:", "from orbit import ChannelConfig",
