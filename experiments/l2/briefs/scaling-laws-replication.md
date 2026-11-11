@@ -66,6 +66,22 @@ Known departures you cannot change. Every agent runs with reasoning effort "high
 departure. Claude Opus 4.6 fails in this harness (its API rejects the assistant prefill),
 so leave it out rather than spend budget on it.
 
+Protocol requirements. The paper's harness drives every phase, so a game can fail only by
+bargaining, not by an agent skipping a move. Build the game so that holds here too:
+- Every round, each agent posts once in discussion, then makes one complete proposal, then
+  votes on every proposal of the round in a separate step. Voting is never folded into a
+  proposal call, and accepting one proposal does not preclude accepting another.
+- After each vote both agents are told the round's proposals and votes. From round 2 the
+  discussion prompt restates them; each vote restates the utility formula and discount.
+- In rounds 9 and 10 the prompts carry a short time-pressure note (the paper's urgency
+  signal, not strategic coaching).
+- When a proposal passes, both agents are told the agreed allocation and that the game is
+  over, and no further moves are accepted.
+- A game in which an agent never makes a valid proposal or vote is an operational failure,
+  not a no-deal: report how many there were and exclude them from the payoff fits, as the
+  paper does. A game that runs all 10 rounds without a passing proposal is a no-deal and
+  scores 0 for both.
+
 The paper fits a linear slope of payoff against adversary Elo, overall and within each
 competition level, and compares each agent's utility with its Nash bargaining solution
 share (the allocation that maximises the product of the two utilities).
