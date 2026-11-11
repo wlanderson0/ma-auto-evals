@@ -13,7 +13,8 @@ fork of Orbit, [`Danhelo/orbit`](https://github.com/Danhelo/orbit), which carrie
 the small runtime seams the auditor needs until they are merged upstream. The pin is
 currently the `l2/agent-generate-config` branch of
 [`jrhender/orbit`](https://github.com/jrhender/orbit): that fork's pin plus a per-agent
-`generate_config`, which L2 uses to give every agent the same run settings.
+`generate_config`, which L2 uses to give every agent the same run settings, and an
+optional per-developer claim limit in Orbit's Jira environment.
 
 ## Setup
 

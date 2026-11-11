@@ -184,3 +184,11 @@ def test_team_setup_copies_its_inputs():
     team = team_setup({}, personas=personas)
     personas["alice"] = "changed"
     assert team.personas["alice"] == "A"
+
+
+def test_a_time_limit_sets_orbits_cap_and_inspects_limit():
+    """A slow game can raise both caps; left out, the defaults (600 s and 900 s) stay."""
+    default = build_team("t", team_setup({}))
+    assert default["scheduler"].max_time_seconds == 600 and default["time_limit"] == 900
+    raised = build_team("t", team_setup({}, time_limit=2400))
+    assert raised["scheduler"].max_time_seconds == 2400 and raised["time_limit"] == 2400
