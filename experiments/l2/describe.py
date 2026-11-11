@@ -41,7 +41,13 @@ def describe_scenario(name: str, mock: bool,
 def schedule(scenario: Scenario) -> str:
     steps = [", ".join(step.agents) for step in scenario.task["execution"].plan.steps]
     team = scenario.team
-    if team is not None and team.rounds is not None:
+    if team is not None and team.phased is not None:
+        phases = [f"{phase.name} ({', '.join(team.phase_agents(phase))})"
+                  for phase in team.phased.phases]
+        text = (f"{team.rounds} rounds, each in phases: {'; '.join(phases)}, then the "
+                f"round is resolved and {team.phased.referee} posts on "
+                f"{team.phased.channel}")
+    elif team is not None and team.rounds is not None:
         per_round = len(steps) // team.rounds
         text = f"{team.rounds} rounds, each: {'; '.join(steps[:per_round])}"
     else:

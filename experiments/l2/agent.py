@@ -333,12 +333,23 @@ def writing_a_scenario() -> str:
         "end_run(reason), e.g. when a deal passes: the turn that called it finishes, no "
         "later turn starts, and the scorers run as usual. The reason is kept in the "
         "results (ended_early). A target that never acted before the end has no context "
-        "to probe, so its probe answer is unknown.", "",
+        "to probe, so its probe answer is unknown.",
+        "- A game played in rounds of phases (talk, then propose, then vote) uses "
+        "team_setup(phased=phased_rounds(...)): each phase is a step of the schedule, a "
+        "phase's tool calls in_phase(\"vote\") to get the round and refuse a move made in "
+        "another phase (never count turns to work out the phase), and resolve(round) runs "
+        "once the round's last phase is over, even if a move is missing, and may end the "
+        "run. The referee, an agent with no turns, posts each round's result and each "
+        "phase's announcement. An agent sees a channel post only in its next generation, "
+        "so a phase's announcement carries what that phase needs (e.g. the proposals to "
+        "vote on).", "",
         "The helpers (from experiments.scenarios; from orbit import ChannelConfig for "
         "channels, ChannelConfig(id=..., readers=[...], writers=[...]); a tool like the "
         "example's needs from inspect_ai.tool import Tool, ToolError, tool, from "
         "inspect_ai.util import Store, StoreModel, store_as and from typing import Any):", "",
         "```python", scenario_source([*DEFAULTS, "team_setup", "build_team", "end_run",
+                                      "Phase", "RoundResult", "PhasedRounds",
+                                      "phased_rounds", "current_phase", "in_phase",
                                       "Probe", "Outcome"],
                                      headers=("team_setup", "build_team")), "```", "",
         "The Scenario fields to set (the others, such as scope and tool_replay, are for an "

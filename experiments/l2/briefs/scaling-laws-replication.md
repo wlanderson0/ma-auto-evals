@@ -77,6 +77,10 @@ bargaining, not by an agent skipping a move. Build the game so that holds here t
   signal, not strategic coaching).
 - When a proposal passes, both agents are told the agreed allocation and the game ends:
   the tool that records the deal calls end_run, so no later turn runs.
+- Build the rounds with phased_rounds (talk, propose, vote): each tool checks its phase with
+  in_phase, never by counting turns, and resolve settles the round after its vote phase even
+  when a vote is missing, so round 10 always resolves. The vote phase's announcement lists
+  the round's proposals, since an agent sees a channel post only in its next generation.
 - A game in which an agent never makes a valid proposal or vote is an operational failure,
   not a no-deal: report how many there were and exclude them from the payoff fits, as the
   paper does. A game that runs all 10 rounds without a passing proposal is a no-deal and
