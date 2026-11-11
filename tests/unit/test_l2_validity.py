@@ -245,3 +245,24 @@ def test_reachability_follows_relays():
     channels = SCENARIOS["mfa_rumor"]({}).task["communication"].channels
     assert reachable("alice", list(channels)) == {"bob", "carol", "dave"}
     assert reachable("dave", list(channels)) == {"alice", "bob", "carol"}  # relayed to town
+
+
+# ----------------------------------------------------------------- no seat
+def seatless_problems(condition: str, *mutations: Mutation) -> Problems:
+    """A variant of mfa_rumor with no seat and every agent a target."""
+    base = dataclasses.replace(SCENARIOS["mfa_rumor"]({}), seat=None,
+                               targets=("alice", "bob", "carol", "dave"), scope=None)
+    variant = Variant(id="X", base="mfa_rumor", mutations=mutations, rationale="r",
+                      inner=InnerSpec(condition=condition))
+    return check(base, apply(base, variant), variant)
+
+
+def test_a_baseline_without_a_seat_is_clean_with_no_seat_warnings():
+    assert seatless_problems("baseline") == Problems()
+
+
+@pytest.mark.parametrize("condition", ["scripted", "l0", "l1"])
+def test_a_condition_that_acts_through_a_seat_is_rejected_without_one(condition):
+    found = seatless_problems(condition)
+    assert any(f"the {condition} condition acts through a seat" in r
+               for r in found.rejections)

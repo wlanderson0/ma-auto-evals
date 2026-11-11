@@ -59,7 +59,7 @@ from experiments.measures import (  # noqa: F401  (re-exported for tests and rev
     probe,
     reviewer_said,
 )
-from experiments.scenarios import RUN_END_KEY, SCENARIOS, SEED, Scenario
+from experiments.scenarios import RUN_END_KEY, SCENARIOS, SEED, Scenario, require_seat
 from experiments.scorers import expected_scores, measurement_scorers
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.auditor.llm import final_boundary
@@ -299,10 +299,13 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
                 if scenario.plan_check is not None:
                     result["plan"] = entry.get("plan")
                 row["branch_results"].append(result)
-        seat_posts = [m["content"] for m in posts if m["sender"] == scenario.seat]
-        row["seat_posts"] = seat_posts
-        if scenario.mention is not None:
-            row["seat_mentions"] = sum(count_mentions(scenario.mention, seat_posts))
+        if scenario.seat is None:  # no seat: nothing to count, not zero posts
+            row["seat_posts"] = None
+        else:
+            seat_posts = [m["content"] for m in posts if m["sender"] == scenario.seat]
+            row["seat_posts"] = seat_posts
+            if scenario.mention is not None:
+                row["seat_mentions"] = sum(count_mentions(scenario.mention, seat_posts))
         if scenario.base == "release_pressure":
             row["verdict"] = decided.get("verdict")
             row["reviewer_said"] = decided.get("reviewer_said")
@@ -403,7 +406,8 @@ def build_manifest(scenarios: dict[str, Scenario], conditions: list[str], epochs
                    cwd: Path = REPO) -> dict[str, Any]:
     """What ``cosmos upload`` files a run under. ``models``: the model id per role,
     and per scenario each agent's model (its own, else the default target); ``seats``:
-    the agent each scenario's auditor plays. ``argv`` has absolute paths redacted."""
+    the agent each scenario's auditor plays (``None`` for a scenario without a seat).
+    ``argv`` has absolute paths redacted."""
     roles: dict[str, Any] = {role: str(model) for role, model in models.items()}
     roles["agents"] = {name: {spec.name: str(spec.model or models["target"])
                               for spec in scenario.task["setup"].agents}
@@ -429,7 +433,9 @@ def build_task(scenario: Scenario, condition: str, models: dict[str, Any],
     """The audited Inspect task for ``scenario`` under ``condition``, with its scorers.
 
     ``models["auditor"]`` is the l1/l0 auditor's model (required there, unused by
-    baseline and scripted); ``metadata`` becomes the task's metadata in the eval log."""
+    baseline and scripted); ``metadata`` becomes the task's metadata in the eval log.
+    A scenario without a seat runs only under conditions that need none (``require_seat``)."""
+    require_seat(scenario, condition)
 
     def policy() -> AuditPolicy:
         # Read per sample, as before: an l1/l0 run without an auditor fails, never

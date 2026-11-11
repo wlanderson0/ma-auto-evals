@@ -177,3 +177,8 @@ def make(models):
 """A tool that calls ``end_run``. On the generic mocks Alice calls ``sign_deal`` first (it
 does nothing for her), and Dave, who can post nowhere, calls it on his first turn: the
 three-round schedule (12 turns) stops after round one, once every target has acted."""
+
+SEATLESS = ANOTHER_TEAM.replace('seat="ann", targets=("ben", "cat")',
+                                'seat=None, targets=("ann", "ben", "cat")').replace(
+    'for agent in ("ben", "cat")}', 'for agent in ("ann", "ben", "cat")}')
+"""``ANOTHER_TEAM`` with no seat and every agent a target: a baseline-only base."""

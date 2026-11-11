@@ -55,7 +55,8 @@ def _plain(value: Any) -> Any:
 def comparisons(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Distinct comparisons from successful ``scores`` calls with ``against`` (each
     variant against it), first-call order; a and b swapped, or ``rounds`` left out, is
-    the same comparison."""
+    the same comparison. An outcome comparison keeps its ``field``: without it the
+    comparison cannot be read again."""
     seen, out = set(), []
     for row in trace:
         if not row.get("ok"):
@@ -69,8 +70,8 @@ def comparisons(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         for a, b in pairs:
             args = {"a": a, "b": b, "scorer": row["args"]["scorer"],
-                    "rounds": row["args"].get("rounds")}
-            key = (frozenset((a, b)), args["scorer"], args["rounds"])
+                    "rounds": row["args"].get("rounds"), "field": row["args"].get("field")}
+            key = (frozenset((a, b)), args["scorer"], args["rounds"], args["field"])
             if key not in seen:
                 seen.add(key)
                 out.append(args)
@@ -83,10 +84,11 @@ def score_tables(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("tool") != "scores" or not row.get("ok") or row["args"].get("against"):
             continue  # a scores call with against is shown as its comparisons
         ids = _ids(row["args"]["variant_ids"])
-        key = (tuple(sorted(ids)), row["args"]["scorer"])
+        field = row["args"].get("field")
+        key = (tuple(sorted(ids)), row["args"]["scorer"], field)
         if key not in seen:
             seen.add(key)
-            out.append({"variant_ids": ids, "scorer": row["args"]["scorer"]})
+            out.append({"variant_ids": ids, "scorer": row["args"]["scorer"], "field": field})
     return out
 
 
@@ -210,10 +212,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             ""]
     for args in compares:
         rounds = f", up to round {args['rounds']}" if args["rounds"] is not None else ""
-        out += [f"### compare {args['a']} vs {args['b']} ({args['scorer']}{rounds})", "",
+        out += [f"### compare {args['a']} vs {args['b']} ({_measure(args)}{rounds})", "",
                 _again(tools.compare, args), ""]
     for args in scores:
-        out += [f"### scores {', '.join(args['variant_ids'])} ({args['scorer']})", "",
+        out += [f"### scores {', '.join(args['variant_ids'])} ({_measure(args)})", "",
                 _again(tools.scores, args), ""]
     if not compares and not scores:
         out += ["L2 asked for no comparison or score table.", ""]
@@ -249,14 +251,15 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
                      "so no claim that a change made a difference rests on one.")
     for args in compares:
         try:
-            found = tools.departures(args["a"], args["b"], args["scorer"], args["rounds"])
+            found = tools.departures(args["a"], args["b"], args["scorer"], args["rounds"],
+                                     args["field"])
         except Exception as error:
             found = [f"could not check: {type(error).__name__}: {error}"]
-        notes += [f"- compare {args['a']} vs {args['b']} ({args['scorer']}): {n}"
+        notes += [f"- compare {args['a']} vs {args['b']} ({_measure(args)}): {n}"
                   for n in [*found, *_unknown_answers(tools, [args["a"], args["b"]],
                                                       args["scorer"])]]
     for args in scores:
-        notes += [f"- scores {', '.join(args['variant_ids'])} ({args['scorer']}): {n}"
+        notes += [f"- scores {', '.join(args['variant_ids'])} ({_measure(args)}): {n}"
                   for n in [*_score_departures(tools, args["variant_ids"]),
                             *_unknown_answers(tools, args["variant_ids"], args["scorer"])]]
     if brief.measure is not None:
@@ -689,6 +692,11 @@ def _unknown_answers(tools: Tools, ids: list[str], scorer: str) -> list[str]:
                     for vid, agent in unknown)
     return [f"Note: {total} of {answers} probe answers are unknown (unparsed or missing: "
             f"{per}), so conclusions resting on this probe are thin."]
+
+
+def _measure(args: dict[str, Any]) -> str:
+    """The scorer a comparison or score table reads, with its outcome field if any."""
+    return args["scorer"] + (f".{args['field']}" if args.get("field") else "")
 
 
 def _again(function: Any, args: dict[str, Any]) -> str:
