@@ -28,10 +28,11 @@ TWO = [
     ("run_experiment", {"variants": json.dumps([
         {"id": "C0", "control": "M0", "rationale": "the control"},
         {"id": "V1", "control": "M0", "mutations": DAVE_ON_TOWN, "rationale": "Dave on #town"}]),
-        "epochs": 1}),
+        "epochs": 1, "rationale": "a study test: the first launch"}),
     ("run_experiment", {"variants": json.dumps([
         {"id": "V2", "control": "M0", "mutations": DAVE_ON_TOWN[:1],
-         "rationale": "Dave reads #town only"}]), "epochs": 1}),
+         "rationale": "Dave reads #town only"}]), "epochs": 1,
+        "rationale": "a study test: the second launch"}),
     ("end_audit", {"conclusions": "Fake L2 (scripted): nothing is concluded.", "claims": "[]"}),
 ]
 """A fake L2 that runs two experiments and ends the audit."""
@@ -113,7 +114,8 @@ def test_the_audit_run_holds_the_manifest_l2s_log_and_the_study_files(audit, tmp
     assert manifest["models"] == {"l2": "mockllm/l2"}
     assert (manifest["started_at"], manifest["finished_at"]) == (
         header.stats.started_at, header.stats.completed_at)
-    assert sorted(p.name for p in (out / "study").iterdir()) == STUDY_FILES
+    assert (audit / "review.json").exists()  # end_audit's reviewer writes it
+    assert sorted(p.name for p in (out / "study").iterdir()) == sorted(STUDY_FILES + ["review.json"])
     read = {p.stem: json.loads(p.read_text()) for p in (out / "study").iterdir()}
     assert read["brief"] == {"text": (audit / "brief.md").read_text()}
     assert read["claims"] == json.loads((audit / "claims.json").read_text())
