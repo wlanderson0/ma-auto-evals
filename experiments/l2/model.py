@@ -78,6 +78,9 @@ class L2Brief:
     budget_usd: float
     run_budget_usd: float | None = None
     """A cap on spend on runs (agents, inner policies, scorers), inside ``budget_usd``."""
+    time_limit: float | None = None
+    """Seconds for the whole audit: once only its held-back share is left, no new
+    experiment or epoch starts and L2 concludes (spec §7)."""
     mode: Literal["elicit", "characterise"] | None = None
     base_scenarios: tuple[str, ...] | None = None
     base_logs: tuple[str, ...] | None = None

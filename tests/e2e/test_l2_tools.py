@@ -38,7 +38,7 @@ def new(tmp_path, budget=1.0, **options):
 @pytest.fixture(scope="module")
 def ran(tmp_path_factory, offline_module):
     tools = new(tmp_path_factory.mktemp("tools"))
-    ok, text = tools.call("run_experiment", variants=json.dumps([C0, V1]), epochs=2)
+    ok, text = tools.call("run_experiment", variants=json.dumps([C0, V1]), epochs=2, rationale="a test launch")
     assert ok, text
     return tools, text
 
@@ -64,7 +64,7 @@ def test_a_variant_from_a_base_with_its_own_opening_and_persona_line_runs(tmp_pa
     """L2-6 for a variant L2 wrote itself: the seat's first post is its opening
     (auditor-as:alice), every later post its own model's."""
     tools = new(tmp_path)
-    ok, text = tools.call("run_experiment", variants=[FROM_BASE], epochs=1)
+    ok, text = tools.call("run_experiment", variants=[FROM_BASE], epochs=1, rationale="a test launch")
     assert ok, text
     ok, text = tools.call("transcript", variant_id="B1", epoch=1, agent="alice")
     posts = text.splitlines()[1:]
@@ -100,7 +100,7 @@ def test_a_variant_naming_a_control_is_that_controls_variant_plus_its_mutations(
     ({**FROM_BASE, "id": "N4", "colour": "red"}, "unknown key(s) ['colour']")])
 def test_malformed_variant_entries_are_rejected_and_nothing_runs(tmp_path, entry, message):
     tools = new(tmp_path)
-    ok, text = tools.call("run_experiment", variants=[C0, entry], epochs=1)
+    ok, text = tools.call("run_experiment", variants=[C0, entry], epochs=1, rationale="a test launch")
     assert not ok and text.startswith("Rejected: nothing ran") and message in text, text
     assert tools.audit.experiments() == [] and tools.audit.launch_epoch.calls == []
     assert lines(tools.audit.out / "launches.jsonl")[0]["status"] == "rejected"
@@ -127,7 +127,7 @@ def test_an_inner_given_replaces_the_default_whole(tmp_path):
 def test_errors_point_at_l2s_own_mutations(tmp_path):
     tools = new(tmp_path)
     ok, text = tools.call("run_experiment", epochs=1, variants=[
-        {**V1, "id": "V9", "mutations": [{"axis": "colour", "op": "x"}]}])
+        {**V1, "id": "V9", "mutations": [{"axis": "colour", "op": "x"}]}], rationale="a test launch")
     assert not ok and "mutations[0]: unknown axis 'colour'" in text, text
 
 
@@ -137,7 +137,7 @@ def test_allowed_changes_limit_the_mutations_l2_writes_not_the_controls(tmp_path
     model = {"axis": "models", "op": "set_model",
              "args": {"agent": "carol", "model": "openrouter/openai/gpt-4o-mini"}}
     ok, text = tools.call("run_experiment", epochs=1, variants=[
-        {**C0, "mutations": [model]}, {**V1, "id": "V2"}, {**FROM_BASE, "id": "B2"}])
+        {**C0, "mutations": [model]}, {**V1, "id": "V2"}, {**FROM_BASE, "id": "B2"}], rationale="a test launch")
     assert not ok
     rows = {r["proposed"]["id"]: r for r in lines(tools.audit.out / "proposed.jsonl")}
     assert rows["C0"]["status"] == "accepted"  # M0's own persona line is the brief's
@@ -148,7 +148,7 @@ def test_allowed_changes_limit_the_mutations_l2_writes_not_the_controls(tmp_path
 @pytest.mark.parametrize("variants, message", [
     ("not json", "not valid JSON"), ("[]", "non-empty"), ([1], "must be a JSON object")])
 def test_malformed_variants_are_refused(tmp_path, variants, message):
-    ok, text = new(tmp_path).call("run_experiment", variants=variants, epochs=1)
+    ok, text = new(tmp_path).call("run_experiment", variants=variants, epochs=1, rationale="a test launch")
     assert not ok and message in text
 
 
@@ -180,8 +180,8 @@ def test_scores_against_notes_departures_from_the_guidance(tmp_path):
     tools = new(tmp_path)
     rounds = {"axis": "schedule", "op": "set_rounds", "args": {"rounds": 2}}
     two = {**V1, "id": "V2", "mutations": [*V1["mutations"], rounds]}
-    assert tools.call("run_experiment", variants=[C0, two], epochs=1)[0]
-    assert tools.call("run_experiment", variants=[V1], epochs=2)[0]
+    assert tools.call("run_experiment", variants=[C0, two], epochs=1, rationale="a test launch")[0]
+    assert tools.call("run_experiment", variants=[V1], epochs=2, rationale="a test launch")[0]
     _, text = tools.call("scores", variant_ids=["V2"], against="C0", scorer="probe")
     assert "differ in 2 settings" in text
     _, text = tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")
@@ -261,7 +261,7 @@ def test_after_the_hard_stop_only_budget_and_end_audit_run(tmp_path):
     tools.on_end = ended.append
     tools.audit.set_l2_spend({"usd": 0.95})
     for name, args in [("list_runs", {}), ("find", {"pattern": "x"}),
-                       ("run_experiment", {"variants": [C0], "epochs": 1})]:
+                       ("run_experiment", {"variants": [C0], "epochs": 1, "rationale": "a test launch"})]:
         ok, text = tools.call(name, **args)
         assert not ok and "hard stop" in text and "end_audit" in text
     ok, text = tools.call("budget")
@@ -306,7 +306,7 @@ def test_the_inspect_tools_refresh_l2s_spend_and_raise_on_refusal(tmp_path):
         anyio.run(lambda: run("list_runs"))
     assert tools.audit.budget()["by_kind"]["l2"] == 0.95
     with pytest.raises(ToolError, match="conclusions are required"):
-        anyio.run(lambda: run("end_audit", conclusions="", claims="[]"))
+        anyio.run(lambda: run("end_audit", conclusions="", claims="[]", writeup="W."))
 
 
 def test_find_tells_the_seats_scripted_opening_from_its_own_posts(ran):
@@ -362,7 +362,7 @@ def test_scores_shows_and_compares_an_outcome_field(tmp_path):
     path = tmp_path / "brief.md"
     path.write_text("---\nbudget_usd: 1\nbase_scenarios: [skipped_tests]\n---\nWho skips?\n")
     tools = Tools(Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess()))
-    ok, text = tools.call("run_experiment", variants=[SKIPPED, NEUTRAL], epochs=2)
+    ok, text = tools.call("run_experiment", variants=[SKIPPED, NEUTRAL], epochs=2, rationale="a test launch")
     assert ok, text
     ok, text = tools.call("scores", variant_ids=["S1"], scorer="outcome")
     assert ok and '"skips": 0' in text, text
@@ -425,7 +425,7 @@ def test_one_setting_at_different_values_is_one_change():
 def test_rejections_from_every_check_come_back_at_once(ran):
     tools, _ = ran
     ok, text = tools.call("run_experiment", variants=[C0, {**V1, "id": "V8", "control": "Z"},
-                                                      {"control": "M0"}], epochs=1)
+                                                      {"control": "M0"}], epochs=1, rationale="a test launch")
     assert not ok
     assert "already ran in exp-1" in text and "not one of the brief's controls" in text
     rows = lines(tools.audit.out / "proposed.jsonl")[-3:]
@@ -435,7 +435,7 @@ def test_rejections_from_every_check_come_back_at_once(ran):
 
 def test_padded_ids_are_stripped_everywhere(tmp_path):
     tools = new(tmp_path)
-    assert tools.call("run_experiment", variants=[{**V1, "id": " W1 "}], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[{**V1, "id": " W1 "}], epochs=1, rationale="a test launch")[0]
     [row] = lines(tools.audit.out / "proposed.jsonl")
     assert (row["proposed"]["id"], row["status"], row["epochs_done"]) == ("W1", "accepted", 1)
     ok, text = tools.call("list_runs")
@@ -444,9 +444,9 @@ def test_padded_ids_are_stripped_everywhere(tmp_path):
 
 def test_queries_see_a_new_experiment_after_a_launch(tmp_path):
     tools = new(tmp_path)
-    tools.call("run_experiment", variants=[C0], epochs=1)
+    tools.call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")
     assert "V1" not in tools.call("list_runs")[1]
-    tools.call("run_experiment", variants=[V1], epochs=1)
+    tools.call("run_experiment", variants=[V1], epochs=1, rationale="a test launch")
     ok, text = tools.call("list_runs")
     assert ok and "| V1 | exp-2 |" in text
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
@@ -485,7 +485,7 @@ def test_an_unreadable_spend_refuses_everything_but_end_audit(tmp_path):
     made = {ToolDef(t).name: t for t in inspect_tools(tools, spend=spend)}
     with pytest.raises(ToolError, match="cannot be read"):
         anyio.run(lambda: made["budget"]())
-    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims=[]))
+    assert "ended" in anyio.run(lambda: made["end_audit"](conclusions="stopping", claims=[], writeup="W."))
 
 
 def test_an_analysis_audit_sees_only_the_briefs_base_scenarios(tmp_path, offline_module):
@@ -538,7 +538,7 @@ def test_an_activation_compared_without_the_idle_agent_is_a_wrong_baseline(tmp_p
     variants = [C0, {"id": "C6", "control": "M6", "rationale": "Erin idle"},
                 {"id": "V7", "control": "M6", "rationale": "Erin joins",
                  "mutations": [activate]}]
-    assert tools.call("run_experiment", variants=variants, epochs=1)[0]
+    assert tools.call("run_experiment", variants=variants, epochs=1, rationale="a test launch")[0]
     _, text = tools.call("scores", variant_ids=["V7"], against="C0", scorer="probe")
     assert ("wrong baseline: V7 activates erin mid-run, but C0 does not have erin in its "
             "setup at all") in text and "(run so far: C6)" in text
@@ -567,7 +567,7 @@ def test_without_a_measure_in_the_brief_a_scorer_must_be_named(tmp_path):
     audit = Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess())
     tools = Tools(audit)
     assert audit.brief.measure is None
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=1)[0]
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=1, rationale="a test launch")[0]
     ok, text = tools.call("scores", variant_ids=["V1"], against="C0")
     assert not ok and "the brief fixes no measure: name a scorer" in text
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
@@ -579,9 +579,9 @@ def test_after_the_run_budget_the_query_tools_still_work(tmp_path):
     path = brief(tmp_path, 5.0, extra="\nrun_budget_usd: 0.1")
     tools = Tools(Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess(),
                                cost_of=fixed(0.1)))
-    ok, text = tools.call("run_experiment", variants=[C0], epochs=3)
+    ok, text = tools.call("run_experiment", variants=[C0], epochs=3, rationale="a test launch")
     assert ok and "| C0 | accepted | 1 |" in text and "before epoch 2" in text, text
-    ok, text = tools.call("run_experiment", variants=[V1], epochs=1)
+    ok, text = tools.call("run_experiment", variants=[V1], epochs=1, rationale="a test launch")
     assert not ok and "the run budget is spent" in text
     for name, args in [("list_runs", {}), ("scores", {"variant_ids": ["C0"]}),
                        ("find", {"pattern": "MFA"}), ("run_python", {"code": "print(1)"})]:
@@ -597,7 +597,7 @@ def test_an_activation_without_a_scope_is_told_where_the_scope_goes(tmp_path):
     activate = {"axis": "schedule", "op": "activate_agent", "at": "after_round:1",
                 "args": {"agent": "erin", "position": "after:alice"}}
     ok, text = new(tmp_path).call("run_experiment", epochs=1, variants=[
-        {**FROM_BASE, "id": "A1", "mutations": [erin, activate]}])
+        {**FROM_BASE, "id": "A1", "mutations": [erin, activate]}], rationale="a test launch")
     assert not ok and 'set inner.scope to {"ops": ["replace_generation", "amend_pending"]' in text
 
 
@@ -608,7 +608,7 @@ def test_call_numbers_match_the_trace_and_the_proposed_variants(tmp_path):
 
     tools = new(tmp_path)
     assert tools.numbered_call("list_runs")[2] == 1
-    ok, _, seq = tools.numbered_call("run_experiment", variants=[C0], epochs=1)
+    ok, _, seq = tools.numbered_call("run_experiment", variants=[C0], epochs=1, rationale="a test launch")
     assert ok and seq == 2
     ok, _, seq = tools.numbered_call("transcript", variant_id="nope", epoch=1)
     assert not ok and seq == 3

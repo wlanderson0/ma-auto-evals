@@ -159,7 +159,7 @@ def test_with_no_base_scenarios_a_written_base_is_accepted_and_its_runs_visible(
     tools = Tools(audit)
     entries = [{"id": vid, "base": "rumour", "rationale": "test",
                 "inner": {"condition": "scripted", "opening": OPENING}} for vid in ("W1", "W2")]
-    ok, text = tools.call("run_experiment", variants=json.dumps(entries), epochs=1)
+    ok, text = tools.call("run_experiment", variants=json.dumps(entries), epochs=1, rationale="a test launch")
     assert ok, text
     ok, text = tools.call("list_runs")
     assert ok and "W1" in text and "rumour" in text
