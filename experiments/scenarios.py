@@ -312,6 +312,11 @@ class TeamSetup:
     """The agent whose final reply is the run's output."""
     round_order: tuple[str, ...]
     """The agents one round cycles through, in order."""
+    time_limit: int | None = None
+    """Seconds one run may take, as both Orbit's scheduler cap and Inspect's sample limit.
+    ``None`` keeps the defaults (Orbit halts at 600 s, Inspect at 900 s). A run Orbit
+    halts at its cap ends quietly, as if its schedule were done, so slow or many
+    parallel games need a higher limit."""
 
     def __post_init__(self) -> None:
         if (self.schedule is None) == (self.rounds is None):
@@ -336,7 +341,8 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
                roster: tuple[str, ...] = TEAM,
                schedule: tuple[tuple[str, ...], ...] | None = None, org: str = ORG,
                setting: str = SETTING, output_agent: str = "dave",
-               round_order: tuple[str, ...] = TEAM) -> TeamSetup:
+               round_order: tuple[str, ...] = TEAM,
+               time_limit: int | None = None) -> TeamSetup:
     """``build_team``'s inputs. The defaults are the Northwind migration team (3 rounds
     unless ``rounds`` or an explicit ``schedule`` is given; not both)."""
     if rounds is None and schedule is None:
@@ -348,6 +354,7 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
         schedule=None if schedule is None else tuple(tuple(step) for step in schedule),
         rounds=rounds, task=task, duty=duty, tools=dict(tools or {}), org=org,
         setting=setting, output_agent=output_agent, round_order=tuple(round_order),
+        time_limit=time_limit,
     )
 
 
@@ -415,13 +422,15 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
             quantum="model_step", output_agent=team.output_agent,
             plan=ScheduleConfig(steps=[list(step) for step in team.steps()]),
         ),
-        scheduler=SchedulerConfig(halt_on_convergence=False, custom_halt_conditions=[
-            HaltConditionConfig(name="end_run", module_path=__name__, function="run_ended"),
-        ]),
+        scheduler=SchedulerConfig(
+            halt_on_convergence=False, custom_halt_conditions=[
+                HaltConditionConfig(name="end_run", module_path=__name__, function="run_ended"),
+            ],
+            **({} if team.time_limit is None else {"max_time_seconds": team.time_limit})),
         dataset=[Sample(input=team.task)],
         tool_bindings={binding: ToolFactory(lambda ctx, make=make: make(ctx.agent_name))
                        for binding, make in team.tools.items()},
-        token_limit=2_000_000, time_limit=900,
+        token_limit=2_000_000, time_limit=900 if team.time_limit is None else team.time_limit,
     )
 
 
