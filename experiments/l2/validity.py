@@ -14,7 +14,7 @@ from collections import deque
 from collections.abc import Iterable
 
 from experiments.l2.model import START, Problems, Variant
-from experiments.scenarios import Scenario
+from experiments.scenarios import SEAT_CONDITIONS, Scenario
 from experiments.scorers import DOSE_BASES
 
 MID_RUN_CONDITIONS = ("scripted",)
@@ -53,17 +53,21 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
     if output is not None and output not in scheduled:
         rejections.append(f"the output agent {output!r} is not in the schedule")
 
+    seat = built.seat
+    if seat is None and condition in SEAT_CONDITIONS:
+        rejections.append(f"the {condition} condition acts through a seat, and the scenario "
+                          f"{built.base!r} has none: run it as baseline")
     if built.opening and condition != "scripted":
         rejections.append(f"an opening is only played by the scripted condition, not "
                           f"{condition!r}")
-    writable = {c.id for c in channels if built.seat in c.writers}
+    writable = {c.id for c in channels if seat is not None and seat in c.writers}
     for channel, _ in built.opening:
-        if channel not in writable:
+        if seat is not None and channel not in writable:
             rejections.append(f"the opening posts on {channel!r}, which the seat "
                               f"{built.seat!r} cannot write to in this variant")
     if built.opening and scope is not None and not (
             scope.allows_op("replace_generation")
-            and (scope.agents is None or built.seat in scope.agents)):
+            and (scope.agents is None or seat in scope.agents)):
         rejections.append(f"the inner scope ({scope.describe()}) would refuse the opening, "
                           f"a replace_generation on the seat {built.seat!r}")
 
@@ -93,7 +97,9 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
         # turn count no longer lands on a round boundary.
         rejections.append(f"milestone 1 supports one activation per variant, not "
                           f"{len(activated)} ({activated})")
-    if built.intended_dose is not None and built.base not in DOSE_BASES:
+    if built.intended_dose is not None and seat is None:
+        rejections.append("a seat dose needs a seat, and this scenario has none")
+    elif built.intended_dose is not None and built.base not in DOSE_BASES:
         rejections.append(f"a seat dose is only measured on {list(DOSE_BASES)} (its "
                           f"classifier is kestrel_dose), not on {built.base!r}")
     if built.activations and built.mention is not None:
@@ -125,15 +131,16 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
     for agent in sorted(scheduled | set(activated)):
         if not any(agent in c.readers or agent in c.writers for c in channels):
             warnings.append(f"{agent!r} is scheduled but can read and write nothing")
-    for agent in (built.seat, *built.targets):
+    for agent in ((seat,) if seat is not None else ()) + tuple(built.targets):
         if agent not in scheduled:
-            kind = "seat" if agent == built.seat else "target"
+            kind = "seat" if agent == seat else "target"
             warnings.append(f"the {kind} {agent!r} is never scheduled")
-    reach = reachable(built.seat, channels, relays=scheduled | set(activated))
-    for target in built.targets:
-        if target not in reach:
-            warnings.append(f"the target {target!r} cannot be reached from the seat "
-                            f"{built.seat!r}")
+    if seat is not None:  # without a seat, nothing is spread from one
+        reach = reachable(seat, channels, relays=scheduled | set(activated))
+        for target in built.targets:
+            if target not in reach:
+                warnings.append(f"the target {target!r} cannot be reached from the seat "
+                                f"{seat!r}")
     return Problems(rejections=_unique(rejections), warnings=_unique(warnings))
 
 

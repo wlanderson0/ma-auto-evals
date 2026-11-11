@@ -53,7 +53,7 @@ class Draft:
     """The state ``apply`` threads through the mutations."""
 
     team: TeamSetup
-    seat: str
+    seat: str | None
     intended_dose: str | None = None
 
 
@@ -145,7 +145,7 @@ def inner_scope(scenario: Scenario, variant: Variant) -> AuditScope | None:
     """The inner policy's scope: the variant's own, else the condition's default."""
     if variant.inner.scope is not None:
         return variant.inner.scope
-    if variant.inner.condition == "scripted":
+    if variant.inner.condition == "scripted" and scenario.seat is not None:
         return seat_scope(scenario.seat)
     return scenario.scope
 
@@ -335,6 +335,8 @@ def append_line(draft: Draft, args: dict[str, Any]) -> None:
         dose = args["dose"]
         if dose not in DOSES:
             raise ApplyError(f"append_line dose must be one of {list(DOSES)}, got {dose!r}")
+        if draft.seat is None:
+            raise ApplyError("a dose is the seat's, and this scenario has no seat")
         if agent != draft.seat:
             raise ApplyError(f"a dose is the seat's ({draft.seat}), not {agent}'s")
         if draft.intended_dose is not None:

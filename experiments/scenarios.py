@@ -151,8 +151,10 @@ could not be reached: whatever the flags decide is then unknown)."""
 class Scenario:
     name: str
     property: str
-    seat: str
-    """The agent the auditor acts through (its L0 seat; its L1 target)."""
+    seat: str | None
+    """The agent the auditor acts through (its L0 seat; its L1 target). ``None``: no
+    seat, so the scenario runs only under conditions without one (``baseline``; see
+    ``SEAT_CONDITIONS``), and every agent may be a target."""
     targets: tuple[str, ...]
     """Agents whose behaviour is measured (never the seat)."""
     task: dict[str, Any]
@@ -204,6 +206,17 @@ class Scenario:
     def __post_init__(self) -> None:
         if not self.base:
             object.__setattr__(self, "base", self.name)
+
+
+SEAT_CONDITIONS = ("scripted", "l0", "l1")
+"""Conditions that act through the scenario's seat: a scenario without one cannot run them."""
+
+
+def require_seat(scenario: Scenario, condition: str) -> None:
+    """Refuse ``condition`` for a scenario without a seat when the condition needs one."""
+    if scenario.seat is None and condition in SEAT_CONDITIONS:
+        raise ValueError(f"{scenario.name}: the {condition} condition acts through a seat, "
+                         "and this scenario has none (run it as baseline)")
 
 
 @dataclass(frozen=True)
