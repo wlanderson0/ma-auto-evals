@@ -255,6 +255,31 @@
    "scheduling_mode": "round_robin"
   },
   "name": "codename_vote",
+  "scheduler": {
+   "convergence_window": 3,
+   "custom_halt_conditions": [
+    {
+     "config": {},
+     "function": "run_ended",
+     "halt_on_error": true,
+     "module_path": "experiments.scenarios",
+     "name": "end_run"
+    }
+   ],
+   "halt_on_attack_success": false,
+   "halt_on_convergence": false,
+   "health_check_interval": 5,
+   "health_checks": true,
+   "hooks": {
+    "on_halt": null,
+    "post_turn": null,
+    "pre_turn": null
+   },
+   "max_retries_per_turn": 0,
+   "max_time_seconds": 600.0,
+   "max_turns": 100,
+   "resource_limits": {}
+  },
   "setup": {
    "agents": [
     {
@@ -585,6 +610,31 @@
    "scheduling_mode": "round_robin"
   },
   "name": "compute_quota",
+  "scheduler": {
+   "convergence_window": 3,
+   "custom_halt_conditions": [
+    {
+     "config": {},
+     "function": "run_ended",
+     "halt_on_error": true,
+     "module_path": "experiments.scenarios",
+     "name": "end_run"
+    }
+   ],
+   "halt_on_attack_success": false,
+   "halt_on_convergence": false,
+   "health_check_interval": 5,
+   "health_checks": true,
+   "hooks": {
+    "on_halt": null,
+    "post_turn": null,
+    "pre_turn": null
+   },
+   "max_retries_per_turn": 0,
+   "max_time_seconds": 600.0,
+   "max_turns": 100,
+   "resource_limits": {}
+  },
   "setup": {
    "agents": [
     {
@@ -934,6 +984,31 @@
    "scheduling_mode": "round_robin"
   },
   "name": "kestrel_naming",
+  "scheduler": {
+   "convergence_window": 3,
+   "custom_halt_conditions": [
+    {
+     "config": {},
+     "function": "run_ended",
+     "halt_on_error": true,
+     "module_path": "experiments.scenarios",
+     "name": "end_run"
+    }
+   ],
+   "halt_on_attack_success": false,
+   "halt_on_convergence": false,
+   "health_check_interval": 5,
+   "health_checks": true,
+   "hooks": {
+    "on_halt": null,
+    "post_turn": null,
+    "pre_turn": null
+   },
+   "max_retries_per_turn": 0,
+   "max_time_seconds": 600.0,
+   "max_turns": 100,
+   "resource_limits": {}
+  },
   "setup": {
    "agents": [
     {
@@ -1224,6 +1299,31 @@
    "scheduling_mode": "round_robin"
   },
   "name": "mfa_rumor",
+  "scheduler": {
+   "convergence_window": 3,
+   "custom_halt_conditions": [
+    {
+     "config": {},
+     "function": "run_ended",
+     "halt_on_error": true,
+     "module_path": "experiments.scenarios",
+     "name": "end_run"
+    }
+   ],
+   "halt_on_attack_success": false,
+   "halt_on_convergence": false,
+   "health_check_interval": 5,
+   "health_checks": true,
+   "hooks": {
+    "on_halt": null,
+    "post_turn": null,
+    "pre_turn": null
+   },
+   "max_retries_per_turn": 0,
+   "max_time_seconds": 600.0,
+   "max_turns": 100,
+   "resource_limits": {}
+  },
   "setup": {
    "agents": [
     {
@@ -1787,6 +1887,31 @@
    "scheduling_mode": "round_robin"
   },
   "name": "skipped_tests",
+  "scheduler": {
+   "convergence_window": 3,
+   "custom_halt_conditions": [
+    {
+     "config": {},
+     "function": "run_ended",
+     "halt_on_error": true,
+     "module_path": "experiments.scenarios",
+     "name": "end_run"
+    }
+   ],
+   "halt_on_attack_success": false,
+   "halt_on_convergence": false,
+   "health_check_interval": 5,
+   "health_checks": true,
+   "hooks": {
+    "on_halt": null,
+    "post_turn": null,
+    "pre_turn": null
+   },
+   "max_retries_per_turn": 0,
+   "max_time_seconds": 600.0,
+   "max_turns": 100,
+   "resource_limits": {}
+  },
   "setup": {
    "agents": [
     {

@@ -59,7 +59,7 @@ from experiments.measures import (  # noqa: F401  (re-exported for tests and rev
     probe,
     reviewer_said,
 )
-from experiments.scenarios import SCENARIOS, SEED, Scenario, require_seat
+from experiments.scenarios import RUN_END_KEY, SCENARIOS, SEED, Scenario, require_seat
 from experiments.scorers import expected_scores, measurement_scorers
 from orbit_audit.auditor import LLMAuditor, SeatPolicy
 from orbit_audit.auditor.llm import final_boundary
@@ -332,6 +332,8 @@ def measure(scenario: Scenario, condition: str, log: EvalLog,
             "refused": [{"branch": t["branch"], "revision": t["revision"], **r}
                         for t in turns for r in t.get("refused", [])],
         }
+        if ended := sample.store.get(RUN_END_KEY):
+            row["ended_early"] = ended
         if unknown:
             row["incomplete"] = unknown
         rows.append(row)

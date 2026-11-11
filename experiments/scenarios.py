@@ -43,16 +43,18 @@ from typing import Any
 
 from inspect_ai.dataset import Sample
 from inspect_ai.tool import Tool, ToolDef, ToolError, tool
-from inspect_ai.util import Store, StoreModel, store_as
+from inspect_ai.util import Store, StoreModel, store, store_as
 from orbit import (
     AgentSpec,
     ChannelConfig,
     CommunicationConfig,
     ExecutionConfig,
     ScheduleConfig,
+    SchedulerConfig,
     SetupConfig,
     ToolFactory,
 )
+from orbit.configs import HaltConditionConfig
 
 from orbit_audit.scope import AuditScope
 
@@ -349,6 +351,38 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
     )
 
 
+class RunEnd(StoreModel):
+    """Why a scenario ended its run early (``end_run``); empty while it runs on."""
+
+    reason: str = ""
+
+
+RUN_END_KEY = "RunEnd:reason"
+"""The store key ``end_run`` writes, in a sample's (final branch's) store."""
+
+
+def end_run(reason: str) -> None:
+    """End the run before the next scheduled turn, recording ``reason``.
+
+    Call it from a scenario's tool once the run has nothing left to show, e.g. when a
+    deal passes: the turn that called it finishes, then no other turn starts and the
+    scorers and probes run as after a full schedule. The first reason given is kept,
+    and every task ``build_team`` builds checks it (``run_ended``). The reason is in the
+    sample store (``RUN_END_KEY``) and the results row (``ended_early``).
+    """
+    if not reason.strip():
+        raise ValueError("end_run needs a reason")
+    ended = store_as(RunEnd)
+    if not ended.reason:
+        ended.reason = reason.strip()
+
+
+def run_ended(scheduler: Any) -> bool:
+    """Orbit halt condition: has a tool called ``end_run`` in this run? (Read, not
+    ``store_as``, so a run that never ends early keeps a store without ``RunEnd``.)"""
+    return bool(store().get(RUN_END_KEY))
+
+
 def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     """A team's ``audit_task`` kwargs; by default the Northwind platform team migrating
     the admin panel.
@@ -356,7 +390,8 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     Every system prompt opens "You are {persona} at {org}. {setting}", then ``duty``,
     then the agent's ``extra`` text, then what it can post on; every agent gets
     ``tools``. The schedule is ``rounds`` rounds of ``round_order`` (or the explicit
-    ``schedule``), and ``output_agent``'s final reply is the run's output. Channels are
+    ``schedule``), and ``output_agent``'s final reply is the run's output. The run stops
+    before its schedule is done only if a tool calls ``end_run``. Channels are
     re-validated, so an edited one gets Orbit's own checks.
     """
     channels = [ChannelConfig.model_validate(c.model_dump()) for c in team.channels]
@@ -380,6 +415,9 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
             quantum="model_step", output_agent=team.output_agent,
             plan=ScheduleConfig(steps=[list(step) for step in team.steps()]),
         ),
+        scheduler=SchedulerConfig(halt_on_convergence=False, custom_halt_conditions=[
+            HaltConditionConfig(name="end_run", module_path=__name__, function="run_ended"),
+        ]),
         dataset=[Sample(input=team.task)],
         tool_bindings={binding: ToolFactory(lambda ctx, make=make: make(ctx.agent_name))
                        for binding, make in team.tools.items()},
