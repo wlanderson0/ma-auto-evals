@@ -204,6 +204,8 @@ class Tools:
         ``by="reviewer"``: a call by the reviewer, which may use only the query tools
         (``READ``); they cost nothing, so the hard stop does not refuse them.
         (L2's tools are serial: Inspect runs a tool in parallel only if it says so.)"""
+        if by == "l2":
+            self.audit.say("tool", name=name, done=False)
         self._seq += 1
         seq = self._seq
         self._caller = by
@@ -220,7 +222,11 @@ class Tools:
             text += (f"\n\nThe audit is stopping: {stopped}. No new experiment starts; "
                      "conclude: call " + ("request_review, then end_audit."
                                           if self.needs_review else "end_audit."))
-        return ok, text, self._trace(name, args, ok, text, seq, by)
+        number = self._trace(name, args, ok, text, seq, by)
+        if by == "l2":
+            self.audit.say("tool", name=name, done=True, ok=ok,
+                           first_line=(text.strip().splitlines() or [""])[0])
+        return ok, text, number
 
     async def reviewed_call(self, reviewer: Callable[[Tools, dict[str, Any]], Any], /,
                             **args: Any) -> tuple[bool, str, int]:
@@ -242,7 +248,10 @@ class Tools:
             found = {"critique": "", "calls": [], "cost_usd": 0.0,
                      "stopped": f"the reviewer failed: {type(error).__name__}: {error}"}
         text = self._record_review(seq, draft, found)
-        return True, text, self._trace("request_review", args, True, text, seq)
+        number = self._trace("request_review", args, True, text, seq)
+        self.audit.say("tool", name="request_review", done=True, ok=True,
+                       first_line=(text.strip().splitlines() or [""])[0])
+        return True, text, number
 
     def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
         """The call's arguments if it may run now; ``Refused`` if not."""
