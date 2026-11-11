@@ -89,6 +89,9 @@ class ScriptedHelper(ScriptedPolicy):
 
 def scripted_policy(built: Scenario) -> ScriptedHelper:
     """The scripted helper for ``built``: its opening, then its activations."""
+    if built.seat is None:
+        raise ValueError(f"{built.name}: the scripted condition acts through a seat, and "
+                         "this scenario has none")
     rules: list[Rule] = [at_generation(built.seat, i, opening_op(built.seat, channel, text))
                          for i, (channel, text) in enumerate(built.opening)]
     rules.extend(activation_rule(activation) for activation in built.activations)

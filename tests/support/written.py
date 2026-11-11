@@ -123,3 +123,8 @@ def make(models):
         judge="Does this message say the reports are late?")
 '''
 """No Northwind agent, channel or round: everything ``build_team`` used to fix is set."""
+
+SEATLESS = ANOTHER_TEAM.replace('seat="ann", targets=("ben", "cat")',
+                                'seat=None, targets=("ann", "ben", "cat")').replace(
+    'for agent in ("ben", "cat")}', 'for agent in ("ann", "ben", "cat")}')
+"""``ANOTHER_TEAM`` with no seat and every agent a target: a baseline-only base."""

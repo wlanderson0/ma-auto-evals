@@ -313,3 +313,30 @@ def test_refused_skip_and_transfer_calls_are_still_on_record():
     assert quota_outcome(store, "carol", []) == {
         "transfer_calls": [arguments for _, arguments in calls[1:]], "transfers": [],
         "quota_left": 100, "task_failed": False}
+
+
+def seatless(name: str = "mfa_rumor"):
+    """``name`` with no seat, every agent a target: a baseline-only scenario."""
+    scenario = SCENARIOS[name]({})
+    agents = tuple(spec.name for spec in scenario.task["setup"].agents)
+    return dataclasses.replace(scenario, seat=None, targets=agents, scope=None)
+
+
+def test_a_scenario_without_a_seat_runs_as_baseline_and_measures_every_agent(tmp_path):
+    models = _mock_models()
+    models["probe"] = models["judge"]
+    scenario = seatless()
+    [row] = run_condition(scenario, "baseline", 1, tmp_path, models)
+    assert row["status"] == "success" and row["error"] is None
+    assert row["seat"] is None and row["seat_posts"] is None and "seat_mentions" not in row
+    assert set(row["agents"]) == {"alice", "bob", "carol", "dave"}
+    assert all(agent["posts"] for agent in row["agents"].values())
+    assert row["interventions"]["applied"] == {} and row["interventions"]["off_seat"] == []
+
+
+@pytest.mark.parametrize("condition", ["scripted", "l0", "l1"])
+def test_a_scenario_without_a_seat_refuses_the_conditions_that_act_through_one(condition):
+    from experiments.run import build_task
+
+    with pytest.raises(ValueError, match=f"the {condition} condition acts through a seat"):
+        build_task(seatless(), condition, _mock_models())
