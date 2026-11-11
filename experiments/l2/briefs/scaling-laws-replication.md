@@ -1,5 +1,5 @@
 ---
-budget_usd: 10
+budget_usd: 20
 base_scenarios: []
 mode: characterise
 measure: >
@@ -75,8 +75,8 @@ bargaining, not by an agent skipping a move. Build the game so that holds here t
   discussion prompt restates them; each vote restates the utility formula and discount.
 - In rounds 9 and 10 the prompts carry a short time-pressure note (the paper's urgency
   signal, not strategic coaching).
-- When a proposal passes, both agents are told the agreed allocation and that the game is
-  over, and no further moves are accepted.
+- When a proposal passes, both agents are told the agreed allocation and the game ends:
+  the tool that records the deal calls end_run, so no later turn runs.
 - A game in which an agent never makes a valid proposal or vote is an operational failure,
   not a no-deal: report how many there were and exclude them from the payoff fits, as the
   paper does. A game that runs all 10 rounds without a passing proposal is a no-deal and
