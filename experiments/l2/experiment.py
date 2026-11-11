@@ -144,14 +144,16 @@ def run_models(built: Scenario, models: dict[str, Any]) -> tuple[Scenario, Model
 
     Every agent's spec carries ``RUN_CONFIG`` as its ``generate_config``, which Orbit
     merges over the agent's model, so agents on several models run under the same
-    settings as agents on one. When every agent runs on one model, their names are also
+    settings as agents on one. Settings the scenario gave an agent itself
+    (``team_setup(generate_configs=...)``, e.g. a lower reasoning effort) win over
+    ``RUN_CONFIG``. When every agent runs on one model, their names are also
     cleared and that model is the default (probes then ask it too, as the agent's own
     model)."""
     one = one_model(built, models["target"])
     setup = built.task["setup"]
     setup = setup.model_copy(update={"agents": [
         spec.model_copy(update={
-            "generate_config": (spec.generate_config or GenerateConfig()).merge(RUN_CONFIG),
+            "generate_config": RUN_CONFIG.merge(spec.generate_config or GenerateConfig()),
             **({"model": None} if one is not None else {})})
         for spec in setup.agents]})
     built = dataclasses.replace(built, task={**built.task, "setup": setup})

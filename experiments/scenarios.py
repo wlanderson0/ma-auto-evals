@@ -42,6 +42,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inspect_ai.dataset import Sample
+from inspect_ai.model import GenerateConfig
 from inspect_ai.tool import Tool, ToolDef, ToolError, tool
 from inspect_ai.util import Store, StoreModel, store, store_as
 from orbit import (
@@ -319,6 +320,9 @@ class TeamSetup:
     ``None`` keeps the defaults (Orbit halts at 600 s, Inspect at 900 s). A run Orbit
     halts at its cap ends quietly, as if its schedule were done, so slow or many
     parallel games need a higher limit."""
+    generate_configs: dict[str, GenerateConfig] = field(default_factory=dict)
+    """Agent -> its own generation settings (e.g. ``reasoning_effort="low"``), which win
+    over the settings a run gives every agent (L2's ``RUN_CONFIG``)."""
     phased: PhasedRounds | None = None
     """Rounds made of named phases (``phased_rounds``); ``None``: each round is one
     turn per agent of ``round_order``."""
@@ -368,10 +372,12 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
                setting: str = SETTING, output_agent: str = "dave",
                round_order: tuple[str, ...] = TEAM,
                time_limit: int | None = None,
+               generate_configs: dict[str, GenerateConfig] | None = None,
                phased: PhasedRounds | None = None) -> TeamSetup:
     """``build_team``'s inputs. The defaults are the Northwind migration team (3 rounds
     unless ``rounds`` or an explicit ``schedule`` is given; not both). ``phased`` splits
-    each round into named phases (``phased_rounds``)."""
+    each round into named phases (``phased_rounds``); ``generate_configs`` gives an agent its
+    own generation settings."""
     if rounds is None and schedule is None:
         rounds = 3
     return TeamSetup(
@@ -381,7 +387,7 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
         schedule=None if schedule is None else tuple(tuple(step) for step in schedule),
         rounds=rounds, task=task, duty=duty, tools=dict(tools or {}), org=org,
         setting=setting, output_agent=output_agent, round_order=tuple(round_order),
-        time_limit=time_limit,
+        time_limit=time_limit, generate_configs=dict(generate_configs or {}),
         phased=phased,
     )
 
@@ -601,7 +607,7 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     agents = [
         AgentSpec(
             name=agent, role="engineer", submit=False, model=team.models.get(agent),
-            tools=list(team.tools),
+            tools=list(team.tools), generate_config=team.generate_configs.get(agent),
             system_prompt=(f"You are {team.personas[agent]} at {team.org}. "
                            + (f"{team.setting} " if team.setting else "")
                            + (f"{team.duty} " if team.duty else "")

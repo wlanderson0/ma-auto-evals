@@ -312,7 +312,7 @@ If a comparison of setups uses either of these, the report says that the seat's 
 - **One epoch at a time:** each epoch is one subprocess making one `inspect_eval` call over all the variants' tasks, so variants within an epoch run in parallel and every variant gets epoch _e_ before any gets _e + 1_;
 - **unique names:** each built scenario is named `<base>--<variant id>`, so variants of one base never overwrite each other's logs;
 - **in the log:** each task's metadata (`l2`) records the variant, its base, mutations, inner spec, condition and epoch, so a log can be read without its folder;
-- **run settings:** the agents', judge's and probes' models get a 1500-token reply cap and reasoning effort "high" (`RUN_CONFIG`), also when a variant puts its agents on several different models; `decisions.json` records the settings.
+- **run settings:** the agents', judge's and probes' models get a 1500-token reply cap and reasoning effort "high" (`RUN_CONFIG`), also when a variant puts its agents on several different models; `decisions.json` records the settings. A scenario can give one agent its own settings with `team_setup(generate_configs={agent: GenerateConfig(...)})` (for example a fixed baseline at reasoning effort "low"), and those win over `RUN_CONFIG`.
 
 **Cost check.** Before launching, `run_experiment` estimates the experiment's cost and reports it with its basis:
 

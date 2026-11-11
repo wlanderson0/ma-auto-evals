@@ -323,8 +323,11 @@ def writing_a_scenario() -> str:
         "- Every agent's system prompt opens with the preamble build_team writes: \"You are "
         "{persona} at {org}. {setting}\". team_setup's defaults are the Northwind migration "
         "team, and each of them can be set: org, setting, personas, channels, roster, task, "
-        "duty, tools. build_team makes output_agent's final reply the run's output (by "
-        "default dave), so it must be in the roster and the schedule; rounds=n is n rounds "
+        "duty, tools, and generate_configs, an agent's own generation settings (e.g. "
+        "GenerateConfig(reasoning_effort=\"low\") from inspect_ai.model), which win over the "
+        "run's (reasoning effort \"high\", a 1500-token reply cap). build_team makes "
+        "output_agent's final reply the run's output (by default dave), so it must be in "
+        "the roster and the schedule; rounds=n is n rounds "
         "of round_order (by default alice, bob, carol, dave), and a schedule that is not in "
         "rounds is given explicitly.",
         "- The seat's opening comes from a variant's scripted inner, not from the scenario: "

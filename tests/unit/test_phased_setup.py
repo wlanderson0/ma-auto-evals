@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from inspect_ai.model import GenerateConfig
 from orbit import ChannelConfig
 
 from experiments.l2.apply import ApplyError, activation
@@ -94,3 +95,10 @@ def test_activate_agent_is_refused_for_phased_rounds():
                         args={"agent": "referee", "position": "after:alice"})
     with pytest.raises(ApplyError, match="phased rounds"):
         activation(mutation, game())
+
+
+def test_an_agents_own_generate_config_reaches_its_spec():
+    team = game(generate_configs={"alice": GenerateConfig(reasoning_effort="low")})
+    specs = {spec.name: spec for spec in build_team("game", team)["setup"].agents}
+    assert specs["alice"].generate_config == GenerateConfig(reasoning_effort="low")
+    assert specs["bob"].generate_config is None

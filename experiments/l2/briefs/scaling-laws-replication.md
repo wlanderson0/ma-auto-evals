@@ -41,8 +41,10 @@ The paper uses levels 0, 0.25, 0.5, 0.75, 0.9, 0.95 and 1 (1 means identical val
 items are fully rivalrous; 0 allows a conflict-free split), and generates values to hit
 each level.
 
-Design. The fixed agent is openrouter/openai/gpt-5-nano; the paper uses it at low
-reasoning effort. Every adversary plays it in both model orders (each moves first in half
+Design. The fixed agent is openrouter/openai/gpt-5-nano at low reasoning effort, as in the
+paper: give it team_setup(generate_configs={<its name>: GenerateConfig(reasoning_effort="low")})
+(from inspect_ai.model import GenerateConfig). Every other agent runs at reasoning effort
+"high", so gpt-5-nano as an adversary is the paper's gpt-5-nano-high (Elo 1337). Every adversary plays it in both model orders (each moves first in half
 the games). Capability is LMArena Elo (snapshot of March 31, 2026):
 
 | model | Elo |
@@ -61,9 +63,7 @@ the games). Capability is LMArena Elo (snapshot of March 31, 2026):
 | openrouter/openai/gpt-5.4 | 1484 |
 | openrouter/anthropic/claude-opus-4.6 | 1499 |
 
-Known departures you cannot change. Every agent runs with reasoning effort "high" and a
-1500-token reply cap, so GPT-5-nano is not at the paper's low effort; report this as a
-departure. Claude Opus 4.6 fails in this harness (its API rejects the assistant prefill),
+Known departures you cannot change. Every agent has a 1500-token reply cap. Claude Opus 4.6 fails in this harness (its API rejects the assistant prefill),
 so leave it out rather than spend budget on it.
 
 Protocol requirements. The paper's harness drives every phase, so a game can fail only by
