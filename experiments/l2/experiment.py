@@ -36,10 +36,13 @@ settings.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import dataclasses
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -212,9 +215,23 @@ def run_epoch(brief_path: Path, ids: Sequence[str], epoch: int, out: Path,
     return paths
 
 
+RUNNING: set[subprocess.Popen] = set()
+"""Epoch subprocesses running now (``stop_running`` stops them)."""
+
+
+def stop_running() -> None:
+    """Stop every running epoch subprocess, with anything it started (e.g. on a second
+    Ctrl-C, which the epochs do not receive themselves)."""
+    for process in list(RUNNING):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGTERM)
+
+
 def launch_subprocess(brief_path: Path, ids: list[str], epoch: int, out: Path,
                       mock: bool, scenarios: Path | None = None) -> dict[str, str]:
-    """``run_epoch`` in a fresh process (Inspect caches model clients per event loop)."""
+    """``run_epoch`` in a fresh process (Inspect caches model clients per event loop), in
+    a session of its own, so a Ctrl-C in the terminal reaches only the audit, which
+    decides whether the epoch finishes (``stop_running``)."""
     command = [sys.executable, "-m", "experiments.l2.experiment", "--brief",
                str(Path(brief_path).resolve()), "--variants", ",".join(ids), "--epoch",
                str(epoch), "--out", str(Path(out).resolve())]
@@ -222,11 +239,22 @@ def launch_subprocess(brief_path: Path, ids: list[str], epoch: int, out: Path,
         command.append("--mock")
     if scenarios is not None:
         command += ["--scenarios", str(Path(scenarios).resolve())]
-    done = subprocess.run(command, capture_output=True, text=True, cwd=REPO)
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          cwd=REPO, start_new_session=True) as process:
+        RUNNING.add(process)
+        try:
+            _, stderr = process.communicate()
+        except BaseException:  # e.g. Ctrl-C in the fixed-grid CLI: never leave it running
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGTERM)
+            raise
+        finally:
+            RUNNING.discard(process)
     record = out / f"epoch-{epoch}.json"
-    if done.returncode != 0 or not record.exists():
-        raise RuntimeError(f"epoch {epoch} failed (exit {done.returncode}):\n"
-                           f"{done.stderr[-3000:]}")
+    if process.returncode != 0 or not record.exists():
+        how = (f"stopped by signal {-process.returncode}" if process.returncode < 0
+               else f"exit {process.returncode}")
+        raise RuntimeError(f"epoch {epoch} failed ({how}):\n{stderr[-3000:]}")
     return json.loads(record.read_text())
 
 

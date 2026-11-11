@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 from pathlib import Path
 
@@ -320,3 +321,12 @@ def test_every_ready_made_change_describes_its_arguments():
         for op in ops:
             assert f"{axis}/{op} " in text, (axis, op)
     assert "models/set_model {agent, model}" in text
+
+
+def test_a_dose_needs_a_seat():
+    base = dataclasses.replace(SCENARIOS["mfa_rumor"]({}), seat=None)
+    variant = Variant(id="X", base="mfa_rumor", rationale="r", inner=InnerSpec("baseline"),
+                      mutations=(Mutation("persona", "append_line",
+                                          {"agent": "alice", "line": "Hi.", "dose": "LIGHT"}),))
+    with pytest.raises(ApplyError, match="has no seat"):
+        apply(base, variant)

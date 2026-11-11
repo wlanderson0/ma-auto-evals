@@ -7,6 +7,7 @@ ledger and record; experiments run in real subprocesses, as they will live.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from experiments.l2.agent import finalize, run_l2, token_backstop
 from experiments.l2.audit import Audit, main
 from experiments.l2.audit_report import write_report
 from experiments.l2.cost import log_cost
-from experiments.l2.fake import ANALYSIS, FULL, PROMPT, fake_model
+from experiments.l2.fake import ANALYSIS, FULL, PROMPT, REVIEW, fake_model
 from experiments.l2.tools import Tools
 from tests.support.l2_audit import brief
 
@@ -48,8 +49,9 @@ def test_the_fake_runs_the_loop_to_end_audit_and_leaves_a_complete_record(full):
     for name in LAYOUT:
         assert (out / name).exists(), name
     assert list((out / "l2").glob("*.eval"))
-    assert [r["tool"] for r in lines(out / "trace.jsonl")] == [t for t, _ in FULL]
-    assert all(r["ok"] for r in lines(out / "trace.jsonl"))
+    trace = tools.trace()  # in call order: the reviewer's list_runs ran inside the review
+    assert [r["tool"] for r in trace] == [t for t, _ in FULL[:-1]] + ["list_runs", "end_audit"]
+    assert [r.get("by") for r in trace].count("reviewer") == 1 and all(r["ok"] for r in trace)
     runs = {r["variant"]["id"]: r for r in lines(out / "experiments" / "exp-1" / "runs.jsonl")}
     assert {vid: r["epochs_done"] for vid, r in runs.items()} == {"C0": 2, "V1": 2}
     report = (out / "report.md").read_text()
@@ -67,7 +69,7 @@ def test_the_ledger_counts_every_call_in_every_log(full):
     ledger = json.loads((out / "ledger.json").read_text())
     assert ledger["final"] and total > 0
     assert ledger["spent_usd"] == pytest.approx(total)
-    calls = len(FULL)  # one model call per scripted tool call
+    calls = len(FULL) + len(REVIEW)  # one model call per scripted tool call, the reviewer's too
     assert ledger["by_kind"]["l2"] == pytest.approx(calls * (1000 * 1.0 + 100 * 2.0) / 1e6)
     # What the tools saw during the run is what the log says (end_audit was the last call).
     assert lines(out / "trace.jsonl")[-1]["spent_usd"] == pytest.approx(ledger["spent_usd"])
@@ -77,7 +79,8 @@ def test_the_analysis_only_fake_reads_an_existing_audit(full, tmp_path):
     source = full[0].audit.experiments()[0]
     # ANALYSIS's calls, on this audit's variants (ANALYSIS names milestone 1's).
     script = [("list_runs", {}), ("scores", {"variant_ids": ["V1"], "against": "C0", "scorer": "probe"}),
-              ("find", {"pattern": "(?i)mfa", "agent": "dave"}), ANALYSIS[-1]]
+              ("find", {"pattern": "(?i)mfa", "agent": "dave"}),
+              *[(name, {**args, "writeup": "No figures."}) for name, args in ANALYSIS[-2:]]]
     audit = Audit.create(brief(tmp_path, 0.5), tmp_path / "audit", mock=True,
                          analysis=source)
     tools = Tools(audit, on_end=write_report)
@@ -86,8 +89,9 @@ def test_the_analysis_only_fake_reads_an_existing_audit(full, tmp_path):
     offered = {tool.name for tool in next(
         e for e in read_eval_log(log.location).samples[0].events if e.event == "model").tools}
     assert "run_experiment" not in offered and {"find", "end_audit"} <= offered
-    trace = lines(audit.out / "trace.jsonl")
-    assert [r["tool"] for r in trace] == [t for t, _ in script] and all(r["ok"] for r in trace)
+    trace = tools.trace()
+    assert [r["tool"] for r in trace] == [t for t, _ in script[:-1]] + ["list_runs", "end_audit"]
+    assert all(r["ok"] for r in trace)
     assert "| C0 | " in trace[0]["result"] and audit.experiments() == []
     assert not (audit.out / "experiments").exists()
 
@@ -140,6 +144,27 @@ def test_the_cli_runs_the_fake_on_mocks(tmp_path, capsys):
     assert not (tmp_path / "y").exists()
 
 
+def test_the_cli_prints_progress_while_the_audit_runs(tmp_path, capsys):
+    """Each tool call, launch and epoch is a timestamped line with the spend so far;
+    --quiet leaves only the summary."""
+    main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "p"), "--mock",
+          "--fake"])
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("[")]
+    assert re.fullmatch(r"\[\d\d:\d\d:\d\d \+\d+s\] L2 called note_decision; spent \$0\.0000 "
+                        r"of \$1\.00 \(L2 \$0\.0000, runs \$0\.0000\)", lines[0])
+    text = "\n".join(lines)
+    for expected in ("exp-1: 2 variant(s) x 2 epoch(s), estimated $",
+                     "exp-1 epoch 1/2: running; spent $", "exp-1 epoch 2/2: done in ",
+                     "L2 called run_experiment: Ran exp-1.;", "L2 called end_audit: "):
+        assert expected in text
+    assert text.index("exp-1 epoch 2/2: done") < text.index("L2 called run_experiment")
+    main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "q"), "--mock",
+          "--fake", "--quiet"])
+    printed = capsys.readouterr().out
+    assert not [line for line in printed.splitlines() if line.startswith("[")]
+    assert "report:" in printed
+
+
 def test_a_question_and_a_budget_are_the_shortest_brief(tmp_path):
     """--question and --budget write the brief (the question, the budget, nothing else),
     which the audit keeps and L2 is given."""
@@ -163,7 +188,7 @@ def test_a_refused_end_audit_is_retried_and_the_message_limit_backstops(tmp_path
     monkeypatch.setattr(agent, "MESSAGE_LIMIT", 12)
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
     tools = Tools(audit, on_end=write_report)
-    script = [("end_audit", {"conclusions": " ", "claims": "[]"})] * 50
+    script = [("end_audit", {"conclusions": " ", "claims": "[]", "writeup": "W."})] * 50
     run_l2(tools, fake_model(script), PROMPT, prices=PRICES)
     trace = lines(audit.out / "trace.jsonl")
     assert len(trace) > 1 and not any(r["ok"] for r in trace)

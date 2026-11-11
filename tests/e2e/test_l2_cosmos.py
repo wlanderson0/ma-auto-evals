@@ -72,7 +72,7 @@ def audit(tmp_path_factory) -> Path:
     tools = Tools(Audit.create(root / "brief.md", root / "audit", mock=True,
                                cost_of=fixed(0.01), launch=launch_subprocess))
     script = [("write_scenario", {"name": "rumour", "code": RUMOUR}),
-              ("run_experiment", {"variants": json.dumps([W1]), "epochs": 2}),
+              ("run_experiment", {"variants": json.dumps([W1]), "epochs": 2, "rationale": "a test launch"}),
               ("end_audit", {"conclusions": "Fake L2: a pipeline test; nothing is concluded."})]
     run_l2(tools, fake_model(script), PROMPT, prices={"mockllm/l2": (0.0, 0.0)})
     return tools.audit.out

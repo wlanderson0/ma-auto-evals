@@ -29,9 +29,12 @@ RECORD = {
     "brief.md": "the brief as given",
     "decisions.jsonl": "L2's choices on what the brief left open, with reasons",
     "proposed.jsonl": "every variant L2 proposed, rejected ones too (with the trace seq)",
-    "launches.jsonl": "every launch L2 asked for and what came of it",
+    "launches.jsonl": "every launch L2 asked for, with its rationale, and what came of it",
     "trace.jsonl": "every tool call and its (shortened) result, in order",
     "claims.json": "L2's claims, each with its evidence, verdict and the checker's reasons",
+    "review.json": "the reviewer's critique of L2's draft, the draft, and L2's response",
+    "writeup.md": "L2's write-up: a readable results report, under the audit's facts",
+    "figures/": "the write-up's figures: one per comparison L2 made, and L2's own",
     "cosmos.json": "Cosmos links to the claims' runs and messages (experiments.l2.cosmos_links)",
     "ledger.json": "spend by kind, reserve, remaining",
     "experiments/": "one milestone 1 audit directory per launch (eval logs under logs/)",
@@ -52,7 +55,8 @@ def _plain(value: Any) -> Any:
 def comparisons(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Distinct comparisons from successful ``scores`` calls with ``against`` (each
     variant against it), first-call order; a and b swapped, or ``rounds`` left out, is
-    the same comparison."""
+    the same comparison. An outcome comparison keeps its ``field``: without it the
+    comparison cannot be read again."""
     seen, out = set(), []
     for row in trace:
         if not row.get("ok"):
@@ -66,8 +70,8 @@ def comparisons(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         for a, b in pairs:
             args = {"a": a, "b": b, "scorer": row["args"]["scorer"],
-                    "rounds": row["args"].get("rounds")}
-            key = (frozenset((a, b)), args["scorer"], args["rounds"])
+                    "rounds": row["args"].get("rounds"), "field": row["args"].get("field")}
+            key = (frozenset((a, b)), args["scorer"], args["rounds"], args["field"])
             if key not in seen:
                 seen.add(key)
                 out.append(args)
@@ -80,10 +84,11 @@ def score_tables(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("tool") != "scores" or not row.get("ok") or row["args"].get("against"):
             continue  # a scores call with against is shown as its comparisons
         ids = _ids(row["args"]["variant_ids"])
-        key = (tuple(sorted(ids)), row["args"]["scorer"])
+        field = row["args"].get("field")
+        key = (tuple(sorted(ids)), row["args"]["scorer"], field)
         if key not in seen:
             seen.add(key)
-            out.append({"variant_ids": ids, "scorer": row["args"]["scorer"]})
+            out.append({"variant_ids": ids, "scorer": row["args"]["scorer"], "field": field})
     return out
 
 
@@ -111,7 +116,8 @@ def proposals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     audit = tools.audit
     brief = audit.brief
-    trace = tools.trace()
+    everything = tools.trace()
+    trace = [row for row in everything if row.get("by") != "reviewer"]  # L2's own search
     out = [f"# L2 audit report: {audit.out.name}", ""]
     status = ("ended by L2 (end_audit)" if tools.conclusions is not None else
               f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}")
@@ -119,6 +125,9 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
     out += [f"Status: {status}. {where}", ""]
+    if writeup_text(tools) is not None:
+        out += ["L2's readable write-up, with tables and figures, is in `writeup.md`; this "
+                "report is the record it rests on.", ""]
 
     out += ["## Brief", "", *[f"> {line}" for line in brief.question.splitlines()], ""]
     fixed = {name: getattr(brief, name) for name in (
@@ -136,6 +145,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- Budget: ${brief.budget_usd:.2f}"
             + (f", of which at most ${brief.run_budget_usd:.2f} on runs (the run budget)"
                if brief.run_budget_usd is not None else ""),
+            *([f"- Time limit: {audit.time_limit / 60:.1f} min for the whole audit"]
+              if audit.time_limit is not None else []),
             f"- Left to L2: {', '.join(open_) or 'none'}", ""]
 
     out += _claims(tools)
@@ -145,6 +156,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     else:
         out.append(f"None: {why_no_conclusions or 'L2 never called end_audit'}.")
     out.append("")
+    out += _review(tools)
 
     decisions = _jsonl(audit.out / "decisions.jsonl")
     out += ["## Decisions on what the brief left open", ""]
@@ -173,16 +185,25 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         variants = tools.variant_rows()
     except Exception as error:  # the report is still written
         variants, out = [], out + [f"(The variants could not be read: {error})", ""]
-    out += ["## Variants (what each changed and why)", ""]
-    if variants:
-        out += ["| variant | experiment | base | changes | condition | status | "
-                "epochs | rationale |", "|---|---|---|---|---|---|---|---|"]
-        out += [f"| {v['id']} | {v['experiment']} | {v['base']} | {v['changes']} | "
-                f"{v['condition']} | {v['status']} | {v['epochs']} | "
-                f"{' '.join(v['rationale'].split())} |" for v in variants]
-    else:
-        out.append("No variant ran.")
-    out.append("")
+    out += ["## Variants (what each changed and why), by experiment", ""]
+    why = {r["experiment"]: r.get("rationale") for r in launched}
+    by_experiment: dict[str, list[dict[str, Any]]] = {exp: [] for exp in why}
+    for v in variants:
+        by_experiment.setdefault(v["experiment"], []).append(v)
+    for exp, rows in by_experiment.items():
+        out += [f"### {exp}", "",
+                f"Why this experiment (L2's rationale): {_inline(why[exp])}" if why.get(exp)
+                else "No rationale for this experiment is recorded in this audit.", ""]
+        if not rows:  # e.g. a launch that failed before any variant ran
+            out += ["No variant of it ran.", ""]
+            continue
+        out += ["| variant | base | changes | condition | status | epochs | rationale |",
+                "|---|---|---|---|---|---|---|"]
+        out += [f"| {v['id']} | {v['base']} | {v['changes']} | {v['condition']} | "
+                f"{v['status']} | {v['epochs']} | {_inline(v['rationale'])} |" for v in rows]
+        out.append("")
+    if not variants:
+        out += ["No variant ran.", ""]
 
     compares, scores = comparisons(trace), score_tables(trace)
     out += ["## Tables the conclusions rest on", "",
@@ -191,10 +212,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             ""]
     for args in compares:
         rounds = f", up to round {args['rounds']}" if args["rounds"] is not None else ""
-        out += [f"### compare {args['a']} vs {args['b']} ({args['scorer']}{rounds})", "",
+        out += [f"### compare {args['a']} vs {args['b']} ({_measure(args)}{rounds})", "",
                 _again(tools.compare, args), ""]
     for args in scores:
-        out += [f"### scores {', '.join(args['variant_ids'])} ({args['scorer']})", "",
+        out += [f"### scores {', '.join(args['variant_ids'])} ({_measure(args)})", "",
                 _again(tools.scores, args), ""]
     if not compares and not scores:
         out += ["L2 asked for no comparison or score table.", ""]
@@ -206,6 +227,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     ok_compares = sum(bool(row.get("ok")) and (row.get("tool") == "compare" or (
         row.get("tool") == "scores" and bool(row["args"].get("against")))) for row in trace)
     failed = sum(not row.get("ok") for row in trace)
+    by_reviewer = len(everything) - len(trace)
     with_epochs = sum(1 for r in launched if r.get("spent_usd") or any(
         v["epochs"] for v in variants if v["experiment"] == r["experiment"]))
     out += ["## Search counts (from the record)", "",
@@ -217,7 +239,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"- Comparisons tried: {len(compares)} distinct ({ok_compares} successful calls)",
             f"- Transcripts read: {calls['transcript']}; searches: {calls['find']}; "
             f"code runs: {calls['run_python']} (the code and its output are in trace.jsonl)",
-            f"- Tool calls: {len(trace)} ({failed} refused or failed)", ""]
+            f"- Tool calls: {len(trace)} ({failed} refused or failed)"
+            + (f", and {by_reviewer} by the reviewer (not counted above)" if by_reviewer
+               else ""), "",
+            "These count L2's own calls; the reviewer's are listed under Review.", ""]
 
     out += ["## Departures from the reading guidance (automatic checks)", ""]
     notes = []
@@ -226,14 +251,15 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
                      "so no claim that a change made a difference rests on one.")
     for args in compares:
         try:
-            found = tools.departures(args["a"], args["b"], args["scorer"], args["rounds"])
+            found = tools.departures(args["a"], args["b"], args["scorer"], args["rounds"],
+                                     args["field"])
         except Exception as error:
             found = [f"could not check: {type(error).__name__}: {error}"]
-        notes += [f"- compare {args['a']} vs {args['b']} ({args['scorer']}): {n}"
+        notes += [f"- compare {args['a']} vs {args['b']} ({_measure(args)}): {n}"
                   for n in [*found, *_unknown_answers(tools, [args["a"], args["b"]],
                                                       args["scorer"])]]
     for args in scores:
-        notes += [f"- scores {', '.join(args['variant_ids'])} ({args['scorer']}): {n}"
+        notes += [f"- scores {', '.join(args['variant_ids'])} ({_measure(args)}): {n}"
                   for n in [*_score_departures(tools, args["variant_ids"]),
                             *_unknown_answers(tools, args["variant_ids"], args["scorer"])]]
     if brief.measure is not None:
@@ -266,8 +292,12 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- L2 on {model}: ${row.get('usd', 0):.4f} ({row.get('calls', '?')} calls, "
             f"{row.get('input_tokens', '?')} input / {row.get('output_tokens', '?')} output "
             "tokens)" for model, row in b["l2_by_model"].items()]
+    if tools.review is not None:
+        out.append(f"- Of L2's own calls, the reviewer's: ${tools.review.get('cost_usd') or 0:.4f}")
     if b["stopped"]:
         out.append(f"- Stopped: {b['stopped']}")
+    if b["halted"]:
+        out.append(f"- Stopped early: {b['halted']}")
     out += [f"- Problem: {note}" for note in audit.notes]
     if b["spent_usd"] > b["budget_usd"]:
         out.append(f"- Over budget by ${b['spent_usd'] - b['budget_usd']:.4f}: a launched "
@@ -323,12 +353,7 @@ def _claims(tools: Tools) -> list[str]:
                                          "checked"))}
     for i, claim in sorted(enumerate(tools.claims, 1),
                            key=lambda pair: order.get(pair[1]["verdict"], 0)):
-        fields = ", ".join(f"{name}={_inline(claim[name])}"
-                           for name in claims_.FIELDS[claim["kind"]])
-        out += [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
-                f": {_inline(claim['text'])}",
-                f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}"]
-        out += [f"   - {_inline(reason)}" for reason in claim["reasons"]]
+        out += claim_lines(i, claim)
         try:
             out += [f"   - {line}" for line in _claim_links(tools, claim, links)]
         except Exception as error:  # the report is still written
@@ -340,6 +365,49 @@ def _claims(tools: Tools) -> list[str]:
                  f"(could not be worked out: {_inline(f'{type(error).__name__}: {error}')})",
                  ""]
     return out + ["", *where]
+
+
+def claim_lines(i: int, claim: dict[str, Any]) -> list[str]:
+    """Claim ``i`` with its verdict, fields, evidence and the checker's reasons."""
+    fields = ", ".join(f"{name}={_inline(claim[name])}"
+                       for name in claims_.FIELDS[claim["kind"]])
+    return [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
+            f": {_inline(claim['text'])}",
+            f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}",
+            *[f"   - {_inline(reason)}" for reason in claim["reasons"]]]
+
+
+def _review(tools: Tools) -> list[str]:
+    """The reviewer's critique of L2's draft and L2's response (``review.json``)."""
+    review = tools.review
+    if review is None:
+        return (["## Review", "", "No review was requested: L2 did not call request_review "
+                 "before the audit stopped.", ""] if tools.needs_review else [])
+    calls = review.get("reviewer_calls") or []
+    out = ["## Review (an adversarial reviewer read L2's draft before the audit ended)", "",
+           f"L2 asked for the review in call {review['call']}. The reviewer saw the draft "
+           "claims with the checker's verdicts and could read the runs (list_runs, scores, "
+           f"transcript, find) but not run anything; it made {len(calls)} call(s)"
+           + (f" ({', '.join(f'call {c}' for c in calls)})" if calls else "")
+           + f" and cost ${review.get('cost_usd') or 0:.4f}, part of L2's own calls in the "
+           "ledger." + (f" It stopped early: {_inline(review['stopped'])}."
+                         if review.get("stopped") else ""), "",
+           "### L2's draft claims, as the checker read them", ""]
+    draft = review["draft"]
+    out += [f"{i}. **{c['verdict']}** ({c['kind']}): {_inline(c['text'])}"
+            for i, c in enumerate(draft.get("claims") or [], 1)] or ["L2 claimed nothing."]
+    out += ["", "The draft conclusions and write-up are in `review.json`.", "",
+            "### The critique (the reviewer's words, quoted; not checked)", ""]
+    out += _quoted(review.get("critique")) or ["The reviewer gave no critique."]
+    out += ["", "### L2's response (its words, quoted; not checked)", ""]
+    out += _quoted(review.get("response")) or ["None: L2 did not end the audit after the "
+                                               "review."]
+    return out + [""]
+
+
+def _quoted(text: Any) -> list[str]:
+    return [f"> {line}" if line.strip() else ">" for line in str(text or "").strip()
+            .splitlines()]
 
 
 def _cosmos(tools: Tools) -> dict[str, Any]:
@@ -626,6 +694,11 @@ def _unknown_answers(tools: Tools, ids: list[str], scorer: str) -> list[str]:
             f"{per}), so conclusions resting on this probe are thin."]
 
 
+def _measure(args: dict[str, Any]) -> str:
+    """The scorer a comparison or score table reads, with its outcome field if any."""
+    return args["scorer"] + (f".{args['field']}" if args.get("field") else "")
+
+
 def _again(function: Any, args: dict[str, Any]) -> str:
     try:
         return function(**args)
@@ -658,6 +731,69 @@ def relink(out: Path) -> Path:
 
 
 def write_report(tools: Tools, why_no_conclusions: str | None = None) -> Path:
+    write_writeup(tools, why_no_conclusions)  # first: the report's record lists it
     path = tools.audit.out / "report.md"
     path.write_text(render(tools, why_no_conclusions))
     return path
+
+
+def writeup_text(tools: Tools) -> tuple[str, bool] | None:
+    """L2's write-up and whether it is final (``False``: the draft the reviewer read, as
+    L2 never ended the audit with one)."""
+    if tools.writeup is not None:
+        return tools.writeup, True
+    draft = (tools.review or {}).get("draft", {}).get("writeup")
+    return (draft, False) if draft else None
+
+
+def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path | None:
+    """``writeup.md`` (spec §6.6): the audit's facts, from the record, then L2's write-up."""
+    found = writeup_text(tools)
+    if found is None:
+        return None
+    text, final = found
+    audit = tools.audit
+    b = audit.budget()
+    usd = b["by_kind"]
+    reviewer = (tools.review or {}).get("cost_usd")
+    ran: dict[str, list[str]] = {}
+    for v in tools.variant_rows():  # the epochs that ran, not those asked for
+        ran.setdefault(v["experiment"], []).append(f"{v['id']} × {v['epochs']}")
+    t = audit.clock_state()
+    broken = tools.broken_embeds(text)
+    facts = [
+        ("Question", " ".join(audit.brief.question.split())),
+        ("L2", ", ".join(b["l2_by_model"]) or "unknown"),
+        ("Budget", f"${audit.brief.budget_usd:.2f}; ${b['spent_usd']:.4f} spent "
+                   f"(${usd['l2']:.4f} on L2's own calls"
+                   + (f", of which ${reviewer:.4f} the reviewer" if reviewer else "")
+                   + f"; ${usd['experiments']:.4f} on runs)"),
+        ("Time", f"{t['elapsed_s'] / 60:.1f} min" + (
+            f" of a {t['time_limit_s'] / 60:.1f}-min limit" if t["time_limit_s"] else "")
+         if t["elapsed_s"] is not None else "not recorded"),
+        ("Runs (variant × epochs run)",
+         ("analysis only, of " + str(audit.analysis) + ": " if audit.analysis else "")
+         + ("; ".join(f"{exp}: {', '.join(rows)}" for exp, rows in ran.items()) or "none")),
+        ("How it ended", "L2 ended the audit" if tools.conclusions is not None else
+         f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}"),
+        ("Stopped", b["stopped"] or b["halted"] or "no"),
+        ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
+                    else "none recorded") + " (see report.md)"),
+        *([("Images that will not show", ", ".join(broken))] if broken else []),
+    ]
+    why_draft = ("gave no final write-up" if tools.conclusions is not None
+                 else "did not end the audit")
+    lines = [f"# {audit.out.name}: L2's write-up", "",
+             *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
+                "revised.", ""] if not final else []),
+             "| | |", "|---|---|", *[f"| {name} | {_cell(value)} |" for name, value in facts],
+             "", "The table above is the harness's, from the record. Everything below is "
+             "L2's own: its numbers are not checked here; its checked claims, with their "
+             "evidence, are in `report.md`.", "", "---", "", text, ""]
+    path = audit.out / "writeup.md"
+    path.write_text("\n".join(lines))
+    return path
+
+
+def _cell(text: str) -> str:
+    return " ".join(str(text).split()).replace("|", "\\|")

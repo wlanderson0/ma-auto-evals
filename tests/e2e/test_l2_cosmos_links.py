@@ -55,7 +55,7 @@ def fake_cosmos(tools, page=3, fail=None):
 @pytest.fixture
 def audit(tmp_path):
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=2)[0]  # call 1
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=2, rationale="a test launch")[0]  # call 1
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]  # 2
     refs = [{"variant": "V1", "epoch": e, "quote": "Status update: working",
              "post": post_ref(next(p for p in tools.posts(tools._sample("V1", e))
@@ -147,7 +147,7 @@ def test_marks_come_from_the_call_the_verdict_read(tmp_path):
     from experiments.l2.claims import check_claims, parse_claims
 
     tools = tools_for(tmp_path)
-    assert tools.call("run_experiment", variants=[C0, V1], epochs=2)[0]  # call 1
+    assert tools.call("run_experiment", variants=[C0, V1], epochs=2, rationale="a test launch")[0]  # call 1
     assert tools.call("scores", variant_ids=["V1"], scorer="post_judge")[0]  # 2
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]  # 3
     claim = {"text": "Dave: 0/2 in V1.", "kind": "rate", "variant": "V1", "target": "dave",

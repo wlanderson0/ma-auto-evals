@@ -6,7 +6,7 @@ the hard stop (after it, only ``budget`` and ``end_audit`` run), records the cal
 and its shortened result in ``trace.jsonl``, and turns any error into a message
 for L2 rather than an exception.
 
-- ``run_experiment(variants, epochs, confirm=False)``: each variant is a JSON
+- ``run_experiment(variants, epochs, rationale, confirm=False)``: each variant is a JSON
   object with a ``base`` scenario, its ``mutations`` and its ``inner`` spec, in the
   brief's format; or it names one of the brief's ``controls``, and is that control's
   base, mutations and inner with its own ``mutations`` added. Nothing runs if any
@@ -20,9 +20,13 @@ for L2 rather than an exception.
 - ``run_python(code)``: L2's own Python on the audit's logs (``workspace``).
 - ``write_scenario(name, code)``: a scenario module L2 writes (``written``), saved once it
   passes its checks and dry-run; then a base like any other.
-- ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions, claims)``:
-  the claims are checked against the record (``claims``) and saved with their verdicts in
-  ``claims.json``.
+- ``note_decision(field, value, reason)``, ``budget()``, ``end_audit(conclusions, claims,
+  response)``: the claims are checked against the record (``claims``) and saved with their
+  verdicts in ``claims.json``.
+- ``request_review(conclusions, claims)``: an adversarial reviewer (``agent.reviewer``)
+  reads L2's draft, with the claims' verdicts and the query tools (``READ``), and its
+  critique comes back to L2, which then revises once with ``end_audit`` (``response``: how
+  it answered); saved in ``review.json``.
 
 Outputs are short by default: small plain tables, the first N posts or matches. L2 sees
 each result after its call number (`[call N]`, the call's `seq` in `trace.jsonl`), and each
@@ -38,8 +42,10 @@ import keyword
 import math
 import re
 import time
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -47,9 +53,10 @@ import anyio
 from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
+from markdown_it import MarkdownIt
 
 from experiments.l2 import claims as claims_
-from experiments.l2 import workspace
+from experiments.l2 import figures, workspace
 from experiments.l2 import written as written_
 from experiments.l2.apply import recorded_inner
 from experiments.l2.audit import Audit
@@ -68,12 +75,16 @@ TRACE_CHARS = 4000
 """Results longer than this are cut in ``trace.jsonl`` (the full text went to L2)."""
 POST_CHARS = 600
 """Posts longer than this are cut in tool output."""
-FREE = ("budget", "end_audit")
+FREE = ("budget", "request_review", "end_audit")
 """Tools that still run after the hard stop."""
+READ = ("list_runs", "scores", "transcript", "find")
+"""The query tools the reviewer may use (read only: no code, no runs)."""
+MAKES = ("run_experiment", "write_scenario")
+"""Tools that make new evidence, off once the review is done (L2 then only revises)."""
 ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
 TOOLS = ("run_experiment", "write_scenario", "list_runs", "scores", "transcript", "find",
-         "run_python", "note_decision", "budget", "end_audit")
+         "run_python", "note_decision", "budget", "request_review", "end_audit")
 
 
 class Refused(Exception):
@@ -165,6 +176,16 @@ class Tools:
         self._unlabelled: dict[str, str] = {}
         self.stop_reason: str | None = None
         """Why L2 stopped without ending the audit, when the agent knows (``agent.py``)."""
+        self.needs_review = False
+        """Whether ``end_audit`` waits for a review (set by the agent, which runs the
+        reviewer)."""
+        self._caller = "l2"
+        """Who makes the call running now (``numbered_call``)."""
+        self.writeup: str | None = None
+        """L2's final write-up (``writeup.md``), once it ends the audit with one."""
+        self.review: dict[str, Any] | None = None
+        """The review once requested (``review.json``): L2's draft, the critique, and L2's
+        response once it ends the audit."""
         self.written = audit.written()
         """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
@@ -176,37 +197,88 @@ class Tools:
         ok, text, _ = self.numbered_call(name, **args)
         return ok, text
 
-    def numbered_call(self, name: str, /, **args: Any) -> tuple[bool, str, int]:
+    def numbered_call(self, name: str, /, by: str = "l2", **args: Any) -> tuple[bool, str, int]:
         """``call``, plus the call's number in ``trace.jsonl`` (its ``seq``), which L2
         sees as ``[call N]`` and cites as evidence for a claim. The number is taken when
         the call starts, so records written during it (``proposed.jsonl``) carry it too.
+        ``by="reviewer"``: a call by the reviewer, which may use only the query tools
+        (``READ``); they cost nothing, so the hard stop does not refuse them.
         (L2's tools are serial: Inspect runs a tool in parallel only if it says so.)"""
+        if by == "l2":
+            self.audit.say("tool", name=name, done=False)
+        self._seq += 1
+        seq = self._seq
+        self._caller = by
+        try:
+            args = self._admit(name, args, by)
+            if name == "request_review":  # it runs the reviewer: see reviewed_call
+                raise Refused("refused: request_review needs the reviewer, which runs only "
+                              "inside the L2 agent")
+            ok, text = True, getattr(self, name)(**args)
+        except Exception as error:
+            ok, text = False, _failure(error)
+        stopped = self.audit.stopped or self.audit.halted
+        if ok and by == "l2" and stopped and name not in FREE:  # e.g. during a launch
+            text += (f"\n\nThe audit is stopping: {stopped}. No new experiment starts; "
+                     "conclude: call " + ("request_review, then end_audit."
+                                          if self.needs_review else "end_audit."))
+        number = self._trace(name, args, ok, text, seq, by)
+        if by == "l2":
+            self.audit.say("tool", name=name, done=True, ok=ok,
+                           first_line=(text.strip().splitlines() or [""])[0])
+        return ok, text, number
+
+    async def reviewed_call(self, reviewer: Callable[[Tools, dict[str, Any]], Any], /,
+                            **args: Any) -> tuple[bool, str, int]:
+        """``request_review``: check the draft's claims, run ``reviewer`` on the draft (an
+        async function returning ``{"critique", "calls", "cost_usd", "stopped"}``), and
+        record the review. Numbered like any call; the reviewer's own calls come after
+        it in ``trace.jsonl``."""
         self._seq += 1
         seq = self._seq
         try:
-            if name not in TOOLS:
-                raise Refused(f"unknown tool {name!r}")
-            if self.audit.ended and name != "budget":
-                raise Refused("refused: the audit has ended")
+            args = self._admit("request_review", args, "l2")
+            draft = self._draft(**args)
+        except Exception as error:  # nothing was reviewed: L2 can fix its draft
+            ok, text = False, _failure(error)
+            return ok, text, self._trace("request_review", args, ok, text, seq)
+        try:
+            found = await reviewer(self, draft)
+        except Exception as error:  # recorded as a review, so the audit can still end
+            found = {"critique": "", "calls": [], "cost_usd": 0.0,
+                     "stopped": f"the reviewer failed: {type(error).__name__}: {error}"}
+        text = self._record_review(seq, draft, found)
+        number = self._trace("request_review", args, True, text, seq)
+        self.audit.say("tool", name="request_review", done=True, ok=True,
+                       first_line=(text.strip().splitlines() or [""])[0])
+        return True, text, number
+
+    def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
+        """The call's arguments if it may run now; ``Refused`` if not."""
+        if name not in TOOLS:
+            raise Refused(f"unknown tool {name!r}")
+        if by == "reviewer" and name not in READ:
+            raise Refused(f"refused: the reviewer can use only {', '.join(READ)}")
+        if self.audit.ended and name != "budget":
+            raise Refused("refused: the audit has ended")
+        if by != "reviewer":
+            if self.review is not None and name in (*MAKES, "request_review"):
+                raise Refused("refused: the review is done, so the audit can only end now: "
+                              "revise your claims and conclusions and call end_audit")
             stopped = self.audit.stopped
             if stopped and name not in FREE:
-                raise Refused(f"refused: {stopped}. Only budget and end_audit run now: "
-                              "call end_audit with your conclusions.")
-            if name == "scores" and args.get("scorer") is None:
-                # The brief's measure, so L2 never has to name it (and the trace and
-                # report record which scorer was read).
-                args = {**args, "scorer": self.measure_scorer(
-                    _ids(args.get("variant_ids", []))
-                    + ([args["against"]] if args.get("against") else []))}
-            ok, text = True, getattr(self, name)(**args)
-        except Refused as error:
-            ok, text = False, str(error)
-        except Exception as error:  # a bug or a bad argument: L2 sees it, the audit goes on
-            ok, text = False, f"error: {type(error).__name__}: {error}"
-        return ok, text, self._trace(name, args, ok, text, seq)
+                raise Refused(f"refused: {stopped}. Only budget, request_review and end_audit "
+                              "run now: conclude.")
+        if name == "scores" and args.get("scorer") is None:
+            # The brief's measure, so L2 never has to name it (and the trace and
+            # report record which scorer was read).
+            args = {**args, "scorer": self.measure_scorer(
+                _ids(args.get("variant_ids", []))
+                + ([args["against"]] if args.get("against") else []))}
+        return args
 
     def _trace(self, name: str, args: dict[str, Any], ok: bool, text: str,
-               seq: int | None = None) -> int:
+               seq: int | None = None, by: str = "l2") -> int:
         """Record a call in ``trace.jsonl``; its number (``seq``, a new one if not given).
         The row keeps the result's sha256, since a long result is cut in the row."""
         if seq is None:
@@ -219,15 +291,19 @@ class Tools:
                "result": text if len(text) <= TRACE_CHARS else
                text[:TRACE_CHARS] + f"… [{len(text) - TRACE_CHARS} more characters]",
                "spent_usd": budget["spent_usd"], "remaining_usd": budget["remaining_usd"]}
+        if by != "l2":
+            row["by"] = by
         with (self.audit.out / "trace.jsonl").open("a") as file:
             file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
         return seq
 
     def trace(self) -> list[dict[str, Any]]:
+        """``trace.jsonl`` in call order (a review's row is written after the reviewer's
+        calls, which it started)."""
         path = self.audit.out / "trace.jsonl"
         if not path.exists():
             return []
-        return _jsonl(path)
+        return sorted(_jsonl(path), key=lambda row: row.get("seq", 0))
 
     # ------------------------------------------------------------- results
     def results(self) -> Results:
@@ -302,7 +378,9 @@ class Tools:
 
     # ---------------------------------------------------------------- tools
     def run_experiment(self, variants: str | list[Any], epochs: int,
-                       confirm: bool = False) -> str:
+                       rationale: str | None = None, confirm: bool = False) -> str:
+        """``rationale`` is required; the audit refuses a launch without one, and records
+        the refusal like any other."""
         raw = variants
         if isinstance(variants, str):
             try:
@@ -334,13 +412,14 @@ class Tools:
                 for i, (_, _, found) in zip(built, checked, strict=True):
                     problems[i] += list(found.rejections)
             result = self.audit.record_rejection(list(zip(names, problems, strict=True)),
-                                                 epochs, confirm)
+                                                 epochs, confirm, rationale=rationale)
             self._propose(entries, "rejected", None, [
                 {"status": "rejected" if problems[i] else "accepted",
                  "problems": problems[i]} for i in range(len(entries))])
             raise Refused(self._launch_text(result))
         try:
-            result = self.audit.launch(list(built.values()), epochs, confirm)
+            result = self.audit.launch(list(built.values()), epochs, confirm,
+                                       rationale=rationale)
         except Exception as error:
             self._propose(entries, "error", None, [
                 {"problems": [f"{type(error).__name__}: {error}"]}] * len(entries))
@@ -401,7 +480,12 @@ class Tools:
                 + (f" Run budget: ${b['by_kind']['experiments']:.4f} of "
                    f"${b['run_budget_usd']:.2f} spent on runs." if b["run_budget_usd"]
                    is not None else "")
-                + (f" STOPPED: {b['stopped']}." if b["stopped"] else ""))
+                + (f" Time: {max(b['time_left_s'], 0) / 60:.1f} min left of "
+                   f"{b['time_limit_s'] / 60:.1f} min ({b['time_reserve_s'] / 60:.1f} min "
+                   "held back for your report)." if b["time_limit_s"] is not None else "")
+                + (f" STOPPED: {b['stopped']}." if b["stopped"] else "")
+                + (f" STOPPING: {b['halted']}; no new experiment starts: conclude."
+                   if b["halted"] and not b["stopped"] else ""))
 
     def variant_rows(self) -> list[dict[str, Any]]:
         """Every variant run so far: experiment, base, its changes, status, epochs."""
@@ -474,7 +558,23 @@ class Tools:
             raise Refused("against needs at least one other variant to compare with it")
         table = self.score_table([*ids, against], scorer, field)
         return "\n\n".join([table, *(self.compare(vid, against, scorer, rounds, field)
+                                      + self._figure(vid, against, scorer, rounds, field)
                                       for vid in ids)])
+
+    def _figure(self, a: str, b: str, scorer: str, rounds: int | None,
+                field: str | None) -> str:
+        """Draw the comparison for the write-up (spec §6.6); the line that names it."""
+        if self._caller == "reviewer":  # the reviewer reads; the write-up is L2's
+            return ""
+        name = figures.figure_name(a, b, scorer, field, rounds)
+        measure = scorer + (f".{field}" if field else "") + (
+            f" up to round {rounds}" if rounds is not None else "")
+        try:
+            compared = self.results().compare(a, b, scorer, rounds=rounds, field=field)
+            figures.compare_figure(compared, a, b, measure, self.audit.out / name)
+        except Exception as error:  # a figure never fails the comparison
+            return f"\n(No figure: {type(error).__name__}: {error})"
+        return f"\nFigure: {name} (embed it in your write-up as ![caption]({name}))"
 
     def _field(self, results: Results, ids: Sequence[str], field: str) -> None:
         """``field`` must be one of the outcome's fields in these variants' runs."""
@@ -710,36 +810,127 @@ class Tools:
                                                        for k, v in b["by_experiment"].items()))
         return "\n".join(lines)
 
-    def end_audit(self, conclusions: str, claims: Any = None) -> str:
-        """``claims`` (a list, or its JSON) are checked before anything ends: malformed
-        claims or citations are refused, so L2 can fix them. ``None`` (no claims given)
-        is kept for callers that predate them; the report says nothing was checked."""
+    def _checked(self, conclusions: Any, claims: Any) -> list[dict[str, Any]] | None:
+        """The claims with their verdicts (``None`` if none were given); ``Refused`` if
+        the conclusions are empty or a claim or citation is malformed."""
         if not isinstance(conclusions, str) or not conclusions.strip():
             raise Refused("conclusions are required: what can and cannot be concluded, the "
                           "search counts, and where you departed from the guidance")
-        checked = None
-        if claims is not None:
-            try:
-                parsed = claims_.parse_claims(claims, self)
-            except claims_.ClaimError as error:
-                raise Refused(str(error)) from error
-            checked = claims_.check_claims(self, parsed)
+        if claims is None:
+            return None
+        try:
+            parsed = claims_.parse_claims(claims, self)
+        except claims_.ClaimError as error:
+            raise Refused(str(error)) from error
+        return claims_.check_claims(self, parsed)
+
+    def _draft(self, conclusions: str, claims: Any, writeup: str | None = None
+               ) -> dict[str, Any]:
+        """L2's draft for the reviewer: its conclusions, its claims with their verdicts, and
+        its write-up."""
+        checked = self._checked(conclusions, [] if claims is None else claims)
+        return {"conclusions": conclusions.strip(), "claims": checked,
+                "writeup": self._writeup(writeup)}
+
+    def _writeup(self, writeup: Any) -> str | None:
+        """The write-up (spec §6.6), if one is given. Never refused: a problem in it must
+        not cost the audit its claims; embeds that do not resolve are flagged instead
+        (``broken_embeds``)."""
+        if not isinstance(writeup, str) or not writeup.strip():
+            return None
+        return writeup.strip()
+
+    def broken_embeds(self, writeup: str | None) -> list[str]:
+        """Images the write-up embeds that are not a file in the audit directory, by a
+        path relative to it (so the write-up still shows its figures once moved)."""
+        out = self.audit.out.resolve()
+        broken = []
+        for token in MarkdownIt().parse(writeup or ""):
+            for child in token.children or []:
+                if child.type != "image":
+                    continue
+                src = urllib.parse.unquote(str(child.attrGet("src") or ""))
+                path = (out / src).resolve()
+                if (Path(src).is_absolute() or "://" in src or not path.is_relative_to(out)
+                        or not path.is_file()):
+                    broken.append(src)
+        return broken
+
+    def _embeds_note(self, writeup: str | None) -> str:
+        broken = self.broken_embeds(writeup)
+        return (f" Note: the write-up embeds images that are not files in the audit directory "
+                f"(by a relative path), so they will not show: {broken}." if broken else "")
+
+    def _record_review(self, seq: int, draft: dict[str, Any], found: dict[str, Any]) -> str:
+        """Save the review in ``review.json``; the text L2 sees."""
+        critique = str(found.get("critique") or "").strip()
+        self.review = {"call": seq, "draft": draft, "critique": critique,
+                       "reviewer_calls": list(found.get("calls", [])),
+                       "cost_usd": found.get("cost_usd", 0.0), "stopped": found.get("stopped"),
+                       "response": None}
+        self._save_review()
+        stopped = found.get("stopped")
+        return "\n".join([
+            f"Your draft's claims, as the checker read them: {claims_.summary(draft['claims'])}."
+            + self._embeds_note(draft.get("writeup")),
+            "", "The reviewer's critique"
+            + (f" (it stopped early: {stopped})" if stopped else "") + ":", "",
+            critique or "(the reviewer gave no critique)", "",
+            "Now revise once and end the audit: call end_audit with your final conclusions "
+            "and claims, and with response: what you changed in answer to the review and "
+            "why, or why you kept a point as it was. No new experiment or scenario can be "
+            "made now."])
+
+    def _save_review(self) -> None:
+        (self.audit.out / "review.json").write_text(
+            json.dumps(self.review, indent=2, sort_keys=True, default=str) + "\n")
+
+    def end_audit(self, conclusions: str, claims: Any = None, response: str | None = None,
+                  writeup: str | None = None) -> str:
+        """``claims`` (a list, or its JSON) are checked before anything ends: malformed
+        claims or citations are refused, so L2 can fix them. ``None`` (no claims given)
+        is kept for callers that predate them; the report says nothing was checked. When
+        the audit has a reviewer, the review comes first (``request_review``), and
+        ``response`` says how L2 answered it."""
+        if self.needs_review and self.review is None:
+            raise Refused("refused: first call request_review with your draft conclusions and "
+                          "claims; an adversarial reviewer reads them, then you revise them "
+                          "once and end the audit")
+        if self.review is not None and (not isinstance(response, str) or not response.strip()):
+            raise Refused("response is required: what you changed in answer to the review and "
+                          "why, or why you kept a point as it was")
+        checked = self._checked(conclusions, claims)
+        self.writeup = self._writeup(writeup)
         self.conclusions, self.claims = conclusions.strip(), checked
+        if self.review is not None:
+            self.review["response"] = response.strip()
         saved = self.audit.out / "claims.json"
         try:
             if checked is not None:
                 saved.write_text(json.dumps(checked, indent=2, sort_keys=True, default=str)
                                  + "\n")
+            if self.review is not None:
+                self._save_review()
             if self.on_end is not None:
                 self.on_end(self)
         except Exception:
-            self.conclusions = self.claims = None  # not ended: L2 can call end_audit again
+            self.conclusions = self.claims = self.writeup = None  # not ended: L2 can retry
             saved.unlink(missing_ok=True)  # no verdicts left behind for unrecorded claims
+            if self.review is not None:
+                self.review["response"] = None
             raise
         self.audit.ended = True
         verdicts = ("no claims given, so nothing was checked" if checked is None
                     else f"claims: {claims_.summary(checked)} (see claims.json)")
-        return f"The audit has ended; the report is in report.md. {verdicts}."
+        return (f"The audit has ended; the report is in report.md. {verdicts}."
+                + (" The write-up is in writeup.md." if self.writeup else
+                   " No write-up was given.") + self._embeds_note(self.writeup))
+
+
+def _failure(error: Exception) -> str:
+    """What L2 sees of a refused or failed call (a bug or a bad argument included: the
+    audit goes on)."""
+    return str(error) if isinstance(error, Refused) else f"error: {type(error).__name__}: {error}"
 
 
 def post_ref(post: Mapping[str, Any]) -> int | str:
@@ -897,35 +1088,48 @@ def _positive(value: Any, name: str) -> None:
 
 # ------------------------------------------------------------ Inspect tools
 def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = None,
-                  experiments: bool = True, scenarios: bool = True) -> list[Tool]:
+                  experiments: bool = True, scenarios: bool = True,
+                  review: Callable[[Tools, dict[str, Any]], Any] | None = None,
+                  by: str = "l2") -> list[Tool]:
     """The tools as Inspect tools for an agent. ``spend`` gives L2's own spend so far
     (``transcript_spend``); it is read before every call so the hard stop sees it.
     ``experiments=False`` leaves out ``run_experiment`` (an analysis-only audit), and
-    ``scenarios=False`` leaves out ``write_scenario`` (``Audit.writes_scenarios``). A
-    refused call raises ``ToolError``, so a refused ``end_audit`` never ends the agent."""
+    ``scenarios=False`` leaves out ``write_scenario`` (``Audit.writes_scenarios``).
+    ``review`` (the reviewer, ``agent.reviewer``) adds ``request_review``. ``by="reviewer"``
+    gives the reviewer's tools: the query tools only (``READ``). A refused call raises
+    ``ToolError``, so a refused ``end_audit`` never ends the agent."""
 
-    async def call(name: str, /, **args: Any) -> str:
-        if spend is not None:
-            try:
-                tools.audit.set_l2_spend(spend())
-            except Exception as error:  # e.g. no price for L2's model: never run blind
-                if name != "end_audit":
-                    text = (f"refused: L2's own spend cannot be read ({error}); call "
-                            "end_audit with your conclusions.")
-                    seq = tools._trace(name, args, False, text)
-                    raise ToolError(f"[call {seq}] {text}") from error
-        if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
-            ok, text, seq = await anyio.to_thread.run_sync(
-                partial(tools.numbered_call, name, **args))
-        else:
-            ok, text, seq = tools.numbered_call(name, **args)
+    def refresh(name: str, args: dict[str, Any]) -> None:
+        if spend is None:
+            return
+        try:
+            tools.audit.set_l2_spend(spend())
+        except Exception as error:  # e.g. no price for L2's model: never run blind
+            if name != "end_audit":
+                text = (f"refused: L2's own spend cannot be read ({error}); "
+                        + ("submit your critique." if by == "reviewer" else
+                           "call end_audit with your conclusions."))
+                seq = tools._trace(name, args, False, text, by=by)
+                raise ToolError(f"[call {seq}] {text}") from error
+
+    def answer(ok: bool, text: str, seq: int) -> str:
         if not ok:  # numbered too: a launch that failed partway still holds runs
             raise ToolError(f"[call {seq}] {text}")
         return f"[call {seq}] {text}"
 
+    async def call(name: str, /, **args: Any) -> str:
+        refresh(name, args)
+        if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
+            ok, text, seq = await anyio.to_thread.run_sync(
+                partial(tools.numbered_call, name, by, **args))
+        else:
+            ok, text, seq = tools.numbered_call(name, by, **args)
+        return answer(ok, text, seq)
+
     @tool
     def run_experiment() -> Tool:
-        async def execute(variants: str, epochs: int, confirm: bool = False) -> str:
+        async def execute(variants: str, epochs: int, rationale: str,
+                          confirm: bool = False) -> str:
             """Run an experiment: some variants, each for the same number of epochs.
 
             Nothing runs if any variant is rejected; the rejections are returned. If the
@@ -949,10 +1153,13 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     mutations and inner with these mutations added (an inner given
                     replaces the control's).
                 epochs: Runs of each variant (the same for every variant).
+                rationale: Why this experiment, now: what the last results showed (for
+                    the first experiment, what you start from) and why this experiment
+                    comes next. Each variant's own rationale says why it is in it.
                 confirm: Launch even if the estimate exceeds what is left.
             """
             return await call("run_experiment", variants=variants, epochs=epochs,
-                              confirm=confirm)
+                              rationale=rationale, confirm=confirm)
         return execute
 
     @tool
@@ -967,7 +1174,9 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             build_team for the team, Probe for a private question; an outcome function if
             a scorer reads the tools' record); team_setup's defaults are the Northwind
             migration team, and its arguments set any other team (org, setting, personas,
-            channels, roster, round_order, output_agent). make ignores its argument: the
+            channels, roster, round_order, output_agent); a tool of the scenario may end
+            the run before its schedule is done with end_run(reason), e.g. when a deal
+            passes. make ignores its argument: the
             module sets its agents' models itself, each one in the price table. The
             Scenario's name (and base) must be the name given here, and its team the
             TeamSetup its task was built from. A name that already has runs cannot be
@@ -1068,7 +1277,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             runs.jsonl (one row per
             variant: its recorded variant and its eval log paths, relative to that
             directory, one per epoch). Read the logs with inspect_ai.log.read_eval_log
-            (each has one sample, with its scores and store); pandas is available.
+            (each has one sample, with its scores and store); pandas and matplotlib are
+            available (save figures for your write-up under figures/).
             There are no API keys, so model calls fail. It is stopped after 60
             seconds, and output past 3500 characters is cut: print what you need.
 
@@ -1101,12 +1311,36 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
         return execute
 
     @tool
+    def request_review() -> Tool:
+        async def execute(conclusions: str, claims: str | list[dict[str, Any]],
+                          writeup: str) -> str:
+            """Before ending the audit, have an adversarial reviewer read your draft
+            conclusions, claims and write-up (once). The claims are first checked against
+            the logs, as end_audit checks them, and the reviewer sees their verdicts; it
+            can read the runs with the query tools but runs nothing, and its calls are
+            paid from the budget. You get its critique, then revise once with end_audit.
+            After the review no new experiment or scenario can be made.
+
+            Args:
+                conclusions: Your draft conclusions, as you would give them to end_audit.
+                claims: Your draft claims, in end_audit's format.
+                writeup: Your draft write-up, in end_audit's format.
+            """
+            args = {"conclusions": conclusions, "claims": claims, "writeup": writeup}
+            refresh("request_review", args)
+            return answer(*await tools.reviewed_call(review, **args))
+        return execute
+
+    @tool
     def end_audit() -> Tool:
-        async def execute(conclusions: str, claims: str | list[dict[str, Any]]) -> str:
+        async def execute(conclusions: str, claims: str | list[dict[str, Any]],
+                          writeup: str, response: str | None = None) -> str:
             """End the audit with your conclusions and claims; this writes the report and
             stops you. Each claim is checked against the logs and gets a verdict (checked,
             lead, contradicted, invalid or unchecked) in the report. Malformed claims or
-            citations are refused, and nothing ends until they are fixed.
+            citations are refused, and nothing ends until they are fixed. If
+            request_review is among your tools, call it first: end_audit is then your
+            one revision.
 
             Args:
                 conclusions: What can and cannot be concluded, your mode and the measures
@@ -1114,11 +1348,28 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     comparisons tried), where you departed from the reading guidance, and
                     limitations. Your findings go in claims; prose here is read as
                     interpretation, not checked.
+                response: After a review (required then): what you changed in answer to
+                    the reviewer's critique and why, or why you kept a point as it was.
+                writeup: The audit's write-up in markdown, for a reader who was not
+                    here: a results report, not a log (written to writeup.md, under a
+                    table of the audit's facts the harness adds: question, budget and
+                    spend, time, experiments, how it ended). Lead with the answer in a
+                    few sentences; then the setup (a table); the results (tables of k of
+                    n, and figures); what the results do and do not show; how the audit
+                    went, including your own mistakes; limitations; next steps. Every
+                    number must come from a tool result. Embed figures with
+                    ![caption](figures/<file>.png): every scores call with against draws
+                    one and names its file; make others with run_python (matplotlib) and
+                    save them under figures/.
                 claims: A JSON list of your findings ([] if you claim nothing). Each is
                     {"text": the claim in words, "kind", its fields, "evidence": a list
                     of references}. A reference is {"call": N} (the [call N] before a tool
                     result) or {"variant", "epoch", "post": S (from "post S"), "quote":
-                    words in that post, at least 3}. Kinds and fields:
+                    words in that post, at least 3}. Only calls that read the runs are
+                    evidence: scores, transcript, find, run_python and list_runs, the
+                    reviewer's included; request_review (the critique) is not, so for a
+                    point the reviewer raised, cite the reviewer's call that shows it.
+                    Kinds and fields:
                     "difference": "a", "b", "target", "direction" ("higher" or "lower":
                     a's rate against b's), citing the scores call with against that
                     compared them; "no_difference": "a", "b", "target", citing the same;
@@ -1130,14 +1381,17 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     claim's text must be its own counts (e.g. the two sides of its
                     comparison for its target).
             """
-            return await call("end_audit", conclusions=conclusions, claims=claims)
+            return await call("end_audit", conclusions=conclusions, claims=claims,
+                              writeup=writeup, response=response)
         return execute
 
+    if by == "reviewer":
+        return [list_runs(), scores(), transcript(), find()]
     made = [list_runs(), scores(), transcript(), find(), run_python(),
-            note_decision(), budget(),
-            end_audit()]
+            note_decision(), budget()]
     return (([run_experiment()] if experiments else [])
-            + ([write_scenario()] if scenarios else []) + made)
+            + ([write_scenario()] if scenarios else []) + made
+            + ([request_review()] if review is not None else []) + [end_audit()])
 
 
 def transcript_spend(prices: Mapping[str, tuple[float, float]] = PRICES) -> dict[str, Any]:

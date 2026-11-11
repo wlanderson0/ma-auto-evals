@@ -57,16 +57,32 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   puts them on several different models, which run without them; each experiment's
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
-  the machine awake. `--time-limit <seconds>` ends it cleanly earlier.
+  the machine awake.
+- To stop it early with a report, press Ctrl-C once: the experiment running now
+  finishes, then L2 has its draft reviewed and writes its report. Ctrl-C twice stops at
+  once (the ledger and report are still written).
+- `--time-limit <seconds>` (or `time_limit` in the brief) bounds the audit's runs: once
+  only its last 10% is left, no new experiment or epoch starts and L2 concludes in that
+  time (it may run a little over, but always ends with a report). A long audit can take hours, so set one when it matters.
+- While it runs, a live status panel redraws in place: what is running now and for how
+  long (L2 thinking, a tool call, or an experiment's epoch), the time since the start,
+  the spend against the budget (L2's own calls and the runs separately), how many
+  experiments, epochs and tool calls are done, and the last few events. When the output
+  is not a terminal (piped or logged), it prints one timestamped line per event instead,
+  e.g. `[14:02:31 +12m05s] exp-2 epoch 1/3: running; spent $0.4120 of $3.00 (L2 $0.1830,
+  runs $0.2290)`. `--quiet` shows neither.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
-The audit directory holds `report.md` (L2's claims with their verdicts, its conclusions,
-the tables they rest on, every variant and experiment), `claims.json` (each claim with its
-evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every tool call),
+The audit directory holds `writeup.md` (L2's write-up: a results report with tables and
+figures, under a table of the audit's facts; start here), `figures/`, `report.md` (L2's claims with their verdicts, its conclusions,
+the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
+evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
 
 ## 3. Read it critically
 
+- Read `writeup.md` for the story, then check it against `report.md`: the write-up is
+  L2's own and unchecked (the reviewer read its draft), the claims are checked.
 - Start from the claims at the top of `report.md`. Each was read again from the logs
   (spec §6.4): only *checked* claims are findings; a *lead* falls short (e.g. not told
   apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
@@ -77,6 +93,10 @@ evidence and the checker's reasons), `ledger.json` (spend), `trace.jsonl` (every
   per variant); for each cited post, its log, message id, sender and text. On Cosmos,
   samples are filed by the variant's built name (`<base>--<variant>`), condition and
   epoch; find a post there by its text, since Cosmos numbers messages itself.
+- Read the review in the report: before the audit ended, an adversarial reviewer read
+  L2's draft claims and conclusions (with the checker's verdicts) and could query the
+  runs; L2 then revised once and said how it answered. A point L2 dismissed is worth
+  checking yourself. The draft is in `review.json`.
 - Check that a comparison's variants ran in the same experiment, with the same epochs.
 - Read a few transcripts (on Cosmos, below) before trusting a measure.
 

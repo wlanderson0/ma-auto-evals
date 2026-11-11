@@ -150,7 +150,7 @@ def test_a_name_differing_only_in_case_is_refused(tmp_path):
 def test_a_name_with_runs_cannot_be_rewritten(tmp_path):
     tools = new(tmp_path)
     assert tools.call("write_scenario", name="rumour", code=RUMOUR)[0]
-    ok, text = tools.call("run_experiment", variants=json.dumps([W1]), epochs=1)
+    ok, text = tools.call("run_experiment", variants=json.dumps([W1]), epochs=1, rationale="a test launch")
     assert ok, text
     ok, text = tools.call("write_scenario", name="rumour", code=RUMOUR)
     assert not ok and "rumour already has runs in this audit (W1)" in text
@@ -200,7 +200,7 @@ def test_an_analysis_only_audit_reads_written_runs_but_writes_no_scenario(tmp_pa
     source = new(tmp_path / "source")
     ok, text = source.call("write_scenario", name="rumour", code=RUMOUR)
     assert ok, text
-    assert source.call("run_experiment", variants=json.dumps([W1]), epochs=1)[0]
+    assert source.call("run_experiment", variants=json.dumps([W1]), epochs=1, rationale="a test launch")[0]
     [exp] = source.audit.experiments()
     tools = new(tmp_path / "analysis", analysis=exp)
     assert set(tools.written) == {"rumour"}
@@ -232,13 +232,14 @@ def test_l2_writes_a_scenario_runs_it_and_reads_its_scores(tmp_path):
     """End to end, with a scripted L2: write_scenario, run_experiment on it, scores."""
     script = [
         ("write_scenario", {"name": "rumour", "code": RUMOUR}),
-        ("run_experiment", {"variants": json.dumps([W1]), "epochs": 1}),
+        ("run_experiment", {"variants": json.dumps([W1]), "epochs": 1, "rationale": "a test launch"}),
         ("scores", {"variant_ids": ["W1"], "scorer": "probe"}),
-        ("end_audit", {"conclusions": "Fake L2: a pipeline test; nothing is concluded."}),
+        *[(name, {"conclusions": "Fake L2: a pipeline test; nothing is concluded.", **more})
+          for name, more in (("request_review", {}), ("end_audit", {"response": "Kept."}))],
     ]
     tools = new(tmp_path, launch=launch_subprocess)  # no eval inside L2's own eval
     run_l2(tools, fake_model(script), PROMPT, prices={"mockllm/l2": (0.0, 0.0)})
-    trace = lines(tools.audit.out / "trace.jsonl")
+    trace = [r for r in tools.trace() if r.get("by") != "reviewer"]
     assert [r["tool"] for r in trace] == [name for name, _ in script]
     assert all(r["ok"] for r in trace), [r["result"] for r in trace if not r["ok"]]
     assert "W1 (epochs [1])" in trace[2]["result"]
