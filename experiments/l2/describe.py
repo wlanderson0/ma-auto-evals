@@ -21,7 +21,9 @@ def describe_scenario(name: str, mock: bool,
     lines = [f"## {name} ({scenario.property})", ""]
     if scenario.team is None:
         lines += ["Not parameterised yet: no ready-made change applies to it.", ""]
-    lines += [f"- Seat: {scenario.seat}. Targets (measured): {', '.join(scenario.targets)}.",
+    seat = (scenario.seat if scenario.seat is not None
+            else "none (runs only as baseline; every target is measured as is)")
+    lines += [f"- Seat: {seat}. Targets (measured): {', '.join(scenario.targets)}.",
               f"- Task, given to every agent: {task['dataset'][0].input}",
               f"- Schedule: {schedule(scenario)}", "- Channels:"]
     lines += [f"  - #{c.id}: read by {', '.join(c.readers)}; written by {', '.join(c.writers)}"
