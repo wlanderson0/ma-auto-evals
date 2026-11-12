@@ -19,6 +19,7 @@ from inspect_ai.model import GenerateConfig
 
 from experiments.l2.brief import parse_brief
 from experiments.l2.experiment import (
+    REASONING_MAX_TOKENS,
     RUN_CONFIG,
     estimate,
     launch_subprocess,
@@ -284,6 +285,8 @@ def test_agents_on_several_models_get_the_run_config_on_every_call(tmp_path, mon
     agents = [e for e in sample.events if e.event == "model" and e.role is None]
     assert agents and {e.config.reasoning_effort for e in agents} == {"high"}
     assert 1500 in {e.config.max_tokens for e in agents}
+    # alice reasons (gpt-5-nano): her replies get the larger cap
+    assert REASONING_MAX_TOKENS in {e.config.max_tokens for e in agents}
 
 
 def test_a_budget_stop_leaves_every_variant_at_the_same_epoch(tmp_path):

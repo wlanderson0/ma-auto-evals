@@ -36,6 +36,7 @@ read what each target did with them from the final branch's store.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -44,7 +45,7 @@ from typing import Any
 from inspect_ai.dataset import Sample
 from inspect_ai.model import GenerateConfig
 from inspect_ai.tool import Tool, ToolDef, ToolError, tool
-from inspect_ai.util import Store, StoreModel, store, store_as
+from inspect_ai.util import JSONSchema, Store, StoreModel, store, store_as
 from orbit import (
     AgentSpec,
     ChannelConfig,
@@ -600,6 +601,49 @@ def message_limit(team: TeamSetup, agent: str) -> int:
     return max(50, 4 * turns + 10)
 
 
+LENIENT_TYPES = ("boolean", "integer", "number", "array", "object")
+"""Argument types a scenario tool also takes as a string (``lenient``)."""
+
+
+def lenient(made: Tool) -> Tool:
+    """``made``, also taking a boolean, number, list or object argument written as a
+    string: ``"true"``, ``"3"``, ``'["A", "B"]'``. Some models send every argument as a
+    string (llama-3.3-70b's votes were all refused for ``'true' is not of type
+    'boolean'``), which made them fail the game's format rather than play it. Such a
+    string is read as JSON before the tool's own checks; any other value is checked as
+    before, with the same errors."""
+    from inspect_ai.model._call_tools import tool_params, validate_tool_input
+
+    original = ToolDef(made)
+    loose = {name: param.model_copy(update={"anyOf": [param.model_copy(update={
+                 "description": None}), JSONSchema(type="string")], "type": None})
+             if param.type in LENIENT_TYPES else param
+             for name, param in original.parameters.properties.items()}
+
+    async def execute(**kwargs: Any) -> Any:  # named so Inspect passes them as they came
+        read = {name: _from_string(value, original.parameters.properties.get(name))
+                for name, value in kwargs.items()}
+        problems = validate_tool_input(read, original.parameters)
+        if problems:
+            raise ToolError(problems)
+        return await original.tool(**tool_params(read, original.tool))
+
+    return ToolDef(execute, name=original.name, description=original.description,
+                   parameters=original.parameters.model_copy(update={"properties": loose}),
+                   parallel=original.parallel, viewer=original.viewer,
+                   model_input=original.model_input, max_output=original.max_output,
+                   options=original.options).as_tool()
+
+
+def _from_string(value: Any, param: JSONSchema | None) -> Any:
+    if param is None or param.type not in LENIENT_TYPES or not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value.strip().lower() if param.type == "boolean" else value)
+    except ValueError:
+        return value
+
+
 def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     """A team's ``audit_task`` kwargs; by default the Northwind platform team migrating
     the admin panel.
@@ -640,7 +684,7 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
             ],
             **({} if team.time_limit is None else {"max_time_seconds": team.time_limit})),
         dataset=[Sample(input=team.task)],
-        tool_bindings={binding: ToolFactory(lambda ctx, make=make: make(ctx.agent_name))
+        tool_bindings={binding: ToolFactory(lambda ctx, make=make: lenient(make(ctx.agent_name)))
                        for binding, make in team.tools.items()},
         token_limit=2_000_000, time_limit=900 if team.time_limit is None else team.time_limit,
     )
