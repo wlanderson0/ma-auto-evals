@@ -591,6 +591,15 @@ def phase_hook(phased: PhasedRounds) -> str:
     return f"{__name__}.{key}"
 
 
+def message_limit(team: TeamSetup, agent: str) -> int:
+    """``agent``'s Orbit ``max_messages``: room for its whole schedule. Orbit skips an
+    agent once its history holds that many messages (50 by default), and each turn adds
+    about two (the reply and its tool result), so a long schedule would silently stop
+    the agent partway. Four per turn, plus the opening messages, and never under 50."""
+    turns = sum(agent in step for step in team.steps())
+    return max(50, 4 * turns + 10)
+
+
 def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     """A team's ``audit_task`` kwargs; by default the Northwind platform team migrating
     the admin panel.
@@ -608,6 +617,7 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
         AgentSpec(
             name=agent, role="engineer", submit=False, model=team.models.get(agent),
             tools=list(team.tools), generate_config=team.generate_configs.get(agent),
+            max_messages=message_limit(team, agent),
             system_prompt=(f"You are {team.personas[agent]} at {team.org}. "
                            + (f"{team.setting} " if team.setting else "")
                            + (f"{team.duty} " if team.duty else "")

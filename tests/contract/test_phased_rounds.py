@@ -245,3 +245,11 @@ def test_a_missing_vote_still_resolves_the_round(tmp_path):
     log = run(tmp_path, script)
     assert referee_posts(log)[2] == "Round 1: no deal (votes [False, None])."
     assert sample(log).store[RUN_END_KEY] == "deal in round 2"
+
+
+def test_a_long_game_runs_every_round_without_hitting_the_message_limit(tmp_path):
+    """Ten rounds of three phases is 30 turns per player, about 60 messages each: past
+    Orbit's default limit of 50, which used to skip both players from round 9 on."""
+    log = run(tmp_path, honest(accept_in=None), rounds=10)
+    assert speakers(log) == list(PLAYERS) * 30
+    assert referee_posts(log)[-1] == "Round 10: no deal (votes [False, False])."
