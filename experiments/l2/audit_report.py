@@ -119,8 +119,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     everything = tools.trace()
     trace = [row for row in everything if row.get("by") != "reviewer"]  # L2's own search
     out = [f"# L2 audit report: {audit.out.name}", ""]
-    status = ("ended by L2 (end_audit)" if tools.conclusions is not None else
-              f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}")
+    status = how_it_ended(tools, why_no_conclusions)
     where = (f"Analysis only, on the runs in {audit.analysis}." if audit.analysis else
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
@@ -730,6 +729,17 @@ def relink(out: Path) -> Path:
     return report
 
 
+def how_it_ended(tools: Tools, why_no_conclusions: str | None = None) -> str:
+    """The audit's ending, for the report and the write-up: by L2, by the harness with
+    L2's reviewed draft, or not at all."""
+    if tools.ended_by_harness is not None:
+        return ("ended by the harness with L2's reviewed draft, not revised after the "
+                f"review ({tools.ended_by_harness})")
+    if tools.conclusions is not None:
+        return "ended by L2 (end_audit)"
+    return f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}"
+
+
 def write_report(tools: Tools, why_no_conclusions: str | None = None) -> Path:
     write_writeup(tools, why_no_conclusions)  # first: the report's record lists it
     path = tools.audit.out / "report.md"
@@ -774,18 +784,22 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
         ("Runs (variant × epochs run)",
          ("analysis only, of " + str(audit.analysis) + ": " if audit.analysis else "")
          + ("; ".join(f"{exp}: {', '.join(rows)}" for exp, rows in ran.items()) or "none")),
-        ("How it ended", "L2 ended the audit" if tools.conclusions is not None else
-         f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}"),
+        ("How it ended", "L2 ended the audit"
+         if tools.conclusions is not None and tools.ended_by_harness is None
+         else how_it_ended(tools, why_no_conclusions)),
         ("Stopped", b["stopped"] or b["halted"] or "no"),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),
     ]
-    why_draft = ("gave no final write-up" if tools.conclusions is not None
+    why_draft = ("did not end the audit, so the harness ended it with its reviewed draft"
+                 if tools.ended_by_harness is not None else
+                 "gave no final write-up" if tools.conclusions is not None
                  else "did not end the audit")
+    draft = not final or tools.ended_by_harness is not None
     lines = [f"# {audit.out.name}: L2's write-up", "",
              *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
-                "revised.", ""] if not final else []),
+                "revised.", ""] if draft else []),
              "| | |", "|---|---|", *[f"| {name} | {_cell(value)} |" for name, value in facts],
              "", "The table above is the harness's, from the record. Everything below is "
              "L2's own: its numbers are not checked here; its checked claims, with their "
