@@ -31,8 +31,9 @@ The **audit run** is one more Cosmos run beside the experiments'. Its folder hol
 - L2's outputs as documents (Cosmos spec 16 §4.6), each only when the audit has it:
   ``writeup.md``, byte for byte; the images: every ``.png``, ``.jpg``, ``.jpeg`` and
   ``.webp`` directly under ``figures/``, and any other the write-up embeds by a path
-  inside the audit directory, at the same relative path (at most 400; one over 10 MB is
-  left out with a note); ``report.html``, the audit's ``report.md`` as a page;
+  inside the audit directory, at the same relative path, never one that leads out of it
+  (at most 400, the write-up's own first; one over 10 MB is left out with a note);
+  ``report.html``, the audit's ``report.md`` as a page;
   ``study/writeup.json`` (``{"final", "body_line", "facts": [{"name", "value"}],
   "embeds", "missing"}``: whether the write-up is final, the line of ``writeup.md`` where
   L2's own text starts, the harness's facts above it, the images it embeds and those that
@@ -62,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import re
 import shutil
 from collections.abc import Callable, Mapping, Sequence
@@ -198,11 +200,11 @@ def export_documents(audit: Path, out: Path, say: Callable[[str], None] = print)
         ("writeup.md", lambda: _copy_writeup(audit, out)),
         ("images", lambda: _copy_images(audit, out, say)),
         ("report.html", lambda: (out / "report.html").write_text(audit_report_html(audit))
-         if (audit / "report.md").is_file() else None),
+         if _inside(audit, "report.md") else None),
         ("study/writeup.json", lambda: _write_json(out / "study" / "writeup.json",
                                                    writeup_json(audit))),
         ("study/figures.json", lambda: _write_json(out / "study" / "figures.json",
-                                                   figures_json(audit, out))),
+                                                   figures_json(audit, out, say))),
     ]
     for name, make in parts:
         try:
@@ -217,43 +219,63 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 def _copy_writeup(audit: Path, out: Path) -> None:
-    if (audit / "writeup.md").is_file():
+    if _inside(audit, "writeup.md"):
         shutil.copyfile(audit / "writeup.md", out / "writeup.md")  # byte for byte
 
 
 def images(audit: Path) -> list[str]:
     """The images the audit run carries, by their path relative to the audit: every image
-    directly under ``figures/``, then any other the write-up embeds by a path inside the
-    audit directory (so its links resolve unchanged)."""
+    the write-up embeds by a path inside the audit directory, in its order (so its links
+    resolve unchanged and come first under the limit), then every other image directly
+    under ``figures/``. Only a regular file inside the audit directory is carried: a path
+    or a link that leads out of it never is."""
     from experiments.l2.figures import FIGURES
-    from experiments.l2.tools import embedded, embeds
+    from experiments.l2.tools import embeds
 
     audit = Path(audit)
-    found = sorted(p.relative_to(audit).as_posix() for p in (audit / FIGURES).glob("*")
-                   if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES)
-    writeup = audit / "writeup.md"
-    for src in embeds(writeup.read_text() if writeup.is_file() else None):
-        path = embedded(audit, src)
-        if path is not None and path.suffix.lower() in IMAGE_SUFFIXES:
-            rel = path.relative_to(audit.resolve()).as_posix()
-            if rel not in found:
-                found.append(rel)
-    return found
+    found = embeds((audit / "writeup.md").read_text() if _inside(audit, "writeup.md") else None)
+    found += sorted(f"{FIGURES}/{p.name}" for p in (audit / FIGURES).glob("*"))
+    carried: list[str] = []
+    for src in found:
+        rel = _inside(audit, src)
+        if rel is not None and Path(rel).suffix.lower() in IMAGE_SUFFIXES and rel not in carried:
+            carried.append(rel)
+    return carried
+
+
+def _inside(audit: Path, src: str) -> str | None:
+    """``src`` as a normalised path relative to the audit directory, when it names a
+    regular file inside it (the links on its way resolved); ``None`` otherwise."""
+    if Path(src).is_absolute() or "://" in src or "\\" in src:
+        return None
+    rel = posixpath.normpath(src)
+    if rel in (".", "..") or rel.startswith(("../", "/")):
+        return None
+    root = audit.resolve()
+    path = (root / rel).resolve()
+    return rel if path.is_relative_to(root) and path.is_file() else None
 
 
 def _copy_images(audit: Path, out: Path, say: Callable[[str], None]) -> None:
-    found = images(audit)
-    if len(found) > MAX_IMAGES:
-        say(f"{len(found) - MAX_IMAGES} images left out of the audit run: at most "
-            f"{MAX_IMAGES} are sent ({', '.join(found[MAX_IMAGES:][:5])}, ...)")
-    for rel in found[:MAX_IMAGES]:
-        source = audit / rel
-        if source.stat().st_size > MAX_IMAGE_BYTES:
-            say(f"{rel} left out of the audit run: an image over "
-                f"{MAX_IMAGE_BYTES // 2**20} MB")
-            continue
-        (out / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, out / rel)
+    sent, over = 0, []
+    for rel in images(audit):
+        try:
+            source = (audit / rel).resolve()
+            if source.stat().st_size > MAX_IMAGE_BYTES:
+                say(f"{rel} left out of the audit run: an image over "
+                    f"{MAX_IMAGE_BYTES // 2**20} MB")
+                continue
+            if sent == MAX_IMAGES:
+                over.append(rel)
+                continue
+            (out / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, out / rel)
+            sent += 1
+        except OSError as error:  # one image that cannot be read costs only itself
+            say(f"{rel} left out of the audit run: {type(error).__name__}: {error}")
+    if over:
+        say(f"{len(over)} images left out of the audit run: at most {MAX_IMAGES} are sent "
+            f"({', '.join(over[:5])}{', ...' if len(over) > 5 else ''})")
 
 
 def writeup_json(audit: Path) -> dict[str, Any] | None:
@@ -263,7 +285,7 @@ def writeup_json(audit: Path) -> dict[str, Any] | None:
     from experiments.l2.tools import embedded, embeds
 
     audit = Path(audit)
-    if not (audit / "writeup.md").is_file():
+    if not _inside(audit, "writeup.md"):
         return None
     text = (audit / "writeup.md").read_text()
     kept = audit / "writeup.json"
@@ -289,10 +311,12 @@ def _parts_of(text: str) -> dict[str, Any]:
             "body_line": end + 3, "facts": facts}
 
 
-def figures_json(audit: Path, out: Path) -> list[dict[str, Any]]:
+def figures_json(audit: Path, out: Path,
+                 say: Callable[[str], None] = print) -> list[dict[str, Any]]:
     """``study/figures.json``: one entry per comparison figure the audit run carries, from
     the sidecar ``Tools._figure`` wrote beside it, with ``call``, the trace's first
-    successful ``scores`` call that draws it (``None`` if none is found)."""
+    successful ``scores`` call that draws it (``None`` if none is found). A sidecar that
+    cannot be read is left out with a note."""
     from experiments.l2.figures import FIGURES
 
     audit = Path(audit)
@@ -301,15 +325,18 @@ def figures_json(audit: Path, out: Path) -> list[dict[str, Any]]:
     for sidecar in sorted((audit / FIGURES).glob("*.json")):
         path = sidecar.with_suffix(".png").relative_to(audit).as_posix()
         if not (Path(out) / path).is_file():
-            continue  # the image was left out, or never drawn
-        drawn = json.loads(sidecar.read_text())
-        entries.append({
-            "path": path, **{key: drawn.get(key) for key in
-                             ("a", "b", "scorer", "field", "rounds", "measure")},
-            "call": calls.get(path),
-            "targets": {agent: {side: {key: row[side][key] for key in
-                                       ("k", "n", "incomplete")} for side in ("a", "b")}
-                        for agent, row in drawn["compared"].items()}})
+            continue  # the image was left out, or never drawn: a JSON of L2's own
+        try:
+            drawn = json.loads(sidecar.read_text())
+            entries.append({
+                "path": path, **{key: drawn.get(key) for key in
+                                 ("a", "b", "scorer", "field", "rounds", "measure")},
+                "call": calls.get(path),
+                "targets": {agent: {side: {key: row[side][key] for key in
+                                           ("k", "n", "incomplete")} for side in ("a", "b")}
+                            for agent, row in drawn["compared"].items()}})
+        except Exception as error:  # one sidecar costs only its own entry
+            say(f"{path} left out of study/figures.json: {type(error).__name__}: {error}")
     return entries
 
 
@@ -320,21 +347,21 @@ def figure_calls(audit: Path) -> dict[str, int]:
     from experiments.l2.tools import _ids, _jsonl
 
     calls: dict[str, int] = {}
-    rows = sorted(_jsonl(Path(audit) / "trace.jsonl"), key=lambda row: row.get("seq", 0))
-    for row in rows:
-        args = row.get("args") or {}
+    rows = [row for row in _jsonl(Path(audit) / "trace.jsonl") if isinstance(row, dict)
+            and isinstance(row.get("seq"), int) and isinstance(row.get("args"), dict)]
+    for row in sorted(rows, key=lambda row: row["seq"]):
+        args = row["args"]
         if (row.get("tool") != "scores" or not row.get("ok") or row.get("by") == "reviewer"
                 or not args.get("against")):
             continue
         try:
             ids = _ids(args["variant_ids"])
+            names = [figure_name(a, args["against"], args.get("scorer"), args.get("field"),
+                                 args.get("rounds")) for a in ids if a != args["against"]]
         except Exception:  # a row this export cannot read draws nothing
             continue
-        for a in ids:
-            if a != args["against"]:
-                name = figure_name(a, args["against"], args.get("scorer"), args.get("field"),
-                                   args.get("rounds"))
-                calls.setdefault(name, row["seq"])
+        for name in names:
+            calls.setdefault(name, row["seq"])
     return calls
 
 

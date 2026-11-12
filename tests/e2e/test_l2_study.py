@@ -277,6 +277,15 @@ def test_the_audit_run_carries_the_write_up_byte_for_byte_and_the_report(audit, 
     assert not (out / "figures").exists() and not (out / "study" / "figures.json").exists()
 
 
+def test_the_report_page_shows_raw_html_in_report_md_as_text(audit, tmp_path):
+    report = audit / "report.md"
+    report.write_text(report.read_text() + "\n<script>alert(1)</script>\n\n"
+                      "[x](javascript:alert(1))\n")
+    page = (export_audit(audit, tmp_path / "out") / "report.html").read_text()
+    assert "<script>" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert 'href="javascript:' not in page
+
+
 def compared_and_written(audit, writeup):
     """A comparison drawn after the audit (V1 against C0, so ``figures/`` has its image
     and sidecar), and ``writeup`` as L2's final write-up; the scores call's seq."""
@@ -328,19 +337,50 @@ def test_the_figure_s_call_is_the_first_scores_call_that_draws_it(audit, tmp_pat
 
 def test_images_past_cosmos_limits_are_left_out_with_a_note(audit, tmp_path, monkeypatch,
                                                             capsys):
-    compared_and_written(audit, "no images")
+    """An image over the size limit is left out first; then the write-up's own images come
+    before the other figures under the count limit."""
+    compared_and_written(audit, "![z](figures/z.png)")
     figures = audit / "figures"
-    shutil.copyfile(figures / "V1-vs-C0-probe.png", figures / "a.png")
+    for name in ("a.png", "b.png", "z.png"):
+        shutil.copyfile(figures / "V1-vs-C0-probe.png", figures / name)
     (figures / "B.webp").write_bytes(b"x" * (1024 * 1024 + 1))
     monkeypatch.setattr(study_, "MAX_IMAGE_BYTES", 1024 * 1024)
-    monkeypatch.setattr(study_, "MAX_IMAGES", 2)  # by path: B.webp, V1-vs-C0-probe.png, a.png
+    monkeypatch.setattr(study_, "MAX_IMAGES", 3)  # z.png, then B.webp (too big), V1..., a.png
     out = export_audit(audit, tmp_path / "out")
     said = capsys.readouterr().out
-    assert "1 images left out of the audit run: at most 2 are sent (figures/a.png" in said
     assert "figures/B.webp left out of the audit run: an image over 1 MB" in said
-    assert sorted(p.name for p in (out / "figures").iterdir()) == ["V1-vs-C0-probe.png"]
+    assert "1 images left out of the audit run: at most 3 are sent (figures/b.png)" in said
+    assert sorted(p.name for p in (out / "figures").iterdir()) == [
+        "V1-vs-C0-probe.png", "a.png", "z.png"]
     [figure] = json.loads((out / "study" / "figures.json").read_text())
     assert figure["path"] == "figures/V1-vs-C0-probe.png"
+
+
+def test_no_image_from_outside_the_audit_is_carried(audit, tmp_path):
+    """An embed that climbs out of the audit, an absolute one, a link in ``figures/`` or on
+    the embed's way that leads out: none is copied, and the run holds only the audit's."""
+    secret = tmp_path / "secret.png"
+    secret.write_bytes(b"\x89PNG not the audit's")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "deep.png").write_bytes(b"\x89PNG not the audit's either")
+    compared_and_written(audit, "\n\n".join([
+        "![up](../secret.png)", "![up again](figures/../../secret.png)",
+        f"![absolute]({secret})", "![linked](figures/linked.png)",
+        "![through](away/deep.png)", "![inside](figures/./alias.png)"]))
+    figures = audit / "figures"
+    (figures / "linked.png").symlink_to(secret)
+    (audit / "away").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    (figures / "alias.png").symlink_to(figures / "V1-vs-C0-probe.png")  # inside: carried
+    out = export_audit(audit, tmp_path / "out")
+    carried = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.png"))
+    assert carried == ["figures/V1-vs-C0-probe.png", "figures/alias.png"]
+    assert (out / "figures" / "alias.png").read_bytes() == (
+        figures / "V1-vs-C0-probe.png").read_bytes()
+    assert not any(p.is_symlink() for p in out.rglob("*"))
+    assert not list(out.rglob("*.json.png")) and not (tmp_path / "out" / "away").exists()
+    writeup = json.loads((out / "study" / "writeup.json").read_text())
+    assert writeup["missing"] == ["../secret.png", "figures/../../secret.png", str(secret),
+                                  "figures/linked.png", "away/deep.png"]
 
 
 def test_a_figure_whose_image_is_left_out_has_no_entry(audit, tmp_path, monkeypatch):
@@ -356,7 +396,8 @@ def test_a_broken_part_is_left_out_and_never_fails_the_export(audit, tmp_path, c
     (audit / "writeup.json").write_text("{}")
     out = export_audit(audit, tmp_path / "out")
     said = capsys.readouterr().out
-    assert "study/figures.json left out of the audit run: JSONDecodeError" in said
+    assert "figures/V1-vs-C0-probe.png left out of study/figures.json: JSONDecodeError" in said
+    assert not (out / "study" / "figures.json").exists()  # its only entry could not be read
     assert "study/writeup.json left out of the audit run: KeyError" in said
     assert (out / "writeup.md").exists() and (out / "figures" / "V1-vs-C0-probe.png").exists()
     assert (out / "manifest.json").exists()
