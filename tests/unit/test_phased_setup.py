@@ -138,3 +138,11 @@ def test_a_teams_tools_take_their_arguments_as_strings_too():
     assert result == "['A', 'B'] True 2"
     with pytest.raises(Exception, match="'yes' is not of type 'boolean'"):
         anyio.run(lambda: made(items=["A"], accept="yes"))
+
+
+def test_only_a_phased_games_tools_are_lenient_by_default():
+    assert game().lenient
+    assert not dataclasses.replace(game(), lenient_tools=False).lenient
+    plain = team_setup({}, personas={a: a for a in ROSTER}, roster=ROSTER,
+                       round_order=("alice", "bob"), channels=TABLE, output_agent="bob")
+    assert not plain.lenient and dataclasses.replace(plain, lenient_tools=True).lenient

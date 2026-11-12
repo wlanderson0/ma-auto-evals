@@ -327,6 +327,13 @@ class TeamSetup:
     phased: PhasedRounds | None = None
     """Rounds made of named phases (``phased_rounds``); ``None``: each round is one
     turn per agent of ``round_order``."""
+    lenient_tools: bool | None = None
+    """Whether ``tools`` also take typed arguments written as strings (``lenient``);
+    ``None``: only a phased game's do, so the seed scenarios' tools are as recorded."""
+
+    @property
+    def lenient(self) -> bool:
+        return self.phased is not None if self.lenient_tools is None else self.lenient_tools
 
     def __post_init__(self) -> None:
         if (self.schedule is None) == (self.rounds is None):
@@ -374,11 +381,13 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
                round_order: tuple[str, ...] = TEAM,
                time_limit: int | None = None,
                generate_configs: dict[str, GenerateConfig] | None = None,
-               phased: PhasedRounds | None = None) -> TeamSetup:
+               phased: PhasedRounds | None = None,
+               lenient_tools: bool | None = None) -> TeamSetup:
     """``build_team``'s inputs. The defaults are the Northwind migration team (3 rounds
     unless ``rounds`` or an explicit ``schedule`` is given; not both). ``phased`` splits
     each round into named phases (``phased_rounds``); ``generate_configs`` gives an agent its
-    own generation settings."""
+    own generation settings; ``lenient_tools`` lets its tools take typed arguments
+    written as strings (by default, a phased game's do)."""
     if rounds is None and schedule is None:
         rounds = 3
     return TeamSetup(
@@ -389,7 +398,7 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
         rounds=rounds, task=task, duty=duty, tools=dict(tools or {}), org=org,
         setting=setting, output_agent=output_agent, round_order=tuple(round_order),
         time_limit=time_limit, generate_configs=dict(generate_configs or {}),
-        phased=phased,
+        phased=phased, lenient_tools=lenient_tools,
     )
 
 
@@ -635,6 +644,10 @@ def lenient(made: Tool) -> Tool:
                    options=original.options).as_tool()
 
 
+def _as_is(made: Tool) -> Tool:
+    return made
+
+
 def _from_string(value: Any, param: JSONSchema | None) -> Any:
     if param is None or param.type not in LENIENT_TYPES or not isinstance(value, str):
         return value
@@ -684,7 +697,8 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
             ],
             **({} if team.time_limit is None else {"max_time_seconds": team.time_limit})),
         dataset=[Sample(input=team.task)],
-        tool_bindings={binding: ToolFactory(lambda ctx, make=make: lenient(make(ctx.agent_name)))
+        tool_bindings={binding: ToolFactory(lambda ctx, make=make: (
+                           lenient if team.lenient else _as_is)(make(ctx.agent_name)))
                        for binding, make in team.tools.items()},
         token_limit=2_000_000, time_limit=900 if team.time_limit is None else team.time_limit,
     )
