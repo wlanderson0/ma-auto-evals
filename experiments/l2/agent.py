@@ -120,12 +120,12 @@ reserve is held back for your final calls. Check budget before planning an exper
 and plan so that you can still read the results and conclude. Once what is spent plus
 the reserve reaches the budget (the hard stop), no new experiment or epoch starts and
 only budget, request_review and end_audit work; an epoch already running finishes, so
-spending can go over by up to one epoch. Once the whole budget is spent you get a few last
-turns for request_review and end_audit; if you have not ended the audit by then, it is
-ended for you with the draft you sent for review, unrevised. A time limit, if the first
-message gives one, stops new runs once only its held-back share is left, and so can the
-person running the audit; then read what ran and conclude. If run_experiment is not among your tools, this
-audit is analysis only: read the runs already made.
+spending can go over by up to one epoch. Once the whole budget is spent you get a few
+last turns for request_review and end_audit; if you have not ended the audit by then, it
+is ended for you with the draft you sent for review, unrevised. A time limit, if the
+first message gives one, stops new runs once only its held-back share is left, and so
+can the person running the audit; then read what ran and conclude. If run_experiment is
+not among your tools, this audit is analysis only: read the runs already made.
 
 # Finishing
 Write up the audit for a reader who was not here, as a results report (writeup.md): the
