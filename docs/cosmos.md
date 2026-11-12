@@ -131,6 +131,32 @@ A findings file in the folder (a JSON list of `{"title", "body"}` objects, like
 runs from the Drive folder have no manifest:
 `cosmos import-drive <folder> --pr N --sha S` uploads one.
 
+## Watch a run while it runs
+
+Off unless you ask for it. It needs a cosmos server with live runs (cosmos' spec
+21) and the CLI installed with its Inspect hook: `uv tool install
+'cosmos-evals[inspect]'`.
+
+```bash
+COSMOS_STREAM=1 uv run python -m experiments.run --pr <N> --epochs 2
+cosmos upload logs/live/<run>
+```
+
+With `COSMOS_STREAM=1` the runner calls `cosmos live open` once, before the
+first scenario, and prints `cosmos: live run <slug>`. Each scenario and
+condition runs in a process of its own; they all inherit `COSMOS_LIVE_RUN` and
+`COSMOS_RUN_KEY`, so cosmos' Inspect hook sends every sample to that one run.
+The slug is also written to `manifest.json` as `live_run`, so the `cosmos
+upload` that follows continues the same run and does not make a second one.
+At the end the runner calls `cosmos live end` with `finished`, `cancelled`
+(Ctrl-C) or `error`.
+
+What you see while it runs is provisional: the uploaded files are the record,
+and the run page is rebuilt from them. `COSMOS_RUN_KEY` is a secret that works
+for that one run until it ends; the runner never prints it and it is not written
+to any file. If `cosmos` is missing or the server cannot be reached, the runner
+prints `cosmos: no live run opened` and carries on; upload the run as usual.
+
 ## Reading a run
 
 - **Runs** (the project's home, `/p/ma-auto-evals`): every upload, newest
