@@ -429,8 +429,9 @@ def write_manifest(out: Path, manifest: dict[str, Any]) -> Path:
 
 
 # ------------------------------------------------------------------ live run (cosmos)
-LIVE_VARIABLES = ("COSMOS_LIVE_RUN", "COSMOS_RUN_KEY")
-_LIVE_EXPORT = re.compile(rf"^export ({'|'.join(LIVE_VARIABLES)})=([A-Za-z0-9_-]+)$", re.MULTILINE)
+LIVE_OPENED = ("COSMOS_LIVE_RUN", "COSMOS_RUN_KEY")  # what `cosmos live open` prints
+LIVE_VARIABLES = (*LIVE_OPENED, "COSMOS_LIVE_ROOT")
+_LIVE_EXPORT = re.compile(rf"^export ({'|'.join(LIVE_OPENED)})=([A-Za-z0-9_-]+)$", re.MULTILINE)
 
 
 def _cosmos(*args: str) -> subprocess.CompletedProcess[str] | None:
@@ -450,7 +451,9 @@ def open_live_run(out: Path, samples_total: int) -> str | None:
     would open a live run in each. ``cosmos live open`` prints ``export
     COSMOS_LIVE_RUN=<slug>`` and ``export COSMOS_RUN_KEY=<key>``; both go into this
     process's environment, which the children inherit, so the hook joins the one run
-    in all of them. Returns the slug, or None when streaming is off, when a wrapper
+    in all of them. ``COSMOS_LIVE_ROOT`` is the run folder: the hook names each log by
+    its path under it (``<scenario>/<condition>/x.eval``), as the upload will.
+    Returns the slug, or None when streaming is off, when a wrapper
     opened a run already, or when the command fails: a run never fails because cosmos
     cannot be reached. The key is a secret and is never printed."""
     if os.environ.get("COSMOS_STREAM") != "1" or os.environ.get("COSMOS_LIVE_RUN"):
@@ -459,11 +462,11 @@ def open_live_run(out: Path, samples_total: int) -> str | None:
                         "--samples-total", str(samples_total))
     found = (dict(_LIVE_EXPORT.findall(completed.stdout))
              if completed is not None and completed.returncode == 0 else {})
-    if set(found) != set(LIVE_VARIABLES):
+    if set(found) != set(LIVE_OPENED):
         print("cosmos: no live run opened; the run goes on and can be uploaded when it ends",
               flush=True)
         return None
-    os.environ.update(found)
+    os.environ.update(found, COSMOS_LIVE_ROOT=str(out.resolve()))
     print(f"cosmos: live run {found['COSMOS_LIVE_RUN']}", flush=True)
     return found["COSMOS_LIVE_RUN"]
 

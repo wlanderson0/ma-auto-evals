@@ -87,7 +87,8 @@ def test_every_condition_process_joins_the_same_run(tmp_path, cosmos, monkeypatc
     monkeypatch.setattr(run, "_run_in_subprocess", child)
     main(["--mock", "--scenario", "mfa_rumor", "--conditions", "baseline,l1", "--epochs", "2",
           "--out", str(tmp_path / "run")])
-    assert seen == [{"COSMOS_LIVE_RUN": SLUG, "COSMOS_RUN_KEY": KEY}] * 2
+    assert seen == [{"COSMOS_LIVE_RUN": SLUG, "COSMOS_RUN_KEY": KEY,
+                     "COSMOS_LIVE_ROOT": str((tmp_path / "run").resolve())}] * 2
     opened = [call["argv"] for call in cosmos() if call["argv"][:2] == ["live", "open"]]
     assert len(opened) == 1 and opened[0][-2:] == ["--samples-total", "4"]
 

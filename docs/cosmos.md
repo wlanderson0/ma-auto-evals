@@ -144,8 +144,9 @@ cosmos upload logs/live/<run>
 
 With `COSMOS_STREAM=1` the runner calls `cosmos live open` once, before the
 first scenario, and prints `cosmos: live run <slug>`. Each scenario and
-condition runs in a process of its own; they all inherit `COSMOS_LIVE_RUN` and
-`COSMOS_RUN_KEY`, so cosmos' Inspect hook sends every sample to that one run.
+condition runs in a process of its own; they all inherit `COSMOS_LIVE_RUN`,
+`COSMOS_RUN_KEY` and `COSMOS_LIVE_ROOT` (the run folder), so cosmos' Inspect
+hook sends every sample to that one run, filed under its scenario and condition.
 The slug is also written to `manifest.json` as `live_run`, so the `cosmos
 upload` that follows continues the same run and does not make a second one.
 At the end the runner calls `cosmos live end` with `finished`, `cancelled`
