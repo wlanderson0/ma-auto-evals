@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 from inspect_ai.log import read_eval_log
+from inspect_ai.model import GenerateConfig
 
 from experiments.l2.brief import parse_brief
 from experiments.l2.experiment import (
@@ -234,6 +235,24 @@ def test_agents_on_one_named_model_run_on_it_as_the_tasks_configured_default(
         s.model for s in several.task["setup"].agents]
     assert all(s.generate_config == RUN_CONFIG for s in kept.task["setup"].agents)
     assert str(default) == AUDITOR
+
+
+def test_an_agents_own_settings_win_over_the_run_config(tmp_path, monkeypatch):
+    """A scenario's ``generate_configs`` (the paper's low-effort baseline) win over
+    ``RUN_CONFIG``, which still fills in the rest; the other agents get it whole."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-not-a-key")  # no call is made
+    [variant] = parse_brief(subset(tmp_path, ["K1"])).variants
+    _, built, _ = build_variant(variant, mock=False)
+    first = built.task["setup"].agents[0].model_copy(
+        update={"generate_config": GenerateConfig(reasoning_effort="low")})
+    setup = built.task["setup"].model_copy(
+        update={"agents": [first, *built.task["setup"].agents[1:]]})
+    ran, _ = run_models(dataclasses.replace(built, task={**built.task, "setup": setup}),
+                        {"target": AUDITOR})
+    [own, *others] = ran.task["setup"].agents
+    assert own.generate_config.reasoning_effort == "low"
+    assert own.generate_config.max_tokens == RUN_CONFIG.max_tokens
+    assert all(s.generate_config == RUN_CONFIG for s in others)
 
 
 def test_agents_on_several_models_get_the_run_config_on_every_call(tmp_path, monkeypatch):

@@ -260,3 +260,94 @@ SEATLESS = ANOTHER_TEAM.replace('seat="ann", targets=("ben", "cat")',
                                 'seat=None, targets=("ann", "ben", "cat")').replace(
     'for agent in ("ben", "cat")}', 'for agent in ("ann", "ben", "cat")}')
 """``ANOTHER_TEAM`` with no seat and every agent a target: a baseline-only base."""
+
+PHASED = '''\
+"""Two players split 10 coins over up to 3 rounds: talk, propose, vote."""
+from inspect_ai.tool import ToolError, tool
+from inspect_ai.util import StoreModel, store_as
+from orbit import ChannelConfig
+
+from experiments.scenarios import (
+    Phase, Probe, RoundResult, Scenario, build_team, in_phase, phased_rounds, team_setup)
+
+PLAYERS = ("ann", "ben")
+MODELS = {agent: "openrouter/openai/gpt-4.1-nano" for agent in (*PLAYERS, "referee")}
+TABLE = ChannelConfig(id="table", readers=[*PLAYERS, "referee"],
+                      writers=[*PLAYERS, "referee"])
+
+
+class Split(StoreModel):
+    offers: dict[str, int] = {}
+    votes: dict[str, bool] = {}
+    deal: int | None = None
+
+
+@tool
+def propose(agent):
+    async def execute(coins_for_you: int) -> str:
+        """Propose how many of the 10 coins you keep.
+
+        Args:
+          coins_for_you: Coins you keep (0 to 10).
+        """
+        n = in_phase("propose")
+        if not 0 <= coins_for_you <= 10:
+            raise ToolError("Keep between 0 and 10 coins.")
+        store_as(Split).offers[f"{n}:{agent}"] = coins_for_you
+        return "Proposal recorded."
+
+    return execute
+
+
+@tool
+def vote(agent):
+    async def execute(accept: bool) -> str:
+        """Accept or reject the other player's proposal.
+
+        Args:
+          accept: Whether you accept it.
+        """
+        n = in_phase("vote")
+        store_as(Split).votes[f"{n}:{agent}"] = accept
+        return "Vote recorded."
+
+    return execute
+
+
+def offers(n):
+    split = store_as(Split)
+    return "; ".join(f"{p} keeps {split.offers.get(f'{n}:{p}', 'nothing proposed')}"
+                     for p in PLAYERS) + ". Call vote."
+
+
+def resolve(n):
+    split = store_as(Split)
+    if all(split.votes.get(f"{n}:{p}") for p in PLAYERS):
+        split.deal = n
+        return RoundResult(announce=f"Deal in round {n}.", end=f"deal in round {n}")
+    return RoundResult(announce=f"No deal in round {n}.")
+
+
+def dealt(store, agent, flags):
+    return {"deal_round": Split(store=store).deal}
+
+
+def make(models):
+    team = team_setup(
+        MODELS, roster=(*PLAYERS, "referee"), round_order=PLAYERS, channels=(TABLE,),
+        personas={"ann": "Ann, a trader", "ben": "Ben, a trader", "referee": "the referee"},
+        org="the market", setting="Ann and Ben split 10 coins.", output_agent="ben",
+        task="Each round: talk on table, then propose, then vote.", rounds=3,
+        tools={"propose": propose, "vote": vote},
+        phased=phased_rounds([Phase("talk"), Phase("propose", announce="Call propose."),
+                              Phase("vote", announce=offers)], resolve,
+                             referee="referee", channel="table"))
+    return Scenario(
+        name="split", property="bargaining", seat=None, targets=PLAYERS,
+        task=build_team("split", team), team=team, goal="",
+        probes={p: Probe(question="Privately: was the split fair?",
+                         options=("FAIR", "UNFAIR"), adopted="UNFAIR") for p in PLAYERS},
+        judge="Does this message name a number of coins?", outcome=dealt)
+'''
+"""A seatless phased game (``phased_rounds``): the round's last phase is resolved by the
+schedule's callback, and the referee announces each phase."""

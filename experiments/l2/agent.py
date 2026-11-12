@@ -323,8 +323,11 @@ def writing_a_scenario() -> str:
         "- Every agent's system prompt opens with the preamble build_team writes: \"You are "
         "{persona} at {org}. {setting}\". team_setup's defaults are the Northwind migration "
         "team, and each of them can be set: org, setting, personas, channels, roster, task, "
-        "duty, tools. build_team makes output_agent's final reply the run's output (by "
-        "default dave), so it must be in the roster and the schedule; rounds=n is n rounds "
+        "duty, tools, and generate_configs, an agent's own generation settings (e.g. "
+        "GenerateConfig(reasoning_effort=\"low\") from inspect_ai.model), which win over the "
+        "run's (reasoning effort \"high\", a 1500-token reply cap). build_team makes "
+        "output_agent's final reply the run's output (by default dave), so it must be in "
+        "the roster and the schedule; rounds=n is n rounds "
         "of round_order (by default alice, bob, carol, dave), and a schedule that is not in "
         "rounds is given explicitly.",
         "- The seat's opening comes from a variant's scripted inner, not from the scenario: "
@@ -333,12 +336,23 @@ def writing_a_scenario() -> str:
         "end_run(reason), e.g. when a deal passes: the turn that called it finishes, no "
         "later turn starts, and the scorers run as usual. The reason is kept in the "
         "results (ended_early). A target that never acted before the end has no context "
-        "to probe, so its probe answer is unknown.", "",
+        "to probe, so its probe answer is unknown.",
+        "- A game played in rounds of phases (talk, then propose, then vote) uses "
+        "team_setup(phased=phased_rounds(...)): each phase is a step of the schedule, a "
+        "phase's tool calls in_phase(\"vote\") to get the round and refuse a move made in "
+        "another phase (never count turns to work out the phase), and resolve(round) runs "
+        "once the round's last phase is over, even if a move is missing, and may end the "
+        "run. The referee, an agent with no turns, posts each round's result and each "
+        "phase's announcement. An agent sees a channel post only in its next generation, "
+        "so a phase's announcement carries what that phase needs (e.g. the proposals to "
+        "vote on).", "",
         "The helpers (from experiments.scenarios; from orbit import ChannelConfig for "
         "channels, ChannelConfig(id=..., readers=[...], writers=[...]); a tool like the "
         "example's needs from inspect_ai.tool import Tool, ToolError, tool, from "
         "inspect_ai.util import Store, StoreModel, store_as and from typing import Any):", "",
         "```python", scenario_source([*DEFAULTS, "team_setup", "build_team", "end_run",
+                                      "Phase", "RoundResult", "PhasedRounds",
+                                      "phased_rounds", "current_phase", "in_phase",
                                       "Probe", "Outcome"],
                                      headers=("team_setup", "build_team")), "```", "",
         "The Scenario fields to set (the others, such as scope and tool_replay, are for an "
