@@ -134,11 +134,15 @@ runs from the Drive folder have no manifest:
 ## Watch a run while it runs
 
 Off unless you ask for it. It needs a cosmos server with live runs (cosmos' spec
-21) and the CLI installed with its Inspect hook: `uv tool install
-'cosmos-evals[inspect]'`.
+21) and cosmos' Inspect hook in this project's environment, next to Inspect (a
+`cosmos` installed with `uv tool install` runs in an environment of its own, where
+Inspect does not find the hook). `uv sync` removes it again, so run with
+`uv run --no-sync`:
 
 ```bash
-COSMOS_STREAM=1 uv run python -m experiments.run --pr <N> --epochs 2
+uv pip install 'cosmos-evals[inspect]'   # or, from a checkout: uv pip install -e '../cosmos[inspect]'
+uv run --no-sync cosmos doctor           # "plugin" and "stream" say whether a run would stream
+COSMOS_STREAM=1 uv run --no-sync python -m experiments.run --pr <N> --epochs 2
 cosmos upload logs/live/<run>
 ```
 
