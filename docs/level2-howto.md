@@ -73,6 +73,44 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   runs $0.2290)`. `--quiet` shows neither.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
+### Running L2's code in a sandbox
+
+`--sandbox` (or `L2_SANDBOX=1` in the environment) runs the Python L2 writes in a
+sandbox: `run_python`, and the check of a scenario L2 writes. Inside it the code has no
+network, reads only the Python environment, the audit's runs and `figures/`, and writes
+only `figures/`. It cannot read the repository's `.env`, your home directory or the
+audit's `l2/` directory. If the sandbox cannot start, the tool is refused and the code
+does not run. Without the flag nothing changes.
+
+Not everything is sandboxed. A scenario L2 writes is imported into the audit's process
+and runs in each epoch with the OpenRouter key and the network, because its agents need
+both. So an audit counts as sandboxed only when it writes no scenarios: an
+`--analysis-only` audit, or a brief whose `allowed_changes` leave out `scenario`.
+
+On Linux the sandbox is bubblewrap:
+
+```bash
+sudo apt-get install bubblewrap
+# Ubuntu 24.04 and later restrict unprivileged user namespaces. If the check fails with
+# "setting up uid map: Permission denied", allow them (or add an AppArmor profile for bwrap):
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+On macOS it is `sandbox-exec`, which ships with the system. The macOS backend is new;
+the check below is what proves it on your machine.
+
+Check it before an audit (the audit runs the same check at start and does not start
+when it fails):
+
+```bash
+uv run python -m experiments.l2.sandbox --check          # "sandbox ok: bwrap", exit 0
+uv run python -m experiments.l2.sandbox --check --json   # every property, as JSON
+```
+
+It exits 1 with one line per property that did not hold, e.g. `failed: no-local-tcp:
+connected to 127.0.0.1`. It writes a few files under `logs/` and in your home directory
+for the test, and removes them.
+
 The audit directory holds `writeup.md` (L2's write-up: a results report with tables and
 figures, under a table of the audit's facts; start here), `figures/`, `report.md` (L2's claims with their verdicts, its conclusions,
 the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its

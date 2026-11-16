@@ -152,6 +152,16 @@ def test_the_profile_text_does_not_depend_on_the_paths():
     assert strip == [line for line in theirs.splitlines() if "ANCESTOR" not in line]
 
 
+def test_only_the_names_of_a_listed_directory_are_readable():
+    run = Plan(python=RUN.python, runtime=RUN.runtime, reads=RUN.reads, write=RUN.write,
+               cwd=CHECKOUT, lists=(CHECKOUT,))
+    profile, params = seatbelt(run, "/private/tmp/s")
+    assert params["LIST_0"] == CHECKOUT
+    [listing] = [line for line in profile.split("\n(allow") if "LIST_0" in line]
+    assert listing.startswith(" file-read-data") and "(literal (param \"LIST_0\"))" in listing
+    assert "LIST" not in seatbelt(RUN, "/private/tmp/s")[0]
+
+
 def test_a_path_with_a_newline_is_refused():
     run = Plan(python=RUN.python, runtime=RUN.runtime, reads=(f"{AUDIT}/a\nb",),
                write=RUN.write, cwd=AUDIT)

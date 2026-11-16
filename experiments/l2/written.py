@@ -340,7 +340,8 @@ CHECK_READS = ("experiments", "src")
 """What the check reads of the repository in the sandbox: ``experiments/`` (the module
 itself, the seed scenarios, scorers and runner it builds and dry-runs with) and ``src/``
 (``orbit_audit``, installed from there in editable mode). Never the repository root, so
-never its ``.env`` or ``logs/``."""
+never its ``.env`` or ``logs/``. The repository's names alone may be listed (no file
+in it read), since ``python -m`` imports from it."""
 CHECK_ENV = {"ORBIT_AUTOFETCH": "0", "ORBIT_AUTOSTART_SERVICE": "0"}
 """Orbit fetches nothing and starts no service during the check in the sandbox."""
 
@@ -366,7 +367,7 @@ def check_code(name: str, code: str,
         if sandbox is not None:
             ran = sandbox.run(["-B", *args], cwd=REPO, write=scratch, extra=CHECK_ENV,
                               reads=[code_dir, *(REPO / part for part in CHECK_READS)],
-                              timeout=CHECK_TIMEOUT)
+                              lists=[REPO], timeout=CHECK_TIMEOUT)
             if ran.timed_out:
                 return False, f"the check did not finish in {CHECK_TIMEOUT} s"
             done = subprocess.CompletedProcess(args, ran.returncode, ran.stdout, ran.stderr)

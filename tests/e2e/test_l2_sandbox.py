@@ -299,8 +299,12 @@ def test_the_tool_description_says_what_the_sandbox_allows(box, tmp_path):
 def test_a_written_scenario_passes_its_check_and_dry_run_in_the_sandbox(box, tmp_path):
     code = RUMOUR.replace("def make(models):\n", (
         "def make(models):\n    import os\n"
-        f"    if 'pyproject.toml' in os.listdir({str(REPO)!r}):\n"
-        "        raise RuntimeError('the checkout is visible')\n"
+        "    try:\n"
+        f"        open({str(REPO / 'pyproject.toml')!r}).close()\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "    else:\n"
+        "        raise RuntimeError('the checkout is readable')\n"
         "    if any(k.endswith('_API_KEY') or k.startswith('COSMOS') for k in os.environ):\n"
         "        raise RuntimeError('a variable of the caller is visible')\n"))
     tools = new(tmp_path, sandbox=box, cost_of=fixed(0.01))

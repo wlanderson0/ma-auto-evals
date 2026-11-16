@@ -119,7 +119,8 @@ class Ran:
 class Plan:
     """One run's paths, resolved: the interpreter, the directories it lives in
     (``runtime``), the caller's read paths, the one write directory, the working
-    directory and the environment's extra variables."""
+    directory, the environment's extra variables and the directories whose names alone
+    may be listed (``lists``)."""
 
     python: str
     runtime: tuple[str, ...]
@@ -127,6 +128,7 @@ class Plan:
     write: str
     cwd: str
     extra: Mapping[str, str] = field(default_factory=dict)
+    lists: tuple[str, ...] = ()
 
 
 def _real(path: str | os.PathLike) -> str:
@@ -154,7 +156,7 @@ def _refuse_broad(path: str) -> None:
 
 
 def plan(cwd: Path, reads: Sequence[Path], write: Path,
-         extra: Mapping[str, str] | None = None) -> Plan:
+         extra: Mapping[str, str] | None = None, lists: Sequence[Path] = ()) -> Plan:
     """The resolved ``Plan`` for a run in ``cwd`` that reads ``reads`` and writes
     ``write`` (which must exist)."""
     python, runtime = interpreter()
@@ -165,7 +167,8 @@ def plan(cwd: Path, reads: Sequence[Path], write: Path,
     for path in (*resolved, target):
         _refuse_broad(path)
     return Plan(python=python, runtime=runtime, reads=resolved, write=target,
-                cwd=_real(cwd), extra=dict(extra or {}))
+                cwd=_real(cwd), extra=dict(extra or {}),
+                lists=tuple(dict.fromkeys(_real(p) for p in lists)))
 
 
 def environment(scratch: str, python: str,
@@ -264,6 +267,7 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
     [tmp] = param("SCRATCH", [scratch])
     allowed = [*run.runtime, *run.reads, run.write, scratch, *MAC_READ, *MAC_READ_FILES]
     metadata = param("ANCESTOR", sorted({a for p in allowed for a in _ancestors(p)}))
+    listed = param("LIST", run.lists)
 
     def rule(kind: str, items: Sequence[str]) -> str:
         return "\n  ".join([f"(allow {kind}", *items]) + ")"
@@ -285,6 +289,7 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
         rule("file-read-metadata", ['(literal "/")', '(literal "/etc")', '(literal "/tmp")',
                                     '(literal "/var")', *(f"(literal {p})" for p in metadata)]),
         rule("file-read* file-write*", [f"(subpath {write})", f"(subpath {tmp})"]),
+        *([rule("file-read-data", [f"(literal {p})" for p in listed])] if listed else []),
         rule("file-read* file-write-data", ['(literal "/dev/null")', '(subpath "/dev/fd")']),
     ]
     for value in params.values():
@@ -334,12 +339,15 @@ class Sandbox:
 
     def run(self, args: Sequence[str], *, cwd: Path, reads: Sequence[Path], write: Path,
             extra: Mapping[str, str] | None = None, timeout: float,
-            merge: bool = False) -> Ran:
+            merge: bool = False, lists: Sequence[Path] = ()) -> Ran:
         """Run the interpreter with ``args`` in the sandbox, in ``cwd``, reading
         ``reads`` and writing ``write``; ``extra`` adds variables to its environment.
+        ``lists``: directories whose names (not their files) may be listed, as Python's
+        import system needs for a directory on ``sys.path`` (under bwrap a listing shows
+        only the mount points in it anyway).
         The run is stopped (its whole process group killed) after ``timeout`` seconds.
         ``merge`` sends stderr to stdout. ``SandboxFailed`` when it did not start."""
-        run = plan(cwd, reads, write, extra)
+        run = plan(cwd, reads, write, extra, lists)
         scrub(Path(run.write))
         with self._scratch(run) as scratch:
             env = environment(scratch, run.python, run.extra)

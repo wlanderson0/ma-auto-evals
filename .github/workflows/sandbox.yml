@@ -1,0 +1,64 @@
+name: Sandbox
+
+on:
+  pull_request:
+    paths:
+      - experiments/l2/sandbox.py
+      - experiments/l2/workspace.py
+      - experiments/l2/written.py
+      - tests/**/test_l2_sandbox.py
+      - .github/workflows/sandbox.yml
+  push:
+    branches: [main]
+    paths:
+      - experiments/l2/sandbox.py
+      - experiments/l2/workspace.py
+      - experiments/l2/written.py
+      - tests/**/test_l2_sandbox.py
+      - .github/workflows/sandbox.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_DOTENV_DISABLED: "1"
+  ORBIT_AUTOFETCH: "0"
+  ORBIT_AUTOSTART_SERVICE: "0"
+  UV_NO_ENV_FILE: "1"
+
+jobs:
+  sandbox:
+    name: L2 sandbox (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install locked development environment
+        run: uv sync --locked
+      - name: Check the sandbox
+        run: uv run --locked python -m experiments.l2.sandbox --check
+      - name: Run the sandbox tests
+        run: >-
+          L2_SANDBOX_TESTS=require uv run --locked pytest -q --tb=short
+          tests/unit/test_l2_sandbox.py tests/e2e/test_l2_sandbox.py
