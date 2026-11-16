@@ -1,7 +1,7 @@
 """L2's sandbox, the pure parts (``experiments.l2.sandbox``; spec
-``docs/level2-interface.md`` §6, §12): the ``bwrap`` command line and the Seatbelt
-profile for given paths, the environment, the cleaning of the write directory and the
-check's verdict. They run on every platform; ``tests/e2e/test_l2_sandbox.py`` runs the
+``docs/level2-interface.md`` §6, §12, contract test L2-26): the ``bwrap`` command line
+and the Seatbelt profile for given paths, the environment, the cleaning of the write
+directory and the check's verdict. They run on every platform; ``tests/e2e/test_l2_sandbox.py`` runs the
 real thing."""
 
 from __future__ import annotations
@@ -301,3 +301,54 @@ def test_a_check_passes_only_when_every_property_held():
 def test_an_unknown_kind_is_refused():
     with pytest.raises(ValueError, match="kind must be one of"):
         Sandbox("docker", "/usr/bin/docker")
+
+
+def test_a_sandbox_names_what_every_run_can_read(monkeypatch):
+    monkeypatch.setattr(sandbox_, "linux_system", lambda: [("/usr", None), ("/bin", "usr/bin")])
+    runtime = sandbox_.interpreter()[1]
+    assert Sandbox("bwrap", "/usr/bin/bwrap").always_reads() == (*runtime, "/usr", "/bin")
+    mac = Sandbox("sandbox-exec", sandbox_.SANDBOX_EXEC).always_reads()
+    assert mac == (*runtime, *sandbox_.MAC_READ, *sandbox_.MAC_READ_FILES)
+
+
+def test_every_link_crossed_on_the_way_to_a_path_is_found(tmp_path):
+    (tmp_path / "real" / "bin").mkdir(parents=True)
+    (tmp_path / "real" / "bin" / "python3.13").write_text("")
+    os.symlink("python3.13", tmp_path / "real" / "bin" / "python3")
+    os.symlink(tmp_path / "real", tmp_path / "minor")  # as uv's cpython-3.13 link
+    (tmp_path / "venv" / "bin").mkdir(parents=True)
+    os.symlink(tmp_path / "minor" / "bin" / "python3", tmp_path / "venv" / "bin" / "python")
+    found = sandbox_.crossed(tmp_path / "venv" / "bin" / "python")
+    base = os.path.realpath(tmp_path)
+    assert [(os.path.realpath(os.path.dirname(a)) + "/" + os.path.basename(a), b)
+            for a, b in found[-3:]] == [
+        (f"{base}/venv/bin/python", str(tmp_path / "minor" / "bin" / "python3")),
+        (f"{base}/minor", str(tmp_path / "real")),
+        (f"{base}/real/bin/python3", "python3.13")]
+    os.symlink("loop", tmp_path / "loop")
+    assert len(sandbox_.crossed(tmp_path / "loop")) == sandbox_.MAX_LINKS  # ends
+
+
+def test_bwrap_makes_again_the_links_to_the_interpreter_that_no_bind_holds():
+    uv = f"{HOME}/.local/share/uv/python"
+    links = ((f"{CHECKOUT}/.venv/bin/python", f"{uv}/cpython-3.13/bin/python3.13"),
+             (f"{uv}/cpython-3.13", "cpython-3.13.9"), ("/bin", "usr/bin"))
+    run = Plan(python=RUN.python, runtime=(f"{uv}/cpython-3.13.9", f"{CHECKOUT}/.venv"),
+               reads=RUN.reads, write=RUN.write, cwd=AUDIT, links=links)
+    command = bwrap_args("bwrap", run, [], 3, SYSTEM)
+    made = [(command[i + 2], command[i + 1]) for i, a in enumerate(command) if a == "--symlink"]
+    # the one inside the virtualenv's bind is there already; /bin is made once
+    assert made == [("/bin", "usr/bin"), ("/lib", "usr/lib"),
+                    (f"{uv}/cpython-3.13", "cpython-3.13.9")]
+    assert command.index(f"{uv}/cpython-3.13") < command.index("--remount-ro")
+    assert f"{uv}/cpython-3.13" not in bound(command).get("--ro-bind", [])
+
+
+def test_the_seatbelt_profile_lets_a_link_to_the_interpreter_be_followed_not_read():
+    link = f"{HOME}/.local/share/uv/python/cpython-3.13-link"
+    run = Plan(python=RUN.python, runtime=RUN.runtime, reads=RUN.reads, write=RUN.write,
+               cwd=AUDIT, links=((link, "cpython-3.13"),))
+    profile, params = seatbelt(run, "/private/tmp/s")
+    [name] = [k for k, v in params.items() if v == link]
+    assert name.startswith("ANCESTOR")  # metadata only
+    assert link not in profile

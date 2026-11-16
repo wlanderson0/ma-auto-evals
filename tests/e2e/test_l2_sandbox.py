@@ -1,6 +1,7 @@
 """L2's sandbox, for real (``experiments.l2.sandbox``; spec ``docs/level2-interface.md``
-§6, §12; Cosmos spec 20, R18): the check's properties, ``run_python`` and the scenario
-check inside it, and the tool refused, never run outside, when it cannot start.
+§6, §12, contract test L2-26; Cosmos spec 20, R18): the check's properties,
+``run_python`` and the scenario check inside it, and the tool refused, never run outside,
+when it cannot start.
 
 Tests that need the platform's backend (bwrap on Linux, sandbox-exec on macOS) are
 skipped when it cannot start here, unless ``L2_SANDBOX_TESTS=require`` is set: then a
@@ -423,6 +424,23 @@ def test_a_bad_scenario_fails_its_check_in_the_sandbox_with_the_same_reason(box,
     assert not passed and reason in text, text
 
 
+def test_an_interpreter_reached_through_a_link_starts_in_the_sandbox(box, tmp_path):
+    """uv's interpreters sit behind a link (``cpython-3.13-...`` to ``cpython-3.13.9-...``),
+    and a virtualenv names its base by that link: the sandbox has to carry it."""
+    os.symlink(sys.base_prefix, tmp_path / "base")
+    python = tmp_path / "base" / "bin" / f"python{sys.version_info[0]}"
+    subprocess.run([python, "-m", "venv", "--without-pip", tmp_path / "venv"], check=True)
+    (tmp_path / "w").mkdir()
+    code = ("import sys\nfrom pathlib import Path\nfrom experiments.l2 import sandbox\n"
+            "ran = sandbox.detect().run(['-I', '-c', 'import sys, json; "
+            "print(sys.prefix != sys.base_prefix)'], cwd=Path(sys.argv[1]), reads=[], "
+            "write=Path(sys.argv[1]), timeout=60)\nprint(ran.returncode, ran.stdout.strip())\n")
+    ran = subprocess.run([tmp_path / "venv" / "bin" / "python", "-c", code, tmp_path / "w"],
+                         capture_output=True, text=True, timeout=110,
+                         env={"PYTHONPATH": str(REPO), "PATH": os.environ["PATH"]})
+    assert ran.stdout.strip() == "0 True", ran
+
+
 # -------------------------------------------------------------- the audit
 def test_sandbox_report_only_when_on_and_writing_no_scenarios(tmp_path):
     box = Sandbox("bwrap", "/usr/bin/bwrap")
@@ -445,6 +463,25 @@ def test_sandbox_report_only_when_on_and_writing_no_scenarios(tmp_path):
     assert analysis.sandbox_report()["kind"] == "sandbox-exec"
     assert Audit.create(path, tmp_path / "analysis-off", mock=True,
                         analysis=source).sandbox_report() is None
+
+
+def test_an_audit_that_imports_written_scenarios_reports_no_sandbox(tmp_path):
+    """An analysis-only audit imports the analysed audit's scenarios into its own
+    process: with one on disk it reports no sandbox, and nothing is imported to tell."""
+    earlier = tmp_path / "earlier"
+    source = earlier / "experiments" / "exp-1"
+    source.mkdir(parents=True)
+    (source / "runs.jsonl").write_text("")
+    (earlier / "scenarios").mkdir()
+    marker = tmp_path / "imported"
+    (earlier / "scenarios" / "planted.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('x')\n")
+    analysis = Audit.create(brief(tmp_path, 1.0), tmp_path / "analysis", mock=True,
+                            analysis=source, sandbox=Sandbox("bwrap", "/usr/bin/bwrap"))
+    assert analysis.holds_scenarios and not analysis.writes_scenarios
+    assert analysis.sandbox_report() is None and not marker.exists()
+    (earlier / "scenarios" / "planted.py").unlink()
+    assert analysis.sandbox_report() is not None
 
 
 @pytest.mark.parametrize("how", ["flag", "environment"])

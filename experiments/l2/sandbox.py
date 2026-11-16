@@ -83,6 +83,8 @@ MAC_SERVICES = ("com.apple.system.opendirectoryd.libinfo", "com.apple.system.log
 """Mach services libc may look up (user and group lookups, logging, notifications);
 none of them reads a file or the network for the code."""
 SCRATCH_DIRS = ("home", "cache", "config", "data", "mpl")
+MAX_LINKS = 40
+"""The most links followed to an interpreter (a loop of links ends there)."""
 ALT_SCRATCH = "/.l2-tmp"
 """bwrap's scratch when a path of the run lies under ``/tmp`` (e.g. an audit there): a
 scratch mounted on ``/tmp`` would hold that path's parents, and a write beside it would
@@ -120,7 +122,9 @@ class Plan:
     """One run's paths, resolved: the interpreter, the directories it lives in
     (``runtime``), the caller's read paths, the one write directory, the working
     directory, the environment's extra variables, the directories whose names alone
-    may be listed (``lists``) and whether the code may start processes (``children``)."""
+    may be listed (``lists``), whether the code may start processes (``children``) and
+    the links the interpreter is reached through (``links``: where each is, and what it
+    holds)."""
 
     python: str
     runtime: tuple[str, ...]
@@ -130,6 +134,7 @@ class Plan:
     extra: Mapping[str, str] = field(default_factory=dict)
     lists: tuple[str, ...] = ()
     children: bool = True
+    links: tuple[tuple[str, str], ...] = ()
 
 
 def _real(path: str | os.PathLike) -> str:
@@ -146,6 +151,36 @@ def interpreter() -> tuple[str, tuple[str, ...]]:
         python = os.path.join(_real(exe.parent), exe.name)
     runtime = tuple(dict.fromkeys(_real(p) for p in (sys.base_prefix, sys.prefix)))
     return python, runtime
+
+
+def crossed(path: str | os.PathLike) -> list[tuple[str, str]]:
+    """Every link crossed in resolving ``path``, in order: where it is and what it
+    holds."""
+    found: list[tuple[str, str]] = []
+    todo = os.path.abspath(os.fspath(path))
+    while len(found) < MAX_LINKS:
+        walk, parts = "/", Path(todo).parts[1:]
+        for i, part in enumerate(parts):
+            walk = os.path.join(walk, part)
+            if os.path.islink(walk):
+                target = os.readlink(walk)
+                found.append((walk, target))
+                todo = os.path.normpath(os.path.join(os.path.dirname(walk), target,
+                                                     *parts[i + 1:]))
+                break
+        else:
+            break
+    return found
+
+
+def interpreter_links(python: str) -> tuple[tuple[str, str], ...]:
+    """The links ``python`` and its base installation are reached through. A virtualenv's
+    interpreter is a link to the base one, and its ``pyvenv.cfg`` names the base by a
+    path that may itself cross a link (uv's ``cpython-3.13-...`` to ``cpython-3.13.9-...``),
+    so both the program and its standard library are found only where those links
+    exist."""
+    paths = (python, sys.base_prefix, sys.base_exec_prefix)
+    return tuple(dict.fromkeys(link for path in paths for link in crossed(path)))
 
 
 def _refuse_broad(path: str) -> None:
@@ -170,7 +205,8 @@ def plan(cwd: Path, reads: Sequence[Path], write: Path,
         _refuse_broad(path)
     return Plan(python=python, runtime=runtime, reads=resolved, write=target,
                 cwd=_real(cwd), extra=dict(extra or {}),
-                lists=tuple(dict.fromkeys(_real(p) for p in lists)), children=children)
+                lists=tuple(dict.fromkeys(_real(p) for p in lists)), children=children,
+                links=interpreter_links(python))
 
 
 def environment(scratch: str, python: str,
@@ -218,8 +254,10 @@ def bwrap_args(binary: str, run: Plan, args: Sequence[str], ready: int,
                system: Sequence[tuple[str, str | None]]) -> list[str]:
     """The ``bwrap`` command line for ``run``: an empty root with the system paths and
     the runtime read-only, the read paths read-only, the write directory read-write, a
-    fresh ``/proc``, ``/dev`` and scratch (``bwrap_scratch``), every namespace unshared
-    (the network's included) and the root made read-only before the command starts."""
+    fresh ``/proc``, ``/dev`` and scratch (``bwrap_scratch``), the links the interpreter
+    is reached through (``Plan.links``) made again where no bind holds them, every
+    namespace unshared (the network's included) and the root made read-only before the
+    command starts."""
     scratch = bwrap_scratch(run)
     command = [binary, "--unshare-all", "--die-with-parent", "--new-session",
                "--cap-drop", "ALL", "--clearenv"]
@@ -237,6 +275,12 @@ def bwrap_args(binary: str, run: Plan, args: Sequence[str], ready: int,
         command += ["--dir", f"{scratch}/{name}"]
     for path in _outermost([*run.runtime, *run.reads], bound):
         command += ["--ro-bind", path, path]
+    made = {path for path, _ in system}
+    for path, target in run.links:  # those a bind above does not already hold
+        if path not in made and _outermost([path], [*bound, *run.runtime, *run.reads,
+                                                     run.write]):
+            command += ["--symlink", target, path]
+            made.add(path)
     command += ["--bind", run.write, run.write, "--dir", run.cwd, "--remount-ro", "/",
                 "--chdir", run.cwd, "--", run.python, "-I", "-c", BOOTSTRAP, str(ready),
                 run.python, *args]
@@ -268,7 +312,9 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
     [write] = param("WRITE", [run.write])
     [tmp] = param("SCRATCH", [scratch])
     allowed = [*run.runtime, *run.reads, run.write, scratch, *MAC_READ, *MAC_READ_FILES]
-    metadata = param("ANCESTOR", sorted({a for p in allowed for a in _ancestors(p)}))
+    links = [path for path, _ in run.links]  # a link is followed by reading its metadata
+    metadata = param("ANCESTOR", sorted({a for p in (*allowed, *links) for a in _ancestors(p)}
+                                        | set(links)))
     listed = param("LIST", run.lists)
 
     def rule(kind: str, items: Sequence[str]) -> str:
@@ -318,6 +364,15 @@ class Sandbox:
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}, not {self.kind!r}")
+
+    def always_reads(self) -> tuple[str, ...]:
+        """What every run can read, whatever paths its caller names: the interpreter's
+        directories and the system's. Nothing to be kept from the code may lie under
+        one of them."""
+        _, runtime = interpreter()
+        if self.kind == "bwrap":
+            return (*runtime, *(path for path, _ in linux_system()))
+        return (*runtime, *MAC_READ, *MAC_READ_FILES)
 
     @contextlib.contextmanager
     def _scratch(self, run: Plan) -> Iterator[str]:

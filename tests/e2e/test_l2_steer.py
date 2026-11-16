@@ -10,11 +10,13 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import sys
 import threading
 import time
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from inspect_ai.log import read_eval_log
@@ -25,6 +27,7 @@ from experiments.l2 import steer
 from experiments.l2.agent import run_l2
 from experiments.l2.audit import Audit, main
 from experiments.l2.audit_report import write_report
+from experiments.l2.experiment import REPO
 from experiments.l2.fake import PROMPT, fake_model
 from experiments.l2.tools import Tools, inspect_tools
 from tests.support.l2_audit import InProcess, brief
@@ -716,6 +719,21 @@ def test_with_cosmos_require_sandbox_the_audit_starts_only_if_it_will_report_one
         "write": str((tmp_path / "c" / "figures").resolve())}
 
 
+def test_cosmos_require_sandbox_refuses_an_analysis_of_an_audit_that_wrote_scenarios(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("COSMOS_REQUIRE_SANDBOX", "1")
+    holds(monkeypatch)
+    source = tmp_path / "earlier" / "experiments" / "exp-1"
+    source.mkdir(parents=True)
+    (source / "runs.jsonl").write_text("")
+    (tmp_path / "earlier" / "scenarios").mkdir()
+    (tmp_path / "earlier" / "scenarios" / "planted.py").write_text("raise SystemError\n")
+    with pytest.raises(SystemExit, match="holds written scenarios, which this audit imports"):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--fake",
+              "--analysis-only", str(source)])
+    assert not (tmp_path / "a").exists()
+
+
 @pytest.mark.parametrize("inside", ["figures/box", "experiments/exp-1/box"])
 def test_a_mailbox_the_sandbox_could_read_stops_the_audit_from_starting(
         tmp_path, monkeypatch, inside):
@@ -726,6 +744,20 @@ def test_a_mailbox_the_sandbox_could_read_stops_the_audit_from_starting(
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(out), "--mock", "--fake",
               "--sandbox"])
     assert not out.exists()
+
+
+@pytest.mark.parametrize("where", ["interpreter", "repository"])
+def test_a_mailbox_under_a_path_every_sandboxed_run_reads_stops_the_audit(
+        tmp_path, monkeypatch, where):
+    """The sandbox binds the interpreter's directories for every run, and the check of a
+    written scenario reads the repository's sources: a mailbox there could be read too."""
+    holds(monkeypatch)
+    root = Path(sys.prefix) if where == "interpreter" else REPO / "experiments"
+    monkeypatch.setenv("COSMOS_STEER_DIR", str(root / "steer-never-made"))
+    with pytest.raises(SystemExit, match="which the sandbox can read"):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
+              "--fake", "--sandbox"])
+    assert not (tmp_path / "a").exists() and not (root / "steer-never-made").exists()
 
 
 @pytest.mark.parametrize("bad", ["link", "open", "theirs"])

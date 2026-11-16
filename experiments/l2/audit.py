@@ -183,13 +183,19 @@ class Audit:
         allowed = self.brief.allowed_changes
         return self.analysis is None and (allowed is None or SCENARIO in allowed)
 
+    @property
+    def holds_scenarios(self) -> bool:
+        """Whether a written scenario is on disk for this audit to import (looked for,
+        not imported): its own, or, for an analysis-only audit, the analysed audit's."""
+        return self.scenarios_dir.is_dir() and any(self.scenarios_dir.glob("*.py"))
+
     def sandbox_report(self) -> dict[str, Any] | None:
         """The sandbox this audit may report (Cosmos spec 22 §5, ``program.json``):
-        ``{"kind", "network": False, "write"}`` only when it has one and writes no
-        scenarios, since a written scenario is imported into this process and run in each
-        epoch's subprocess, both outside the sandbox. ``None`` otherwise, and then text
-        from Cosmos never reaches L2 (rule R18; ``experiments.l2.steer``)."""
-        if self.sandbox is None or self.writes_scenarios:
+        ``{"kind", "network": False, "write"}`` only when it has one, writes no scenarios
+        and holds none, since a written scenario is imported into this process and run in
+        each epoch's subprocess, both outside the sandbox. ``None`` otherwise, and then
+        text from Cosmos never reaches L2 (rule R18; ``experiments.l2.steer``)."""
+        if self.sandbox is None or self.writes_scenarios or self.holds_scenarios:
             return None
         return {"kind": self.sandbox.kind, "network": False,
                 "write": str((self.out / FIGURES).resolve())}
@@ -704,17 +710,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             brief_path = Path(tmp) / "brief.md"
             brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
                                   f"{args.question.strip()}\n")
-        if required and Audit(out, parse_brief(brief_path), mock=args.mock,
-                              analysis=args.analysis_only,
-                              sandbox=sandbox).sandbox_report() is None:
+        planned = Audit(out, parse_brief(brief_path), mock=args.mock,
+                        analysis=args.analysis_only, sandbox=sandbox)
+        if required and planned.sandbox_report() is None:
             raise SystemExit(
-                "COSMOS_REQUIRE_SANDBOX=1, but this audit lets L2 write scenarios, whose "
-                "code runs outside the sandbox (in this process, and in each epoch with the "
-                "provider's key and the network): not started. Leave scenario out of the "
-                "brief's allowed_changes, or run --analysis-only")
+                "COSMOS_REQUIRE_SANDBOX=1, but " + (
+                    "this audit lets L2 write scenarios, whose code runs outside the "
+                    "sandbox (in this process, and in each epoch with the provider's key "
+                    "and the network): not started. Leave scenario out of the brief's "
+                    "allowed_changes" if planned.writes_scenarios else
+                    f"{planned.scenarios_dir} holds written scenarios, which this audit "
+                    "imports into its own process, outside the sandbox: not started"))
         if steering is not None and sandbox is not None:
             visible = [out / FIGURES, out / "experiments",
-                       *([args.analysis_only] if args.analysis_only else [])]
+                       *([args.analysis_only] if args.analysis_only else []),
+                       *(m1.REPO / part for part in written_.CHECK_READS),
+                       *map(Path, sandbox.always_reads())]
             if inside := steer_.under(steering[0].path, visible):
                 raise SystemExit(f"the mailbox {steering[0].path} is inside {inside}, which "
                                  "the sandbox can read: put it outside (COSMOS_STEER_DIR)")

@@ -112,8 +112,9 @@ does not run. Without the flag nothing changes.
 
 Not everything is sandboxed. A scenario L2 writes is imported into the audit's process
 and runs in each epoch with the OpenRouter key and the network, because its agents need
-both. So an audit counts as sandboxed only when it writes no scenarios: an
-`--analysis-only` audit, or a brief whose `allowed_changes` leave out `scenario`.
+both. So an audit counts as sandboxed only when it writes no scenarios and has none to
+import: a brief whose `allowed_changes` leave out `scenario`, or an `--analysis-only`
+audit of runs whose audit wrote no scenarios.
 
 On Linux the sandbox is bubblewrap:
 

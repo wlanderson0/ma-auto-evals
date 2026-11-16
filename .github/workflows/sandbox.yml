@@ -6,6 +6,10 @@ on:
       - experiments/l2/sandbox.py
       - experiments/l2/workspace.py
       - experiments/l2/written.py
+      - experiments/l2/tools.py
+      - experiments/l2/audit.py
+      - experiments/l2/study.py
+      - experiments/l2/figures.py
       - tests/**/test_l2_sandbox.py
       - .github/workflows/sandbox.yml
   push:
@@ -14,6 +18,10 @@ on:
       - experiments/l2/sandbox.py
       - experiments/l2/workspace.py
       - experiments/l2/written.py
+      - experiments/l2/tools.py
+      - experiments/l2/audit.py
+      - experiments/l2/study.py
+      - experiments/l2/figures.py
       - tests/**/test_l2_sandbox.py
       - .github/workflows/sandbox.yml
 

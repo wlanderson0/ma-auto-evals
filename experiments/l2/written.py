@@ -32,7 +32,7 @@ written scenario still run it outside any sandbox, in the per-epoch subprocess, 
 has the OpenRouter key and the network (the agents need both), and the L2 process
 imports it to build variants. Code that called a model outside Inspect would not be
 counted by the ledger. So an audit reports a sandbox only when it writes no scenarios
-(``Audit.sandbox_report``; spec §12).
+and holds none (``Audit.sandbox_report``; spec §12).
 """
 
 from __future__ import annotations

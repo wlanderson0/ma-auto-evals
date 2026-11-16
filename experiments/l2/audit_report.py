@@ -135,6 +135,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
                 f"sandbox ({audit.sandbox.kind}): no network, writes only under `figures/`. "
                 + ("L2 could write scenarios, whose code runs outside it (in the audit's "
                    "process and in each epoch)." if audit.writes_scenarios else
+                   "The scenarios written before this audit were imported into its process, "
+                   "outside the sandbox." if audit.holds_scenarios else
                    "L2 could write no scenarios, so none of its code ran outside it."), ""]
     if writeup_text(tools) is not None:
         out += ["L2's readable write-up, with tables and figures, is in `writeup.md`; this "
