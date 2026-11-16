@@ -934,7 +934,8 @@ class Steering:
         self._out({"type": "ask", "ask_key": ask.key, "text": ask.text,
                    "choices": ask.choices, "allow_text": ask.allow_text,
                    "default_choice": ask.default,
-                   "cost": None if cost is None else {"usd": cost}, "timeout_s": timeout})
+                   "cost": None if cost is None else {"usd": cost}, "timeout_s": timeout,
+                   "asked_at": stamp(now())})
         self.asks[ask.key] = ask
         self.say(f"steering: L2 asks ({ask.key}): {escape(ask.text)}\n  choices: "
                  + ", ".join(escape(c) for c in ask.choices)
@@ -1157,7 +1158,8 @@ def status(mailbox: Mailbox, as_json: bool) -> int:
     found = mailbox.outbox()
     asks = [{"ask_key": key, "text": ask.get("text"), "choices": ask.get("choices"),
              "allow_text": ask.get("allow_text"), "default_choice": ask.get("default_choice"),
-             "cost": ask.get("cost"), "timeout_s": ask.get("timeout_s")}
+             "cost": ask.get("cost"), "timeout_s": ask.get("timeout_s"),
+             "asked_at": ask.get("asked_at"), "left_s": _left(ask)}
             for key, ask in found.open_asks().items()] if state == "reading" else []
     acks = found.acks[-10:]
     if as_json:
@@ -1177,14 +1179,12 @@ def status(mailbox: Mailbox, as_json: bool) -> int:
     print("maximum budget: " + (f"${escape(limit)}" if limit is not None else
                                 "none (no budget requests)"))
     for ask in asks:
-        # The outbox does not record when a question was asked, so the time left is not
-        # known here: its timeout is shown.
         print(f"open question {escape(ask['ask_key'])}: {escape(ask['text'])}\n  choices: "
               + ", ".join(escape(c) for c in ask["choices"] or [])
               + (f"; default {escape(ask['default_choice'])}"
                  if ask["default_choice"] is not None else "")
-              + (f"; answers itself within {escape(ask['timeout_s'])} s of being asked"
-                 if ask["timeout_s"] is not None else "")
+              + (f"; {ask['left_s']} s left before it answers itself"
+                 if ask["left_s"] is not None else "")
               + ("; takes text" if ask["allow_text"] else ""))
     if not asks:
         print("open questions: none")
@@ -1195,6 +1195,15 @@ def status(mailbox: Mailbox, as_json: bool) -> int:
               + (f": {escape(ack['reason'])}" if "reason" in ack else "")
               + (f" ({escape(ack['kind'])}, sent on the machine)" if "kind" in ack else ""))
     return 0
+
+
+def _left(ask: Mapping[str, Any]) -> int | None:
+    """Whole seconds before an open question answers itself, from its ``asked_at`` and
+    ``timeout_s`` (0 once that has passed); ``None`` when either cannot be read."""
+    asked, timeout = parse_time(ask.get("asked_at")), ask.get("timeout_s")
+    if asked is None or isinstance(timeout, bool) or not isinstance(timeout, int | float):
+        return None
+    return max(0, math.ceil(timeout - (now() - asked).total_seconds()))
 
 
 def parser() -> argparse.ArgumentParser:

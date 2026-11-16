@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -309,7 +310,8 @@ def test_status_shows_the_program_its_questions_and_acks(tmp_path, capsys):
         box.append(steer.OUTBOX, {"schema": steer.SCHEMA, "type": "ask", "ask_key": "ask-1",
                                   "text": "Run it?\x1b[31m", "choices": ["Approve", "Skip"],
                                   "allow_text": False, "default_choice": "Skip",
-                                  "cost": {"usd": "4.10"}, "timeout_s": 300})
+                                  "cost": {"usd": "4.10"}, "timeout_s": 300,
+                                  "asked_at": steer.stamp(steer.now() - timedelta(seconds=60))})
         rid = str(uuid.uuid4())
         box.append(steer.OUTBOX, {"schema": steer.SCHEMA, "type": "ack", "id": rid,
                                   "state": "refused", "reason": "expired"})
@@ -317,11 +319,14 @@ def test_status_shows_the_program_its_questions_and_acks(tmp_path, capsys):
         out = capsys.readouterr().out
         assert "reading" in out and "maximum budget: $25.00" in out
         assert "open question ask-1: Run it?\\x1b[31m" in out and "\x1b" not in out
+        [left] = re.findall(r"; (\d+) s left before it answers itself", out)
+        assert 230 <= int(left) <= 240  # asked 60 s ago, with 300 s to answer
         assert f"{rid} refused: expired" in out
         assert command(tmp_path, "status", "--json") == 0
         found = json.loads(capsys.readouterr().out)
         assert found["state"] == "reading" and found["sandbox"] is None
         assert [a["ask_key"] for a in found["open_questions"]] == ["ask-1"]
+        assert 230 <= found["open_questions"][0]["left_s"] <= 240
         assert found["acks"][0]["id"] == rid
     finally:
         os.close(held)
