@@ -948,6 +948,7 @@ class Steering:
                    "default_choice": ask.default,
                    "cost": None if cost is None else {"usd": cost}, "timeout_s": timeout,
                    "asked_at": stamp(now())})
+        self._sent("the question was not asked")
         self.asks[ask.key] = ask
         self.say(f"steering: L2 asks ({ask.key}): {escape(ask.text)}\n  choices: "
                  + ", ".join(escape(c) for c in ask.choices)
@@ -965,10 +966,13 @@ class Steering:
                 self.flush()
                 return (f"Question {ask.key} was withdrawn: the audit is stopping "
                         f"({self.audit.halted}). Conclude now.")
-            if time.monotonic() >= until:
+            unread = self.broken is not None  # nobody's answer can arrive any more
+            if unread or time.monotonic() >= until:
                 self._close_ask(ask.key, "timed_out")
                 self.flush()
-                return (f"No answer to {ask.key} within {timeout} s: "
+                return ((f"Question {ask.key} can no longer be answered: the researchers' "
+                         f"mailbox is no longer read ({self.broken}): " if unread
+                         else f"No answer to {ask.key} within {timeout} s: ")
                         + (f"the default applies: {ask.default}." if ask.default is not None
                            else "there is no default, so decide yourself."))
             await anyio.sleep(min(self.poll_s, max(until - time.monotonic(), 0.0)))
@@ -1021,6 +1025,13 @@ class Steering:
         return (Ask(key=f"ask-{self.numbers['ask']}", text=question, choices=list(choices),
                     allow_text=allow_text, default=default), timeout, cost)
 
+    def _sent(self, what: str) -> None:
+        """After a line L2 is told about: refuse when the mailbox failed at that write, so
+        L2 is never told a question or a reply went out when it did not."""
+        if self.broken is not None:
+            raise Refusal(f"refused: the researchers' mailbox is no longer read "
+                          f"({self.broken}), so {what}")
+
     def _close_ask(self, key: str, state: str) -> None:
         self.asks.pop(key, None)
         self._out({"type": "ask_closed", "ask_key": key, "state": state})
@@ -1038,6 +1049,7 @@ class Steering:
         self.numbers["say"] += 1
         key = f"say-{self.numbers['say']}"
         self._out({"type": "say", "say_key": key, "in_reply_to": note_id, "text": text})
+        self._sent("the reply was not sent")
         self.say(f"steering: L2 says ({key}): {escape(text)}")
         return f"Sent as {key}" + (f", in reply to note {note_id}." if note_id else ".")
 
