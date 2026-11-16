@@ -180,7 +180,7 @@ def _iso(stamp: str | None) -> str | None:
 def report_html(audit: Path, experiment: Path, scenarios: Sequence[str]) -> str:
     """The audit's report, then its brief, the experiment's variants and the code of the
     written scenarios it ran (``scenarios``), as one page."""
-    markdown = MarkdownIt("commonmark", {"html": False}).enable("table")
+    markdown = _markdown()
     variants = [json.loads(line) for line in
                 (experiment / "variants.jsonl").read_text().splitlines() if line.strip()]
     parts = [markdown.render((audit / "report.md").read_text()),
@@ -194,9 +194,23 @@ def report_html(audit: Path, experiment: Path, scenarios: Sequence[str]) -> str:
         parts += [f"<h2>{html.escape(name)}</h2>",
                   f"<p>sha256: <code>{html.escape(sha)}</code></p>",
                   f"<pre>{html.escape(code)}</pre>"]
-    title = html.escape(f"{audit.name}: {experiment.name}")
+    return _page(f"{audit.name}: {experiment.name}", parts)
+
+
+def audit_report_html(audit: Path) -> str:
+    """The audit's report alone, as ``report_html`` renders it (the audit run's page)."""
+    return _page(audit.name, [_markdown().render((audit / "report.md").read_text())])
+
+
+def _markdown() -> MarkdownIt:
+    """CommonMark with tables; raw HTML in the source is shown as text."""
+    return MarkdownIt("commonmark", {"html": False}).enable("table")
+
+
+def _page(title: str, parts: Sequence[str]) -> str:
     return ("<!doctype html>\n<html><head><meta charset=\"utf-8\">"
-            f"<title>{title}</title></head><body>\n" + "\n".join(parts) + "\n</body></html>\n")
+            f"<title>{html.escape(title)}</title></head><body>\n" + "\n".join(parts)
+            + "\n</body></html>\n")
 
 
 def main(argv: Sequence[str] | None = None) -> None:

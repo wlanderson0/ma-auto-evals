@@ -86,8 +86,10 @@ dirty), the PR, scenarios, conditions, epochs, the seat of each scenario, the
 models per role and agent, start and finish times, and the arguments (with
 local absolute paths shortened).
 
-`cosmos upload` collects the `.eval`, `.json` and `.html` files in the folder,
-skips everything else, scans them for secrets (see
+`cosmos upload` collects the `.eval`, `.json` and `.html` files in the folder
+(and, from a CLI and server that take reports, `.md` files and `.png`, `.jpg`,
+`.jpeg` and `.webp` images, which an L2 audit run carries: its write-up and
+figures), skips everything else, scans them for secrets (see
 [Troubleshooting](#troubleshooting)), hashes them and sends only the files the
 server does not already have. It prints the run link on stdout; progress goes
 to stderr.

@@ -26,11 +26,27 @@ The **audit run** is one more Cosmos run beside the experiments'. Its folder hol
 - under ``study/``: ``claims.json`` (when L2 ended the audit), ``ledger.json``,
   ``brief.json`` (``{"text": <brief.md as given>}``), and ``decisions.json``,
   ``proposed.json`` and ``launches.json``, the audit's JSONL files as JSON arrays (empty
-  when the audit has none): ``cosmos upload`` sends only ``.eval``, ``.json`` and
-  ``.html`` files. ``review.json`` too, copied as it is, when the audit has one.
+  when the audit has none), so Cosmos reads them by name. ``review.json`` too, copied as
+  it is, when the audit has one;
+- L2's outputs as documents (Cosmos spec 16 §4.6), each only when the audit has it:
+  ``writeup.md``, byte for byte; the images: every ``.png``, ``.jpg``, ``.jpeg`` and
+  ``.webp`` directly under ``figures/``, and any other the write-up embeds by a path
+  inside the audit directory, at the same relative path, never one that leads out of it
+  (at most 400, the write-up's own first; one over 10 MB is left out with a note);
+  ``report.html``, the audit's ``report.md`` as a page;
+  ``study/writeup.json`` (``{"final", "body_line", "facts": [{"name", "value"}],
+  "embeds", "missing"}``: whether the write-up is final, the line of ``writeup.md`` where
+  L2's own text starts, the harness's facts above it, the images it embeds and those that
+  are not files); and ``study/figures.json``, one entry per comparison figure, from the
+  ``.json`` ``Tools._figure`` writes beside it (``{"path", "a", "b", "scorer", "field",
+  "rounds", "measure", "call", "targets": {"<agent>": {"a": {"k", "n", "incomplete"},
+  "b": {...}}}}``, ``call`` the first ``scores`` call that draws it). Those sidecars are
+  not sent: a ``.json`` outside ``study/`` would be read as results. A part that cannot
+  be made is left out with a note, never failing the export.
 
 Cosmos servers older than studies keep the ``study`` key as part of the manifest and
-file ``study/*.json`` as plain files, so they accept the upload as before.
+file ``study/*.json`` as plain files, so they accept the upload as before; a ``cosmos``
+CLI older than reports skips the ``.md`` and image files.
 
 **Annotations.** ``annotations.jsonl`` (L2 spec §6.2) holds comments and tags in
 Cosmos's record shape (Cosmos spec 13, "Annotations import"): ``{"id", "kind": "comment"
@@ -47,8 +63,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
+import re
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +76,11 @@ AUDIT_RUN = "audit"
 """The audit run's name in ``cosmos-runs.json`` and its folder in ``cosmos/``."""
 JSONL = ("decisions", "proposed", "launches")
 """The audit's JSONL files the audit run carries as JSON arrays."""
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+"""The images the audit run carries (those Cosmos takes)."""
+MAX_IMAGES = 400
+MAX_IMAGE_BYTES = 10 * 2**20
+"""Cosmos's limits on a run's images: an image past them is left out with a note."""
 
 
 def l2_logs(audit: Path) -> list[Path]:
@@ -161,8 +184,185 @@ def export_audit(audit: Path, out: Path, *, pr: int | None = None,
         (out / "study" / f"{name}.json").write_text(json.dumps(data, indent=2) + "\n")
     if (audit / "review.json").exists():
         shutil.copyfile(audit / "review.json", out / "study" / "review.json")
+    export_documents(audit, out)
     write_manifest(out, manifest)
     return out
+
+
+def export_documents(audit: Path, out: Path, say: Callable[[str], None] = print) -> None:
+    """The audit's write-up, its images, its report as a page, and ``study/writeup.json``
+    and ``study/figures.json`` (Cosmos spec 16 §4.6), into the audit run's folder ``out``.
+    A part that cannot be made is left out with a note: it never fails the export."""
+    from experiments.l2.cosmos import audit_report_html
+
+    audit, out = Path(audit), Path(out)
+    parts: list[tuple[str, Callable[[], None]]] = [
+        ("writeup.md", lambda: _copy_writeup(audit, out)),
+        ("images", lambda: _copy_images(audit, out, say)),
+        ("report.html", lambda: (out / "report.html").write_text(audit_report_html(audit))
+         if _inside(audit, "report.md") else None),
+        ("study/writeup.json", lambda: _write_json(out / "study" / "writeup.json",
+                                                   writeup_json(audit))),
+        ("study/figures.json", lambda: _write_json(out / "study" / "figures.json",
+                                                   figures_json(audit, out, say))),
+    ]
+    for name, make in parts:
+        try:
+            make()
+        except Exception as error:  # a document never costs the audit its upload
+            say(f"{name} left out of the audit run: {type(error).__name__}: {error}")
+
+
+def _write_json(path: Path, data: Any) -> None:
+    if data:  # nothing to say: the file is absent
+        path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _copy_writeup(audit: Path, out: Path) -> None:
+    if _inside(audit, "writeup.md"):
+        shutil.copyfile(audit / "writeup.md", out / "writeup.md")  # byte for byte
+
+
+def images(audit: Path) -> list[str]:
+    """The images the audit run carries, by their path relative to the audit: every image
+    the write-up embeds by a path inside the audit directory, in its order (so its links
+    resolve unchanged and come first under the limit), then every other image directly
+    under ``figures/``. Only a regular file inside the audit directory is carried: a path
+    or a link that leads out of it never is."""
+    from experiments.l2.figures import FIGURES
+    from experiments.l2.tools import embeds
+
+    audit = Path(audit)
+    found = embeds((audit / "writeup.md").read_text() if _inside(audit, "writeup.md") else None)
+    found += sorted(f"{FIGURES}/{p.name}" for p in (audit / FIGURES).glob("*"))
+    carried: list[str] = []
+    for src in found:
+        rel = _inside(audit, src)
+        if rel is not None and Path(rel).suffix.lower() in IMAGE_SUFFIXES and rel not in carried:
+            carried.append(rel)
+    return carried
+
+
+def _inside(audit: Path, src: str) -> str | None:
+    """``src`` as a normalised path relative to the audit directory, when it names a
+    regular file inside it (the links on its way resolved); ``None`` otherwise."""
+    if Path(src).is_absolute() or "://" in src or "\\" in src:
+        return None
+    rel = posixpath.normpath(src)
+    if rel in (".", "..") or rel.startswith(("../", "/")):
+        return None
+    root = audit.resolve()
+    path = (root / rel).resolve()
+    return rel if path.is_relative_to(root) and path.is_file() else None
+
+
+def _copy_images(audit: Path, out: Path, say: Callable[[str], None]) -> None:
+    sent, over = 0, []
+    for rel in images(audit):
+        try:
+            source = (audit / rel).resolve()
+            if source.stat().st_size > MAX_IMAGE_BYTES:
+                say(f"{rel} left out of the audit run: an image over "
+                    f"{MAX_IMAGE_BYTES // 2**20} MB")
+                continue
+            if sent == MAX_IMAGES:
+                over.append(rel)
+                continue
+            (out / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, out / rel)
+            sent += 1
+        except OSError as error:  # one image that cannot be read costs only itself
+            say(f"{rel} left out of the audit run: {type(error).__name__}: {error}")
+    if over:
+        say(f"{len(over)} images left out of the audit run: at most {MAX_IMAGES} are sent "
+            f"({', '.join(over[:5])}{', ...' if len(over) > 5 else ''})")
+
+
+def writeup_json(audit: Path) -> dict[str, Any] | None:
+    """``study/writeup.json``: the parts ``write_writeup`` kept in the audit's
+    ``writeup.json`` (read from ``writeup.md`` for an audit written before it kept them),
+    the images the write-up embeds and those that are not files (``missing``)."""
+    from experiments.l2.tools import embedded, embeds
+
+    audit = Path(audit)
+    if not _inside(audit, "writeup.md"):
+        return None
+    text = (audit / "writeup.md").read_text()
+    kept = audit / "writeup.json"
+    parts = json.loads(kept.read_text()) if kept.is_file() else _parts_of(text)
+    found = list(dict.fromkeys(embeds(text)))
+    return {"final": bool(parts["final"]), "body_line": int(parts["body_line"]),
+            "facts": parts["facts"], "embeds": found,
+            "missing": [src for src in found if embedded(audit, src) is None]}
+
+
+def _parts_of(text: str) -> dict[str, Any]:
+    """The parts of a ``writeup.md`` as ``write_writeup`` wrote it: its facts table, the
+    draft marker, and the line after the ``---`` that ends the harness's part."""
+    lines = text.split("\n")
+    end = lines.index("---") if "---" in lines else -2
+    facts = []
+    for line in lines[:max(end, 0)]:
+        cells = re.fullmatch(r"\| (.+?) \| (.*) \|", line)
+        if cells:  # a fact's row; the table's empty header and rule have no cells
+            facts.append({"name": cells.group(1),
+                          "value": cells.group(2).replace("\\|", "|")})
+    return {"final": not any(line.startswith("> **Draft:**") for line in lines[:max(end, 0)]),
+            "body_line": end + 3, "facts": facts}
+
+
+def figures_json(audit: Path, out: Path,
+                 say: Callable[[str], None] = print) -> list[dict[str, Any]]:
+    """``study/figures.json``: one entry per comparison figure the audit run carries, from
+    the sidecar ``Tools._figure`` wrote beside it, with ``call``, the trace's first
+    successful ``scores`` call that draws it (``None`` if none is found). A sidecar that
+    cannot be read is left out with a note."""
+    from experiments.l2.figures import FIGURES
+
+    audit = Path(audit)
+    calls = figure_calls(audit)
+    entries = []
+    for sidecar in sorted((audit / FIGURES).glob("*.json")):
+        path = sidecar.with_suffix(".png").relative_to(audit).as_posix()
+        if not (Path(out) / path).is_file():
+            continue  # the image was left out, or never drawn: a JSON of L2's own
+        try:
+            drawn = json.loads(sidecar.read_text())
+            entries.append({
+                "path": path, **{key: drawn.get(key) for key in
+                                 ("a", "b", "scorer", "field", "rounds", "measure")},
+                "call": calls.get(path),
+                "targets": {agent: {side: {key: row[side][key] for key in
+                                           ("k", "n", "incomplete")} for side in ("a", "b")}
+                            for agent, row in drawn["compared"].items()}})
+        except Exception as error:  # one sidecar costs only its own entry
+            say(f"{path} left out of study/figures.json: {type(error).__name__}: {error}")
+    return entries
+
+
+def figure_calls(audit: Path) -> dict[str, int]:
+    """Each comparison figure's path, by the ``seq`` of the first successful ``scores``
+    call (L2's, not the reviewer's) whose ``variant_ids`` and ``against`` draw it."""
+    from experiments.l2.figures import figure_name
+    from experiments.l2.tools import _ids, _jsonl
+
+    calls: dict[str, int] = {}
+    rows = [row for row in _jsonl(Path(audit) / "trace.jsonl") if isinstance(row, dict)
+            and isinstance(row.get("seq"), int) and isinstance(row.get("args"), dict)]
+    for row in sorted(rows, key=lambda row: row["seq"]):
+        args = row["args"]
+        if (row.get("tool") != "scores" or not row.get("ok") or row.get("by") == "reviewer"
+                or not args.get("against")):
+            continue
+        try:
+            ids = _ids(args["variant_ids"])
+            names = [figure_name(a, args["against"], args.get("scorer"), args.get("field"),
+                                 args.get("rounds")) for a in ids if a != args["against"]]
+        except Exception:  # a row this export cannot read draws nothing
+            continue
+        for name in names:
+            calls.setdefault(name, row["seq"])
+    return calls
 
 
 def annotation_batches(audit: Path, where: Mapping[str, str]) -> tuple[

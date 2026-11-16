@@ -11,9 +11,11 @@ from pathlib import Path
 import pytest
 from inspect_ai.log import read_eval_log
 
+from experiments.l2 import study as study_
 from experiments.l2.agent import run_l2
 from experiments.l2.audit import Audit
-from experiments.l2.audit_report import write_report
+from experiments.l2.audit_report import write_report, write_writeup
+from experiments.l2.brief import parse_brief
 from experiments.l2.cosmos import export
 from experiments.l2.cosmos_links import NotOnServer
 from experiments.l2.fake import DAVE_ON_TOWN, PROMPT, fake_model
@@ -115,7 +117,8 @@ def test_the_audit_run_holds_the_manifest_l2s_log_and_the_study_files(audit, tmp
     assert (manifest["started_at"], manifest["finished_at"]) == (
         header.stats.started_at, header.stats.completed_at)
     assert (audit / "review.json").exists()  # end_audit's reviewer writes it
-    assert sorted(p.name for p in (out / "study").iterdir()) == sorted(STUDY_FILES + ["review.json"])
+    assert sorted(p.name for p in (out / "study").iterdir()) == sorted(
+        STUDY_FILES + ["review.json", "writeup.json"])
     read = {p.stem: json.loads(p.read_text()) for p in (out / "study").iterdir()}
     assert read["brief"] == {"text": (audit / "brief.md").read_text()}
     assert read["claims"] == json.loads((audit / "claims.json").read_text())
@@ -132,7 +135,9 @@ def test_older_cosmos_servers_accept_the_audit_run(audit, tmp_path):
     as findings when it is a list of ``title``/``body`` items: none of study/ is either."""
     out = export_audit(audit, tmp_path / "out")
     files = [p for p in out.rglob("*") if p.is_file()]
-    assert {p.suffix for p in files} == {".eval", ".json"}
+    assert {p.suffix for p in files} == {".eval", ".json", ".html", ".md"}  # .md is skipped
+    assert {p.relative_to(out).as_posix() for p in files if p.suffix == ".json"} == {
+        "manifest.json", *(f"study/{p.name}" for p in (out / "study").iterdir())}
     for path in (out / "study").iterdir():
         data = json.loads(path.read_text())
         assert not path.name.startswith("results") and "findings" not in path.name
@@ -250,6 +255,170 @@ def test_review_json_is_copied_when_the_audit_has_one(audit, tmp_path):
     (audit / "review.json").write_text(json.dumps(review))
     out = export_audit(audit, tmp_path / "out")
     assert json.loads((out / "study" / "review.json").read_text()) == review
+
+
+def test_the_audit_run_carries_the_write_up_byte_for_byte_and_the_report(audit, tmp_path):
+    """The module's audit has a write-up (the fake's last, after its review) and no
+    comparison: no figures and no figures.json."""
+    out = export_audit(audit, tmp_path / "out")
+    assert (out / "writeup.md").read_bytes() == (audit / "writeup.md").read_bytes()
+    page = (out / "report.html").read_text()
+    assert page.startswith("<!doctype html>") and f"<title>{audit.name}</title>" in page
+    assert "<h1>Brief</h1>" not in page and "<h1>Variants</h1>" not in page
+    assert "<h2>Record</h2>" in page  # report.md's own sections
+    writeup = json.loads((out / "study" / "writeup.json").read_text())
+    assert writeup == {**json.loads((audit / "writeup.json").read_text()),
+                       "embeds": [], "missing": []}
+    lines = (audit / "writeup.md").read_text().split("\n")
+    assert lines[writeup["body_line"] - 3: writeup["body_line"] - 1] == ["---", ""]
+    assert lines[writeup["body_line"] - 1].startswith("Fake L2: the script is spent")
+    assert writeup["final"] is True
+    assert {"name": "How it ended", "value": "L2 ended the audit"} in writeup["facts"]
+    assert not (out / "figures").exists() and not (out / "study" / "figures.json").exists()
+
+
+def test_the_report_page_shows_raw_html_in_report_md_as_text(audit, tmp_path):
+    report = audit / "report.md"
+    report.write_text(report.read_text() + "\n<script>alert(1)</script>\n\n"
+                      "[x](javascript:alert(1))\n")
+    page = (export_audit(audit, tmp_path / "out") / "report.html").read_text()
+    assert "<script>" not in page and "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert 'href="javascript:' not in page
+
+
+def compared_and_written(audit, writeup):
+    """A comparison drawn after the audit (V1 against C0, so ``figures/`` has its image
+    and sidecar), and ``writeup`` as L2's final write-up; the scores call's seq."""
+    tools = Tools(Audit(audit, parse_brief(audit / "brief.md")))
+    tools.conclusions, tools.writeup = "concluded", writeup
+    ok, _, seq = tools.numbered_call("scores", variant_ids=["V1", "C0"], against="C0",
+                                     scorer="probe")
+    assert ok
+    write_writeup(tools)
+    return tools, seq
+
+
+def test_the_figures_go_with_the_numbers_they_were_drawn_from(audit, tmp_path):
+    png = audit / "figures" / "V1-vs-C0-probe.png"
+    (audit / "plots").mkdir()
+    (audit / "outside.png").write_bytes(b"not an embed")
+    tools, seq = compared_and_written(audit, "\n\n".join([
+        "Results.", "![V1 vs C0](figures/V1-vs-C0-probe.png)", "![mine](plots/own.png)",
+        "![gone](figures/gone.png)"]))
+    shutil.copyfile(png, audit / "plots" / "own.png")  # L2's own, outside figures/
+    out = export_audit(audit, tmp_path / "out")
+    assert (out / "figures" / png.name).read_bytes() == png.read_bytes()
+    assert (out / "plots" / "own.png").read_bytes() == png.read_bytes()
+    assert not (out / "outside.png").exists()  # not embedded, not under figures/
+    assert not list((out / "figures").glob("*.json"))  # sidecars are not sent
+    writeup = json.loads((out / "study" / "writeup.json").read_text())
+    assert writeup["embeds"] == ["figures/V1-vs-C0-probe.png", "plots/own.png",
+                                 "figures/gone.png"]
+    assert writeup["missing"] == ["figures/gone.png"]  # own.png is there by now
+    [figure] = json.loads((out / "study" / "figures.json").read_text())
+    drawn = json.loads(png.with_suffix(".json").read_text())
+    compared = tools.results().compare("V1", "C0", "probe")
+    assert drawn["compared"] == json.loads(json.dumps(compared))
+    assert figure == {
+        "path": "figures/V1-vs-C0-probe.png", "a": "V1", "b": "C0", "scorer": "probe",
+        "field": None, "rounds": None, "measure": "probe", "call": seq,
+        "targets": {agent: {side: {key: row[side][key] for key in ("k", "n", "incomplete")}
+                            for side in ("a", "b")} for agent, row in compared.items()}}
+    assert figure["targets"]
+
+
+def test_the_figure_s_call_is_the_first_scores_call_that_draws_it(audit, tmp_path):
+    _, first = compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")
+    compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")  # drawn again
+    out = export_audit(audit, tmp_path / "out")
+    [figure] = json.loads((out / "study" / "figures.json").read_text())
+    assert figure["call"] == first
+
+
+def test_images_past_cosmos_limits_are_left_out_with_a_note(audit, tmp_path, monkeypatch,
+                                                            capsys):
+    """An image over the size limit is left out first; then the write-up's own images come
+    before the other figures under the count limit."""
+    compared_and_written(audit, "![z](figures/z.png)")
+    figures = audit / "figures"
+    for name in ("a.png", "b.png", "z.png"):
+        shutil.copyfile(figures / "V1-vs-C0-probe.png", figures / name)
+    (figures / "B.webp").write_bytes(b"x" * (1024 * 1024 + 1))
+    monkeypatch.setattr(study_, "MAX_IMAGE_BYTES", 1024 * 1024)
+    monkeypatch.setattr(study_, "MAX_IMAGES", 3)  # z.png, then B.webp (too big), V1..., a.png
+    out = export_audit(audit, tmp_path / "out")
+    said = capsys.readouterr().out
+    assert "figures/B.webp left out of the audit run: an image over 1 MB" in said
+    assert "1 images left out of the audit run: at most 3 are sent (figures/b.png)" in said
+    assert sorted(p.name for p in (out / "figures").iterdir()) == [
+        "V1-vs-C0-probe.png", "a.png", "z.png"]
+    [figure] = json.loads((out / "study" / "figures.json").read_text())
+    assert figure["path"] == "figures/V1-vs-C0-probe.png"
+
+
+def test_no_image_from_outside_the_audit_is_carried(audit, tmp_path):
+    """An embed that climbs out of the audit, an absolute one, a link in ``figures/`` or on
+    the embed's way that leads out: none is copied, and the run holds only the audit's."""
+    secret = tmp_path / "secret.png"
+    secret.write_bytes(b"\x89PNG not the audit's")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "deep.png").write_bytes(b"\x89PNG not the audit's either")
+    compared_and_written(audit, "\n\n".join([
+        "![up](../secret.png)", "![up again](figures/../../secret.png)",
+        f"![absolute]({secret})", "![linked](figures/linked.png)",
+        "![through](away/deep.png)", "![inside](figures/./alias.png)"]))
+    figures = audit / "figures"
+    (figures / "linked.png").symlink_to(secret)
+    (audit / "away").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    (figures / "alias.png").symlink_to(figures / "V1-vs-C0-probe.png")  # inside: carried
+    out = export_audit(audit, tmp_path / "out")
+    carried = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.png"))
+    assert carried == ["figures/V1-vs-C0-probe.png", "figures/alias.png"]
+    assert (out / "figures" / "alias.png").read_bytes() == (
+        figures / "V1-vs-C0-probe.png").read_bytes()
+    assert not any(p.is_symlink() for p in out.rglob("*"))
+    assert not list(out.rglob("*.json.png")) and not (tmp_path / "out" / "away").exists()
+    writeup = json.loads((out / "study" / "writeup.json").read_text())
+    assert writeup["missing"] == ["../secret.png", "figures/../../secret.png", str(secret),
+                                  "figures/linked.png", "away/deep.png"]
+
+
+def test_a_figure_whose_image_is_left_out_has_no_entry(audit, tmp_path, monkeypatch):
+    compared_and_written(audit, "no images")
+    monkeypatch.setattr(study_, "MAX_IMAGE_BYTES", 10)
+    out = export_audit(audit, tmp_path / "out")
+    assert not (out / "figures").exists() and not (out / "study" / "figures.json").exists()
+
+
+def test_a_broken_part_is_left_out_and_never_fails_the_export(audit, tmp_path, capsys):
+    compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")
+    (audit / "figures" / "V1-vs-C0-probe.json").write_text("{not json")
+    (audit / "writeup.json").write_text("{}")
+    out = export_audit(audit, tmp_path / "out")
+    said = capsys.readouterr().out
+    assert "figures/V1-vs-C0-probe.png left out of study/figures.json: JSONDecodeError" in said
+    assert not (out / "study" / "figures.json").exists()  # its only entry could not be read
+    assert "study/writeup.json left out of the audit run: KeyError" in said
+    assert (out / "writeup.md").exists() and (out / "figures" / "V1-vs-C0-probe.png").exists()
+    assert (out / "manifest.json").exists()
+
+
+def test_an_audit_written_before_writeup_json_reads_the_parts_from_writeup_md(audit,
+                                                                               tmp_path):
+    kept = json.loads((audit / "writeup.json").read_text())
+    (audit / "writeup.json").unlink()
+    out = export_audit(audit, tmp_path / "out")
+    assert json.loads((out / "study" / "writeup.json").read_text()) == {
+        **kept, "embeds": [], "missing": []}
+
+
+def test_an_audit_without_a_write_up_or_report_exports_without_them(audit, tmp_path):
+    for name in ("writeup.md", "writeup.json", "report.md"):
+        (audit / name).unlink()
+    out = export_audit(audit, tmp_path / "out")
+    assert not (out / "writeup.md").exists() and not (out / "report.html").exists()
+    assert not (out / "study" / "writeup.json").exists()
+    assert (out / "manifest.json").exists()
 
 
 def annotations(audit, records):
