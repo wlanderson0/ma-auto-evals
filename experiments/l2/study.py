@@ -245,15 +245,16 @@ def images(audit: Path) -> list[str]:
 
 def _inside(audit: Path, src: str) -> str | None:
     """``src`` as a normalised path relative to the audit directory, when it names a
-    regular file inside it (the links on its way resolved); ``None`` otherwise."""
+    regular file inside it (the links on its way resolved, none out of ``figures/``:
+    ``tools.embedded``); ``None`` otherwise."""
+    from experiments.l2.tools import embedded
+
     if Path(src).is_absolute() or "://" in src or "\\" in src:
         return None
     rel = posixpath.normpath(src)
     if rel in (".", "..") or rel.startswith(("../", "/")):
         return None
-    root = audit.resolve()
-    path = (root / rel).resolve()
-    return rel if path.is_relative_to(root) and path.is_file() else None
+    return rel if embedded(audit, rel) is not None else None
 
 
 def _copy_images(audit: Path, out: Path, say: Callable[[str], None]) -> None:

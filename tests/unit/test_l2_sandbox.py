@@ -216,6 +216,61 @@ def test_scrub_removes_links_fifos_and_sockets_and_follows_none(tmp_path):
     assert (outside / "keep.txt").read_text() == "outside"
 
 
+def test_scrub_lists_a_directory_the_code_made_unlistable(tmp_path, monkeypatch):
+    """A directory of mode 0o111 cannot be listed by its owner (root ignores modes, so
+    ``scandir`` is made to keep them here): scrub makes it listable again and removes
+    the link hidden in it, at any depth and in the write directory itself."""
+    listing = os.scandir
+
+    def keeps_modes(path):
+        if not os.stat(path).st_mode & 0o400:
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return listing(path)
+
+    monkeypatch.setattr(sandbox_.os, "scandir", keeps_modes)
+    write = tmp_path / "figures"
+    (write / "d" / "e").mkdir(parents=True)
+    (write / "d" / "leak.png").symlink_to(tmp_path / "l2.jsonl")
+    (write / "d" / "e" / "deeper.png").symlink_to(tmp_path / "l2.jsonl")
+    for folder in (write / "d" / "e", write / "d", write):
+        folder.chmod(0o111)
+    assert scrub(write) == [os.path.join("d", "e", "deeper.png"), os.path.join("d", "leak.png")]
+    assert not os.path.lexists(write / "d" / "leak.png")
+    assert (write / "d").stat().st_mode & 0o700 == 0o700
+
+
+def test_scrub_fails_on_a_directory_it_still_cannot_list(tmp_path, monkeypatch):
+    def refused(path):
+        raise PermissionError(13, "Permission denied", os.fspath(path))
+
+    monkeypatch.setattr(sandbox_.os, "scandir", refused)
+    (tmp_path / "figures").mkdir()
+    with pytest.raises(PermissionError):
+        scrub(tmp_path / "figures")
+
+
+def test_scrub_puts_the_write_directory_back_when_a_link_took_its_place(tmp_path):
+    (tmp_path / "l2").mkdir()
+    (tmp_path / "figures").symlink_to(tmp_path / "l2", target_is_directory=True)
+    assert scrub(tmp_path / "figures") == ["."]
+    assert (tmp_path / "figures").is_dir() and not (tmp_path / "figures").is_symlink()
+    assert (tmp_path / "l2").is_dir()
+
+
+def test_bwrap_reports_a_signal_as_popen_does_outside():
+    box = Sandbox("bwrap", "bwrap")
+    assert [box._status(code) for code in (0, 3, 128, 137, 139, 192)] == [
+        0, 3, 128, -9, -11, -64]
+    assert Sandbox("sandbox-exec", "x")._status(137) == 137
+
+
+def test_the_seatbelt_profile_forbids_processes_only_when_asked():
+    assert "(allow process-fork)" in seatbelt(RUN, "/private/tmp/s")[0]
+    kept = Plan(**{**RUN.__dict__, "children": False})
+    profile = seatbelt(kept, "/private/tmp/s")[0]
+    assert "process-fork" not in profile and "(deny default)" in profile
+
+
 def test_detect_offers_nothing_on_another_platform(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     with pytest.raises(SandboxFailed, match="no sandbox for win32"):

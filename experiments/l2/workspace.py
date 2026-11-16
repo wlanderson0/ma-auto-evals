@@ -11,7 +11,11 @@ directories of the audit's runs (``L2_SOURCES``) and ``figures/``, and writes on
 else of the home directory, the checkout or the audit is visible (no ``.env``, no
 ``l2/``). When the sandbox cannot start the tool is refused; the code never runs
 outside it. After each run anything in ``figures/`` that is not a regular file or a
-directory is removed.
+directory is removed, even inside a directory the code made unlistable, and the code
+that later reads ``figures/`` never follows a link there out of it. Code killed by
+signal ``N`` shows as ``exit code -N``, as without the sandbox. Under
+sandbox-exec the code cannot start a process: macOS has no pid namespace, so one that
+left the process group could outlive the time limit.
 
 **Without the sandbox** (the default) the subprocess has no provider keys: every
 ``*_API_KEY`` in this environment, and every one named in a ``.env`` file Inspect would
@@ -87,13 +91,14 @@ def run_python(code: str, cwd: Path, sources: Sequence[Path],
 
 def sandboxed(code: str, cwd: Path, sources: Sequence[Path], sandbox: Sandbox) -> str:
     """``run_python`` in ``sandbox``: reads the sources and ``figures/``, writes only
-    ``<cwd>/figures`` (made first)."""
+    ``<cwd>/figures`` (made first). It starts no process under sandbox-exec, where one
+    that left the process group could not be stopped (``Sandbox.run``)."""
     figures = Path(cwd) / FIGURES
     figures.mkdir(exist_ok=True)
     sources = [Path(s).resolve() for s in sources]
     ran = sandbox.run(["-I", "-B", "-c", code], cwd=cwd, reads=sources, write=figures,
                       extra={"L2_SOURCES": os.pathsep.join(map(str, sources))},
-                      timeout=TIME_LIMIT, merge=True)
+                      timeout=TIME_LIMIT, merge=True, children=False)
     head = (f"stopped after the {TIME_LIMIT} s time limit" if ran.timed_out
             else f"exit code {ran.returncode}")
     return _answer(head, ran.stdout)

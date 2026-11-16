@@ -119,8 +119,8 @@ class Ran:
 class Plan:
     """One run's paths, resolved: the interpreter, the directories it lives in
     (``runtime``), the caller's read paths, the one write directory, the working
-    directory, the environment's extra variables and the directories whose names alone
-    may be listed (``lists``)."""
+    directory, the environment's extra variables, the directories whose names alone
+    may be listed (``lists``) and whether the code may start processes (``children``)."""
 
     python: str
     runtime: tuple[str, ...]
@@ -129,6 +129,7 @@ class Plan:
     cwd: str
     extra: Mapping[str, str] = field(default_factory=dict)
     lists: tuple[str, ...] = ()
+    children: bool = True
 
 
 def _real(path: str | os.PathLike) -> str:
@@ -156,7 +157,8 @@ def _refuse_broad(path: str) -> None:
 
 
 def plan(cwd: Path, reads: Sequence[Path], write: Path,
-         extra: Mapping[str, str] | None = None, lists: Sequence[Path] = ()) -> Plan:
+         extra: Mapping[str, str] | None = None, lists: Sequence[Path] = (),
+         children: bool = True) -> Plan:
     """The resolved ``Plan`` for a run in ``cwd`` that reads ``reads`` and writes
     ``write`` (which must exist)."""
     python, runtime = interpreter()
@@ -168,7 +170,7 @@ def plan(cwd: Path, reads: Sequence[Path], write: Path,
         _refuse_broad(path)
     return Plan(python=python, runtime=runtime, reads=resolved, write=target,
                 cwd=_real(cwd), extra=dict(extra or {}),
-                lists=tuple(dict.fromkeys(_real(p) for p in lists)))
+                lists=tuple(dict.fromkeys(_real(p) for p in lists)), children=children)
 
 
 def environment(scratch: str, python: str,
@@ -276,7 +278,7 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
     lines = [
         "(version 1)",
         "(deny default)",
-        "(allow process-fork)",
+        *(["(allow process-fork)"] if run.children else []),
         rule("process-exec", subpaths),
         "(allow signal (target same-sandbox))",
         "(allow process-info* (target same-sandbox))",
@@ -339,15 +341,19 @@ class Sandbox:
 
     def run(self, args: Sequence[str], *, cwd: Path, reads: Sequence[Path], write: Path,
             extra: Mapping[str, str] | None = None, timeout: float,
-            merge: bool = False, lists: Sequence[Path] = ()) -> Ran:
+            merge: bool = False, lists: Sequence[Path] = (), children: bool = True) -> Ran:
         """Run the interpreter with ``args`` in the sandbox, in ``cwd``, reading
         ``reads`` and writing ``write``; ``extra`` adds variables to its environment.
         ``lists``: directories whose names (not their files) may be listed, as Python's
         import system needs for a directory on ``sys.path`` (under bwrap a listing shows
         only the mount points in it anyway).
+        ``children=False`` keeps the code from starting processes where that is the only
+        way to stop them all: sandbox-exec has no pid namespace, and a process that leaves
+        the process group (``setsid``) would outlive the run. Under bwrap the run's pid
+        namespace ends with it, so ``children`` changes nothing there.
         The run is stopped (its whole process group killed) after ``timeout`` seconds.
         ``merge`` sends stderr to stdout. ``SandboxFailed`` when it did not start."""
-        run = plan(cwd, reads, write, extra, lists)
+        run = plan(cwd, reads, write, extra, lists, children)
         scrub(Path(run.write))
         with self._scratch(run) as scratch:
             env = environment(scratch, run.python, run.extra)
@@ -387,11 +393,19 @@ class Sandbox:
         left = max(0.0, timeout - (time.monotonic() - started))
         try:
             output, errors = process.communicate(timeout=left)
-            return Ran(process.returncode, output or "", errors or "", False)
+            return Ran(self._status(process.returncode), output or "", errors or "", False)
         except subprocess.TimeoutExpired:
             _kill(process)
             output, errors = process.communicate()
             return Ran(None, output or "", errors or "", True)
+
+    def _status(self, code: int) -> int:
+        """The code's exit code as ``Popen`` gives it outside (``-N`` for signal ``N``).
+        bwrap exits ``128 + N`` when the code died of signal ``N``, so under bwrap a code
+        above 128 is read as a signal (code that exits with such a number itself is then
+        reported as that signal). sandbox-exec runs the code in its own process, so its
+        code is the code's own."""
+        return -(code - 128) if self.kind == "bwrap" and 128 < code < 128 + 65 else code
 
 
 def _kill(process: subprocess.Popen) -> None:
@@ -403,19 +417,31 @@ def _kill(process: subprocess.Popen) -> None:
 
 def scrub(directory: Path) -> list[str]:
     """Remove everything under ``directory`` that is not a regular file or a directory
-    (links are never followed); the paths removed, relative to it."""
+    (links are never followed); the paths removed, relative to it. It fails closed: each
+    directory is first made listable by its owner (the code may have made one
+    unlistable, e.g. mode 0o111, to hide a link in it), and one that still cannot be
+    listed raises ``OSError`` rather than being skipped. ``directory`` itself, when
+    something else (a link) took its place, is removed and made again (``"."``)."""
+    top = os.fspath(directory)
     removed = []
-    for root, dirs, files in os.walk(directory, topdown=True, followlinks=False):
-        for name in [*dirs, *files]:
-            path = os.path.join(root, name)
-            mode = os.lstat(path).st_mode
-            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(path)
-                removed.append(os.path.relpath(path, directory))
-        dirs[:] = [d for d in dirs if os.path.isdir(os.path.join(root, d))
-                   and not os.path.islink(os.path.join(root, d))]
-    return removed
+    if not stat.S_ISDIR(os.lstat(top).st_mode):
+        os.unlink(top)
+        os.mkdir(top)
+        removed.append(".")
+    folders = [top]
+    while folders:
+        folder = folders.pop()
+        os.chmod(folder, stat.S_IMODE(os.lstat(folder).st_mode) | stat.S_IRWXU)
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                mode = entry.stat(follow_symlinks=False).st_mode
+                if stat.S_ISDIR(mode):
+                    folders.append(entry.path)
+                elif not stat.S_ISREG(mode):
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(entry.path)
+                    removed.append(os.path.relpath(entry.path, top))
+    return sorted(removed)
 
 
 def detect() -> Sandbox:

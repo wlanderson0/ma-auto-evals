@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -252,10 +256,45 @@ time.sleep(30)
 """
     started = time.monotonic()
     ok, text = tools.call("run_python", code=code)
-    assert ok and text.startswith("stopped after the 2 s time limit") and "started" in text
-    assert time.monotonic() - started < 15
+    assert ok and time.monotonic() - started < 15
+    if box.kind == "sandbox-exec":  # no pid namespace: the code may start no process
+        assert text.startswith("exit code 1") and "PermissionError" in text, text
+    else:
+        assert text.startswith("stopped after the 2 s time limit") and "started" in text
     time.sleep(4)
     assert not marker.exists()
+
+
+def test_run_python_under_sandbox_exec_starts_no_process(box, tmp_path):
+    """macOS has no pid namespace: a process that left the group would outlive the run,
+    so the code can start none, by any call."""
+    if box.kind != "sandbox-exec":
+        pytest.skip("bwrap's pid namespace ends with the run, so processes are allowed")
+    code = """
+import os, subprocess, sys
+for name, start in [
+        ("fork", os.fork),
+        ("spawn", lambda: os.posix_spawn(sys.executable, [sys.executable, "-c", ""], {})),
+        ("popen", lambda: subprocess.Popen([sys.executable, "-c", ""]))]:
+    try:
+        pid = start()
+        if pid == 0:
+            os._exit(0)
+        print("started", name)
+    except OSError as error:
+        print("refused", name)
+"""
+    ok, text = new(tmp_path, sandbox=box).call("run_python", code=code)
+    assert ok and "started" not in text and text.count("refused") == 3, text
+
+
+def test_code_killed_by_a_signal_shows_the_signal_as_without_the_sandbox(box, tmp_path):
+    code = "import os, signal; print('x', flush=True); os.kill(os.getpid(), signal.SIGKILL)"
+    plain = new(tmp_path / "plain").call("run_python", code=code)[1]
+    boxed = new(tmp_path / "boxed", sandbox=box).call("run_python", code=code)[1]
+    assert plain.splitlines()[0] == boxed.splitlines()[0] == "exit code -9", (plain, boxed)
+    exited = new(tmp_path / "exit", sandbox=box).call("run_python", code="raise SystemExit(3)")
+    assert exited[1].startswith("exit code 3")
 
 
 def test_run_python_output_is_capped_in_the_sandbox(box, tmp_path):
@@ -278,6 +317,63 @@ print(sorted(os.listdir("figures")))
     assert ok and "'fifo'" in text, text
     figures = tools.audit.out / "figures"
     assert sorted(p.name for p in figures.iterdir()) == ["plot.png"]
+
+
+HIDE = """
+import json, os, sys
+from pathlib import Path
+from experiments.l2 import study, workspace
+from experiments.l2.sandbox import detect
+from experiments.l2.tools import embedded
+audit = Path(sys.argv[1])
+(audit / "l2").mkdir()
+(audit / "l2" / "inbox.jsonl").write_text("not for the export")
+code = (
+    "import os\\n"
+    "os.mkdir('figures/d')\\n"
+    "os.symlink('../../l2/inbox.jsonl', 'figures/d/leak.png')\\n"
+    "os.chmod('figures/d', 0o111)\\n"
+    "os.chmod('figures', 0o111)\\n"
+    "print('hidden')")
+said = workspace.run_python(code, audit, [], detect())
+(audit / "writeup.md").write_text("![leak](figures/d/leak.png)")
+out = audit / "export"
+out.mkdir()
+study._copy_images(audit, out, print)
+print(json.dumps({"said": said, "link": os.path.lexists(audit / "figures/d/leak.png"),
+                  "embedded": str(embedded(audit, "figures/d/leak.png")),
+                  "images": study.images(audit), "exported": sorted(
+                      p.name for p in out.rglob("*") if p.is_file())}))
+"""
+
+
+def test_a_link_hidden_in_an_unlistable_directory_is_removed_and_never_carried(box,
+                                                                              tmp_path):
+    """Code hides a link to ``l2/`` in directories it made unlistable (mode 0o111): the
+    link is still removed after the run, and the study export carries nothing. File modes
+    bind only a user other than root, so as root the script runs as ``nobody``."""
+    root = os.geteuid() == 0
+    audit = Path(tempfile.mkdtemp(prefix="l2-hide-")) if root else tmp_path / "audit"
+    try:
+        audit.mkdir(exist_ok=True)
+        user = {}
+        if root:
+            nobody = pwd.getpwnam("nobody")
+            os.chown(audit, nobody.pw_uid, nobody.pw_gid)
+            user = {"user": nobody.pw_uid, "group": nobody.pw_gid, "extra_groups": []}
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(audit), "PYTHONPATH": str(REPO),
+               "PYTHON_DOTENV_DISABLED": "1", "ORBIT_AUTOFETCH": "0",
+               "ORBIT_AUTOSTART_SERVICE": "0"}
+        done = subprocess.run([sys.executable, "-c", HIDE, str(audit)], env=env, cwd=audit,
+                              capture_output=True, text=True, timeout=110, **user)
+        assert done.returncode == 0, done.stderr
+        found = json.loads(done.stdout.splitlines()[-1])
+        assert found["said"].startswith("exit code 0") and "hidden" in found["said"]
+        assert not found["link"] and found["embedded"] == "None"
+        assert found["images"] == [] and found["exported"] == []
+    finally:
+        if root:
+            shutil.rmtree(audit, ignore_errors=True)
 
 
 def test_the_tool_description_says_what_the_sandbox_allows(box, tmp_path):

@@ -40,6 +40,7 @@ import hashlib
 import json
 import keyword
 import math
+import posixpath
 import re
 import time
 import urllib.parse
@@ -95,7 +96,8 @@ SANDBOXED_RUN_PYTHON = (
     "paths, relative to that directory, one per epoch). Read the logs with "
     "inspect_ai.log.read_eval_log (each has one sample, with its scores and store); pandas "
     "and matplotlib are available. It can write only under figures/ (save figures for "
-    f"your write-up there). It has no network and no API keys. It is stopped after "
+    f"your write-up there). It has no network and no API keys. It may be unable to start "
+    "other processes (on macOS it cannot). It is stopped after "
     f"{workspace.TIME_LIMIT} seconds, and output past {workspace.OUTPUT_CHARS} characters "
     "is cut: print what you need.")
 """``run_python``'s description when the audit runs it in a sandbox (``Audit.sandbox``)."""
@@ -957,13 +959,34 @@ def embeds(writeup: str | None) -> list[str]:
 
 def embedded(out: Path, src: str) -> Path | None:
     """The file an embed ``src`` names in the audit directory ``out``, by a path relative
-    to it; ``None`` when it names none."""
+    to it (normalised first); ``None`` when it names none. A link in ``figures/``, where
+    ``run_python``'s code writes, is followed only to a file inside ``figures/``
+    (``leaves_figures``), so a link that code planted never leads to another file of the
+    audit (``l2/`` holds L2's own log)."""
+    if Path(src).is_absolute() or "://" in src:
+        return None
     out = Path(out).resolve()
-    path = (out / src).resolve()
-    if (Path(src).is_absolute() or "://" in src or not path.is_relative_to(out)
-            or not path.is_file()):
+    rel = posixpath.normpath(src)
+    path = (out / rel).resolve()
+    if not path.is_relative_to(out) or not path.is_file() or leaves_figures(out, rel):
         return None
     return path
+
+
+def leaves_figures(out: Path, rel: str) -> bool:
+    """Whether the way to ``rel`` (normalised, relative to the resolved audit directory
+    ``out``) follows a link out of ``figures/``: ``figures/`` itself is a link, or a link
+    that lies in it resolves outside it. Each step is read with ``lstat``."""
+    folder = out / figures.FIGURES
+    if folder.is_symlink():
+        return Path(rel).parts[:1] == (figures.FIGURES,)
+    path = out
+    for part in Path(rel).parts:
+        path = path / part
+        if (path.is_symlink() and path.parent.resolve().is_relative_to(folder)
+                and not path.resolve().is_relative_to(folder)):
+            return True
+    return False
 
 
 def _failure(error: Exception) -> str:

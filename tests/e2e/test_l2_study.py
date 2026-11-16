@@ -405,6 +405,31 @@ def test_no_image_from_outside_the_audit_is_carried(audit, tmp_path):
                                   "figures/linked.png", "away/deep.png"]
 
 
+def test_a_link_in_figures_never_carries_another_file_of_the_audit(audit, tmp_path):
+    """``figures/`` is where L2's sandboxed code writes: a link there (one that outlived
+    the run's cleaning) is followed only to a file in ``figures/``, never to ``l2/``, nor
+    through a ``figures/`` that is itself a link."""
+    from experiments.l2.tools import embedded
+
+    compared_and_written(audit, "\n\n".join([
+        "![leak](figures/leak.png)", "![deep](figures/d/leak.png)",
+        "![fine](figures/V1-vs-C0-probe.png)"]))
+    (audit / "l2" / "secret.png").write_bytes(b"\x89PNG L2's own")
+    figures = audit / "figures"
+    (figures / "leak.png").symlink_to("../l2/secret.png")
+    (figures / "d").mkdir()
+    (figures / "d" / "leak.png").symlink_to("../../l2/secret.png")
+    out = export_audit(audit, tmp_path / "out")
+    carried = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.png"))
+    assert carried == ["figures/V1-vs-C0-probe.png"]
+    assert embedded(audit, "figures/leak.png") is None
+    assert embedded(audit, "l2/secret.png") == (audit / "l2" / "secret.png").resolve()
+    shutil.move(figures, audit / "drawn")
+    figures.symlink_to("l2", target_is_directory=True)
+    assert embedded(audit, "figures/secret.png") is None
+    assert study_.images(audit) == []
+
+
 def test_a_figure_whose_image_is_left_out_has_no_entry(audit, tmp_path, monkeypatch):
     compared_and_written(audit, "no images")
     monkeypatch.setattr(study_, "MAX_IMAGE_BYTES", 10)
