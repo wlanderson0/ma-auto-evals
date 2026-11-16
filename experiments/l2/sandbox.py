@@ -313,9 +313,9 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
     [tmp] = param("SCRATCH", [scratch])
     allowed = [*run.runtime, *run.reads, run.write, scratch, *MAC_READ, *MAC_READ_FILES]
     links = [path for path, _ in run.links]  # a link is followed by reading its metadata
-    metadata = param("ANCESTOR", sorted({a for p in (*allowed, *links) for a in _ancestors(p)}
-                                        | set(links)))
-    listed = param("LIST", run.lists)
+    metadata = param("ANCESTOR", sorted({a for p in (*allowed, *links, run.cwd)
+                                         for a in _ancestors(p)} | {*links, run.cwd}))
+    listed = [*param("CWD", [run.cwd]), *param("LIST", run.lists)]
 
     def rule(kind: str, items: Sequence[str]) -> str:
         return "\n  ".join([f"(allow {kind}", *items]) + ")"
@@ -337,8 +337,9 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
         rule("file-read-metadata", ['(literal "/")', '(literal "/etc")', '(literal "/tmp")',
                                     '(literal "/var")', *(f"(literal {p})" for p in metadata)]),
         rule("file-read* file-write*", [f"(subpath {write})", f"(subpath {tmp})"]),
-        # The names in the root directory, no file: macOS 26's loader opens ``/`` before the
-        # program starts, and aborts (dyld, libignition) where it may not.
+        # Names, no file. The root directory: macOS 26's loader opens ``/`` before the
+        # program starts, and aborts (dyld, libignition) where it may not. The working
+        # directory: ``getcwd`` opens it, and fails where it may not.
         rule("file-read-data", ['(literal "/")', *(f"(literal {p})" for p in listed)]),
         rule("file-read* file-write-data", ['(literal "/dev/null")', '(subpath "/dev/fd")']),
     ]
@@ -403,7 +404,8 @@ class Sandbox:
         ``reads`` and writing ``write``; ``extra`` adds variables to its environment.
         ``lists``: directories whose names (not their files) may be listed, as Python's
         import system needs for a directory on ``sys.path`` (under bwrap a listing shows
-        only the mount points in it anyway).
+        only the mount points in it anyway). Under sandbox-exec the names in ``cwd`` and
+        in ``/`` can always be listed: ``getcwd`` and the system's loader open them.
         ``children=False`` keeps the code from starting processes where that is the only
         way to stop them all: sandbox-exec has no pid namespace, and a process that leaves
         the process group (``setsid``) would outlive the run. Under bwrap the run's pid
@@ -553,7 +555,7 @@ print(json.dumps({
     "allowed": attempt(lambda: read(spec["allowed"])),
     "outside": {p: attempt(lambda p=p: write(p)) for p in spec["outside"]},
     "inside": attempt(lambda: write(spec["inside"])),
-    "env": sorted(os.environ)}))
+    "cwd": attempt(os.getcwd), "env": sorted(os.environ)}))
 """
 SELF_SET = {"PWD", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 """Variables the backend, the interpreter or the platform set inside, from their own
@@ -669,7 +671,9 @@ def _check(sandbox: Sandbox, base: Path) -> Check:
         except (IndexError, ValueError):
             return Check(sandbox.kind, {"starts": (False, "the probe gave no result: "
                                                           + (ran.stderr or ran.stdout)[-2000:])})
-        found["starts"] = (True, "the bootstrap byte arrived and the probe ran")
+        here = seen["cwd"] == [True, str(audit)]
+        found["starts"] = (here, "the bootstrap byte arrived and the probe ran" if here else
+                           f"the probe ran, but not in the audit directory: {seen['cwd'][1]}")
         try:
             listener.accept()
             accepted = True

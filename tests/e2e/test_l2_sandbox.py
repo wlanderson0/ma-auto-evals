@@ -35,6 +35,8 @@ from tests.support.written import RUMOUR
 
 C0 = {"id": "C0", "control": "M0", "rationale": "the control"}
 REQUIRED = os.environ.get("L2_SANDBOX_TESTS") == "require"
+FALSE = shutil.which("false") or "/bin/false"
+"""A program that starts and fails (``/usr/bin/false`` on macOS)."""
 
 
 @pytest.fixture(scope="module")
@@ -66,13 +68,15 @@ class Outside(Sandbox):
     show that the check catches a sandbox that does not hold, and how a run that never
     sends the ready byte is told apart from code that fails."""
 
-    def __init__(self, bootstrap: str = BOOTSTRAP) -> None:
+    def __init__(self, bootstrap: str = BOOTSTRAP, chdir: bool = True) -> None:
         super().__init__("bwrap", sys.executable)
         object.__setattr__(self, "bootstrap", bootstrap)
+        object.__setattr__(self, "chdir", chdir)
 
     def command(self, run, args, ready, scratch):
         inherited = [f"{name}={value}" for name, value in os.environ.items()]
-        return ["/usr/bin/env", *inherited, run.python, "-I", "-c", self.bootstrap,
+        there = ["/bin/sh", "-c", 'cd "$0" && exec "$@"', run.cwd] if self.chdir else []
+        return ["/usr/bin/env", *inherited, *there, run.python, "-I", "-c", self.bootstrap,
                 str(ready), run.python, *args]
 
 
@@ -98,6 +102,16 @@ def test_the_check_fails_a_sandbox_that_does_not_hold(monkeypatch):
         assert not held[name], (name, found.properties[name])
     assert "OPENROUTER_API_KEY" in found.properties["clean-environment"][1]
     assert any(line.startswith("hidden-files: visible:") for line in found.failed())
+
+
+@pytest.mark.enable_socket
+def test_the_check_fails_a_sandbox_whose_code_is_not_in_the_audit_directory(monkeypatch):
+    """Code that cannot tell where it is (``getcwd``), or is somewhere else, has not
+    started as an audit's code does."""
+    monkeypatch.setattr(sandbox_, "OUTBOUND", "127.0.0.1")
+    found = sandbox_.check(Outside(chdir=False))
+    held, detail = found.properties["starts"]
+    assert not held and detail == "the probe ran, but not in the audit directory: /"
 
 
 @pytest.mark.enable_socket
@@ -166,10 +180,10 @@ def test_code_that_fails_after_the_ready_byte_is_code_that_failed(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["bwrap", "sandbox-exec"])
-@pytest.mark.parametrize("binary", ["missing", "/bin/false"])
+@pytest.mark.parametrize("binary", ["missing", "false"])
 def test_a_sandbox_that_cannot_start_refuses_run_python_and_runs_nothing(tmp_path, kind,
                                                                          binary):
-    path = str(tmp_path / "no-such-binary") if binary == "missing" else binary
+    path = str(tmp_path / "no-such-binary") if binary == "missing" else FALSE
     tools = new(tmp_path, sandbox=Sandbox(kind, path))
     marker = tmp_path / "ran-outside"
     ok, text = tools.call("run_python", code=f"open({str(marker)!r}, 'w').write('x')")
@@ -181,7 +195,7 @@ def test_a_sandbox_that_cannot_start_refuses_write_scenario_and_saves_nothing(tm
     marker = tmp_path / "checked-outside"
     code = RUMOUR.replace("def make(models):\n", (
         f"open({str(marker)!r}, 'w').write('x')\n\n\ndef make(models):\n"))
-    tools = new(tmp_path, sandbox=Sandbox("bwrap", "/bin/false"))
+    tools = new(tmp_path, sandbox=Sandbox("bwrap", FALSE))
     ok, text = tools.call("write_scenario", name="rumour", code=code)
     assert not ok and "did not start" in text and "Nothing was saved" in text, text
     assert not marker.exists() and not (tools.audit.out / "scenarios").exists()

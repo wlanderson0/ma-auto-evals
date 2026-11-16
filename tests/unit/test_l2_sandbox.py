@@ -119,7 +119,7 @@ def test_the_seatbelt_profile_denies_by_default_and_has_no_network_rule():
 def test_the_seatbelt_profile_never_holds_a_path_of_the_home_or_the_checkout():
     profile, params = seatbelt(RUN, "/private/var/folders/x/l2-sandbox-1")
     assert HOME not in profile and CHECKOUT not in profile
-    readable = [v for k, v in params.items() if not k.startswith("ANCESTOR")]
+    readable = [v for k, v in params.items() if not k.startswith(("ANCESTOR", "CWD"))]
     assert HOME not in readable and CHECKOUT not in readable and AUDIT not in readable
     # the home directory and the checkout appear only as ancestors: metadata, no listing
     ancestors = {v for k, v in params.items() if k.startswith("ANCESTOR")}
@@ -354,10 +354,16 @@ def test_the_seatbelt_profile_lets_a_link_to_the_interpreter_be_followed_not_rea
     assert link not in profile
 
 
-def test_the_seatbelt_profile_lets_the_loader_list_the_root_and_read_nothing_there():
-    """macOS 26's loader aborts before the program starts unless it may open ``/``."""
-    profile, _ = seatbelt(RUN, "/private/tmp/s")
+def test_the_seatbelt_profile_lists_the_root_and_the_working_directory_and_reads_no_file():
+    """macOS 26's loader aborts before the program starts unless it may open ``/``, and
+    ``getcwd`` fails unless it may open the working directory: their names, no file in
+    them (contract test L2-26)."""
+    profile, params = seatbelt(RUN, "/private/tmp/s")
     [listing] = [block for block in profile.split("\n(allow ") if block.startswith(
         "file-read-data")]
-    assert listing.splitlines() == ["file-read-data", '  (literal "/"))']
-    assert '(subpath "/")' not in profile
+    assert listing.splitlines() == ["file-read-data", '  (literal "/")',
+                                    '  (literal (param "CWD_0")))']
+    assert params["CWD_0"] == AUDIT and '(subpath "/")' not in profile
+    assert [block.split()[0] for block in profile.split("\n(allow ") if "CWD_0" in block] == [
+        "file-read-data"]
+    assert AUDIT in {v for k, v in params.items() if k.startswith("ANCESTOR")}
