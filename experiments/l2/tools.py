@@ -1325,8 +1325,6 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                 code: The Python to run (print the results).
             """
             return await call("run_python", code=code)
-        if getattr(tools.audit, "sandbox", None) is not None:
-            return tool_with(execute, description=SANDBOXED_RUN_PYTHON)
         return execute
 
     @tool
@@ -1428,7 +1426,10 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
 
     if by == "reviewer":
         return [list_runs(), scores(), transcript(), find()]
-    made = [list_runs(), scores(), transcript(), find(), run_python(),
+    python = run_python()
+    if getattr(tools.audit, "sandbox", None) is not None:  # what L2 reads says the truth
+        python = tool_with(python, description=SANDBOXED_RUN_PYTHON)
+    made = [list_runs(), scores(), transcript(), find(), python,
             note_decision(), budget()]
     return (([run_experiment()] if experiments else [])
             + ([write_scenario()] if scenarios else []) + made

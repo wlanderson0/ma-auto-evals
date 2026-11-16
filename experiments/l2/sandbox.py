@@ -11,8 +11,9 @@ caller gets ``SandboxFailed`` and nothing ran. The policy is the same for both:
 - reads only what the interpreter needs (the system library directories,
   ``sys.base_prefix`` and ``sys.prefix``, each bound by itself, never the checkout or the
   home directory around them) and the read paths the caller names;
-- writes only the one directory the caller names, and a private scratch ``/tmp`` that
-  does not outlive the run;
+- writes only the one directory the caller names, and a private scratch that does not
+  outlive the run (bwrap mounts it on ``/tmp``, or on ``ALT_SCRATCH`` when a path of the
+  run lies under ``/tmp``, so a write beside that path fails rather than landing in it);
 - an environment built from nothing (``environment``): no variable of the caller
   reaches the code, so no key, token or ``COSMOS_*``;
 - no descriptor but stdin (``/dev/null``), stdout, stderr and the ready descriptor.
@@ -82,6 +83,10 @@ MAC_SERVICES = ("com.apple.system.opendirectoryd.libinfo", "com.apple.system.log
 """Mach services libc may look up (user and group lookups, logging, notifications);
 none of them reads a file or the network for the code."""
 SCRATCH_DIRS = ("home", "cache", "config", "data", "mpl")
+ALT_SCRATCH = "/.l2-tmp"
+"""bwrap's scratch when a path of the run lies under ``/tmp`` (e.g. an audit there): a
+scratch mounted on ``/tmp`` would hold that path's parents, and a write beside it would
+land in the scratch instead of failing."""
 PROPERTIES = ("starts", "no-local-tcp", "no-udp", "no-outbound", "hidden-files",
               "reads-sources", "writes-outside-fail", "writes-inside-work",
               "clean-environment")
@@ -197,15 +202,23 @@ def _outermost(paths: Sequence[str], inside: Sequence[str]) -> list[str]:
     return sorted(dict.fromkeys(kept), key=lambda p: (p.count("/"), p))
 
 
+def bwrap_scratch(run: Plan) -> str:
+    """Where bwrap mounts the private scratch: ``/tmp``, unless a path of the run lies
+    under it (``ALT_SCRATCH`` then)."""
+    paths = (*run.runtime, *run.reads, run.write, run.cwd, run.python)
+    return ALT_SCRATCH if any(p == "/tmp" or p.startswith("/tmp/") for p in paths) else "/tmp"
+
+
 def bwrap_args(binary: str, run: Plan, args: Sequence[str], ready: int,
                system: Sequence[tuple[str, str | None]]) -> list[str]:
     """The ``bwrap`` command line for ``run``: an empty root with the system paths and
     the runtime read-only, the read paths read-only, the write directory read-write, a
-    fresh ``/proc``, ``/dev`` and ``/tmp``, every namespace unshared (the network's
-    included) and the root made read-only before the command starts."""
+    fresh ``/proc``, ``/dev`` and scratch (``bwrap_scratch``), every namespace unshared
+    (the network's included) and the root made read-only before the command starts."""
+    scratch = bwrap_scratch(run)
     command = [binary, "--unshare-all", "--die-with-parent", "--new-session",
                "--cap-drop", "ALL", "--clearenv"]
-    for name, value in environment("/tmp", run.python, run.extra).items():
+    for name, value in environment(scratch, run.python, run.extra).items():
         command += ["--setenv", name, value]
     bound = []
     for path, target in system:
@@ -214,9 +227,9 @@ def bwrap_args(binary: str, run: Plan, args: Sequence[str], ready: int,
         else:
             command += ["--ro-bind", path, path]
             bound.append(path)
-    command += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]
+    command += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", scratch]
     for name in SCRATCH_DIRS:
-        command += ["--dir", f"/tmp/{name}"]
+        command += ["--dir", f"{scratch}/{name}"]
     for path in _outermost([*run.runtime, *run.reads], bound):
         command += ["--ro-bind", path, path]
     command += ["--bind", run.write, run.write, "--dir", run.cwd, "--remount-ro", "/",
@@ -300,11 +313,11 @@ class Sandbox:
             raise ValueError(f"kind must be one of {KINDS}, not {self.kind!r}")
 
     @contextlib.contextmanager
-    def _scratch(self) -> Iterator[str]:
-        """The private temporary directory: bwrap mounts a fresh one on ``/tmp``; for
-        sandbox-exec it is made here (resolved) and removed after the run."""
+    def _scratch(self, run: Plan) -> Iterator[str]:
+        """The private temporary directory: bwrap mounts a fresh one (``bwrap_scratch``);
+        for sandbox-exec it is made here (resolved) and removed after the run."""
         if self.kind == "bwrap":
-            yield "/tmp"
+            yield bwrap_scratch(run)
             return
         folder = _real(tempfile.mkdtemp(prefix="l2-sandbox-"))
         try:
@@ -328,7 +341,7 @@ class Sandbox:
         ``merge`` sends stderr to stdout. ``SandboxFailed`` when it did not start."""
         run = plan(cwd, reads, write, extra)
         scrub(Path(run.write))
-        with self._scratch() as scratch:
+        with self._scratch(run) as scratch:
             env = environment(scratch, run.python, run.extra)
             ready_r, ready_w = os.pipe()
             try:

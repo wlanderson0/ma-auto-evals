@@ -327,6 +327,28 @@ def test_the_figures_go_with_the_numbers_they_were_drawn_from(audit, tmp_path):
     assert figure["targets"]
 
 
+def test_a_link_planted_in_figures_is_never_written_or_read_through(audit, tmp_path):
+    """L2's code writes ``figures/``: a link it leaves there, named as the next figure or
+    a sidecar, never makes the tools write a file outside or the export read one."""
+    figures = audit / "figures"
+    png, sidecar = figures / "V1-vs-C0-probe.png", figures / "V1-vs-C0-probe.json"
+    figures.mkdir(exist_ok=True)
+    outside_png, outside_json = tmp_path / "victim.png", tmp_path / "victim.json"
+    outside_png.write_bytes(b"not a figure")
+    outside_json.write_text(json.dumps({"a": "secret", "b": "secret", "compared": {}}))
+    png.symlink_to(outside_png)
+    sidecar.symlink_to(outside_json)
+    compared_and_written(audit, "no images")
+    assert outside_png.read_bytes() == b"not a figure"
+    assert json.loads(outside_json.read_text())["a"] == "secret"
+    assert not png.is_symlink() and not sidecar.is_symlink() and png.is_file()
+    (figures / "planted.png").write_bytes(png.read_bytes())
+    (figures / "planted.json").symlink_to(outside_json)
+    out = export_audit(audit, tmp_path / "out")
+    entries = json.loads((out / "study" / "figures.json").read_text())
+    assert [e["path"] for e in entries] == ["figures/V1-vs-C0-probe.png"]
+
+
 def test_the_figure_s_call_is_the_first_scores_call_that_draws_it(audit, tmp_path):
     _, first = compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")
     compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")  # drawn again
