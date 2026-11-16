@@ -76,6 +76,9 @@ MAX_SAY = 4000
 MAX_CHOICES = 4
 LIFETIME = timedelta(minutes=15)
 """How long a line the command writes may wait to be read."""
+SKEW = timedelta(minutes=2)
+"""How far a line's ``sent_at`` may be ahead of the program's clock, and its lifetime over
+``LIFETIME`` (cosmos refuses a ``created_at`` more than two minutes from its own clock)."""
 ASK_TIMEOUT = 300.0
 """Seconds a question waits for an answer when L2 sets no timeout."""
 ASK_MAX = 1800.0
@@ -97,9 +100,12 @@ _FIELDS = {"cosmos": {"schema", "id", "seq", "kind", "payload", "via", "author",
 _AUTHOR = {"cosmos": {"login", "key"}, "local": {"local"}}
 _PAYLOAD = {"pause": set(), "resume": set(), "stop": set(), "budget": {"usd"},
             "answer": {"ask_key", "choice", "text"}, "note": {"text", "hypothesis"}}
-_AMOUNT = re.compile(r"\d{1,12}(\.\d{1,6})?")
-_TIME = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,9})?(Z|\+00:00)")
-_KEY = re.compile(r"(ask|say)-(\d+)")
+# ASCII digits only: ``\d`` alone also takes every other script's digits
+_AMOUNT = re.compile(r"\d{1,12}(\.\d{1,6})?", re.ASCII)
+_TIME = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{1,9})?(Z|\+00:00)", re.ASCII)
+_KEY = re.compile(r"(ask|say)-(\d+)", re.ASCII)
+_LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
+"""A GitHub login, the only shape a cosmos author's ``login`` takes (it reaches L2, R18)."""
 
 
 class SteerError(Exception):
@@ -288,13 +294,22 @@ def _id(value: Any) -> str | None:
     return value if str(parsed) == value.lower() else None
 
 
+class _Big:
+    """An integer of more than 40 digits in a line: no field takes one, so the line is
+    malformed (and still acked, by its id), where ``int()`` would raise on 4300 digits."""
+
+
+def _int(digits: str) -> int | _Big:
+    return int(digits) if len(digits.lstrip("-")) <= 40 else _Big()
+
+
 def parse_request(raw: bytes) -> tuple[Request | None, str | None, str | None]:
     """An inbox line as ``(request, id, problem)``: the request when it fits its shape,
     else ``None`` with the problem; ``id`` whenever it can be read, so a malformed line is
     acked."""
     try:
-        line = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        line = json.loads(raw.decode("utf-8"), parse_int=_int)
+    except (ValueError, RecursionError):  # a decode error, bad JSON, nesting too deep
         return None, None, "not JSON"
     if not isinstance(line, dict):
         return None, None, "not a JSON object"
@@ -306,22 +321,26 @@ def parse_request(raw: bytes) -> tuple[Request | None, str | None, str | None]:
     if line.get("schema") != SCHEMA:
         return None, rid, f"schema is not {SCHEMA}"
     via = line.get("via")
-    if via not in _FIELDS:
+    if not isinstance(via, str) or via not in _FIELDS:
         return None, rid, "via must be cosmos or local"
     if extra := sorted(set(line) - _FIELDS[via]):
         return None, rid, f"field(s) {extra} not in a {via} line"
     if missing := sorted(_FIELDS[via] - set(line)):
         return None, rid, f"field(s) {missing} missing"
     kind = line["kind"]
-    if kind not in KINDS:
-        return None, rid, f"unknown kind {escape(kind)!r}"
+    if not isinstance(kind, str) or kind not in KINDS:
+        return None, rid, f"unknown kind {escape(kind)[:40]!r}"
     author = line["author"]
     if not isinstance(author, dict) or set(author) != _AUTHOR[via] or not all(
             _name(v) for v in author.values()):
         return None, rid, f"author must be {sorted(_AUTHOR[via])}, each a short string"
+    if via == "cosmos" and not _LOGIN.fullmatch(author["login"]):
+        return None, rid, "author.login must be a GitHub login"
     sent, expires = parse_time(line["sent_at"]), parse_time(line["expires_at"])
     if sent is None or expires is None:
         return None, rid, "sent_at and expires_at must be RFC 3339 times in UTC"
+    if expires > sent + LIFETIME + SKEW:
+        return None, rid, "expires_at must be 15 minutes after sent_at at most"
     seq = line.get("seq")
     if via == "cosmos" and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
         return None, rid, "seq must be an integer >= 0"
@@ -356,6 +375,8 @@ def _open_error(error: OSError, path: Path) -> SteerError:
         return SteerError(f"steering refused: {path} is a symbolic link")
     if error.errno == errno.ENOTDIR:
         return SteerError(f"steering refused: {path} is not a directory")
+    if error.errno == errno.ENXIO:  # a FIFO no one reads, opened to write
+        return SteerError(f"steering refused: {path} is not a regular file")
     return SteerError(f"steering refused: {path} cannot be opened ({error.strerror})")
 
 
@@ -399,14 +420,16 @@ class Mailbox:
 
     def _file(self, dir_fd: int, name: str, flags: int) -> int:
         path = self.path / name
-        try:
-            fd = os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
+        try:  # without blocking: a FIFO opens at once, to be refused, not waited on
+            fd = os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600,
+                         dir_fd=dir_fd)
         except FileNotFoundError:
             raise
         except OSError as error:
             raise _open_error(error, path) from None
         try:
             _checked(os.fstat(fd), path, directory=False)
+            os.set_blocking(fd, True)
         except SteerError:
             os.close(fd)
             raise
@@ -491,7 +514,7 @@ class Mailbox:
             os.close(fd)
         try:
             program = json.loads(data)
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, RecursionError):
             program = None
         if not isinstance(program, dict) or program.get("schema") != SCHEMA or not (
                 isinstance(program.get("kinds"), list) and isinstance(program.get("pid"), int)
@@ -543,7 +566,7 @@ class Outbox:
         for raw in lines:
             try:
                 row = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(row, dict) or row.get("schema") != SCHEMA:
                 continue
@@ -686,7 +709,11 @@ class Steering:
             self._fail(error)
             return
         for raw in lines:
-            self._take(raw)
+            try:
+                self._take(raw)
+            except Exception as error:  # one line must not stop the lines after it
+                self.say(f"steering: an inbox line could not be read and is skipped "
+                         f"({escape(type(error).__name__)}: {escape(error)[:200]})")
 
     def _fail(self, error: SteerError) -> None:
         """The mailbox failed its checks during the audit (e.g. its mode was changed): it is
@@ -714,10 +741,12 @@ class Steering:
     def _refusal(self, request: Request) -> str | None:
         """Why ``request`` is not applied, if it is not: the checks the plugin makes, made
         again where the code runs (spec 22 §2 step 6)."""
+        moment = now()
         if request.sent_at < self.started_at:
             return "before start"
-        if request.expires_at <= now():
-            return "expired"
+        if request.expires_at <= moment or request.expires_at <= request.sent_at \
+                or request.sent_at > moment + SKEW:
+            return "expired"  # sent "later" than now: its times cannot be trusted
         if self.ended or self.audit.ended:
             return "ended"
         if request.via == "cosmos" and request.text is not None and self.sandbox is None:
@@ -898,7 +927,7 @@ class Steering:
         import anyio
 
         if isinstance(choices, str):
-            with contextlib.suppress(json.JSONDecodeError):
+            with contextlib.suppress(ValueError, RecursionError):
                 choices = json.loads(choices)
         ask, timeout, cost = self._question(question, choices, default, timeout_s,
                                             allow_text, cost_usd)
@@ -986,6 +1015,8 @@ class Steering:
     def reply(self, text: Any, note_id: Any = None) -> str:
         """``reply_researcher``: write a ``say`` line, in reply to a note L2 was given, or
         to nobody in particular."""
+        if self.broken is not None:
+            raise Refusal(f"refused: the researchers' mailbox is no longer read ({self.broken})")
         if not isinstance(text, str) or not text.strip() or len(text) > MAX_SAY:
             raise Refusal(f"text must be 1 to {MAX_SAY} characters")
         if note_id is not None and note_id not in self.delivered:
