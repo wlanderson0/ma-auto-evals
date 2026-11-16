@@ -97,7 +97,9 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 ```
 
 On macOS it is `sandbox-exec`, which ships with the system. The macOS backend is new;
-the check below is what proves it on your machine.
+the check below is what proves it on your machine. There, `run_python` cannot start
+other processes: macOS has no way to stop one that leaves the process group, so it is
+not allowed to start.
 
 Check it before an audit (the audit runs the same check at start and does not start
 when it fails):
