@@ -698,6 +698,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 agent.run_l2(tools, fake_model(script), PROMPT, time_limit=args.time_limit)
             else:
                 agent.run_l2(tools, model, agent.SYSTEM_PROMPT, time_limit=args.time_limit)
+    except steer_.SteerError as error:  # the mailbox could not be opened: L2 never ran
+        raise SystemExit(str(error)) from None
     except KeyboardInterrupt:  # a second Ctrl-C: the record is written all the same
         report = out / "report.md"
         print("stopped by hand; " + (f"report: {report}" if report.exists() else

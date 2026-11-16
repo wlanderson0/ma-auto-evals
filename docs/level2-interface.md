@@ -489,7 +489,7 @@ While an audit runs, the person running it can pause it, resume it, stop it, rai
 
 The payloads are closed shapes: `stop`, `pause` and `resume` take `{}`; `budget` `{"usd"}`, the new total; `answer` `{"ask_key", "choice"}`, or `{"ask_key", "choice"?, "text"}` (at most 2000 characters) when the question allowed text; `note` `{"text", "hypothesis"?}` (the text at most 2000 characters, `hypothesis` an integer the audit records and does not read). An unknown key, a wrong type, an amount that is not a plain decimal string, or a control character other than a newline or a tab makes the whole line malformed. So does a line over 16 KB, an unknown kind or a field outside its shape.
 
-**Reading and writing.** The audit, the plugin and the command each refuse, in one line, a mailbox or file that is a symbolic link, is not the user's own, or is open to others: the directory is 0700 and its files 0600, and whoever finds them missing makes them so. A line is appended with one `write` on a file opened for appending, under an exclusive `flock` on that file. Readers take no lock and read only up to the last newline. Without `flock` (Windows) steering is off, with one line that says so. A mailbox that fails these checks stops the audit from starting.
+**Reading and writing.** The audit, the plugin and the command each refuse, in one line, a mailbox or file that is a symbolic link, is not the user's own, or is open to others: the directory is 0700 and its files 0600, and whoever finds them missing makes them so. A line is appended with one `write` on a file opened for appending, under an exclusive `flock` on that file. Readers take no lock and read only up to the last newline. Without `flock` (Windows) steering is off, with one line that says so. A mailbox that fails these checks stops the audit from starting. One that fails them later is no longer read: a pause ends, the audit goes on as it would unsteered, and the ledger and the report say so.
 
 **Where the audit reads it.** After each of L2's turns (`on_continue`), before a launch, and while a question waits. A step is L2's tool call number, the `[call N]` of `trace.jsonl`; `at_step` is the number of the call during or after which a line was applied (0 before the first).
 
@@ -505,7 +505,7 @@ The payloads are closed shapes: `stop`, `pause` and `resume` take `{}`; `budget`
 
 Each applied text (a note, an answer's text) is printed in the terminal before it reaches L2, with anything unprintable escaped, with or without `--quiet`.
 
-**L2's side.** A steered audit gives L2 `ask_researcher` and `reply_researcher` (§6.1), and its first message says so in a few sentences. A question has one to four distinct choices, a default (applied when it times out), and a timeout of 300 s unless L2 sets one, never more than 1800 s or the audit's time left. A stop while it waits withdraws it and tells L2 to conclude.
+**L2's side.** A steered audit gives L2 `ask_researcher` and `reply_researcher` (§6.1), and its first message says so in a few sentences. A question has one to four distinct choices, a default (applied when it times out), and a timeout of 300 s unless L2 sets one, in whole seconds, never more than 1800 s or the audit's time left. A stop while it waits withdraws it and tells L2 to conclude.
 
 **The local command** writes requests from the machine, with no Cosmos server in the path:
 

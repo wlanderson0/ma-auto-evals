@@ -35,6 +35,7 @@ import contextlib
 import errno
 import getpass
 import json
+import math
 import os
 import re
 import stat
@@ -619,6 +620,8 @@ class Steering:
         self.raised: tuple[float, float] | None = None
         """A budget raise L2's token backstop has not followed yet: (from, to)."""
         self.ended = False
+        self.broken: str | None = None
+        """Why the mailbox is no longer read, if it failed its checks during the audit."""
         self._lock: int | None = None
 
     # --------------------------------------------------------- start and end
@@ -675,9 +678,24 @@ class Steering:
     # -------------------------------------------------------------- reading
     def poll(self) -> None:
         """Read the inbox's new lines and apply or refuse each."""
-        lines, self.offset = self.mailbox.read(INBOX, self.offset)
+        if self.broken is not None:
+            return
+        try:
+            lines, self.offset = self.mailbox.read(INBOX, self.offset)
+        except SteerError as error:
+            self._fail(error)
+            return
         for raw in lines:
             self._take(raw)
+
+    def _fail(self, error: SteerError) -> None:
+        """The mailbox failed its checks during the audit (e.g. its mode was changed): it is
+        no longer read, a pause ends, and the audit goes on, as it would unsteered; the
+        ledger and the report say so."""
+        if self.broken is None:
+            self.broken = str(error)
+            self.say(f"steering: the mailbox is no longer read: {escape(error)}")
+            self.audit.notes.append(f"steering stopped during the audit: {error}")
 
     def _take(self, raw: bytes) -> None:
         request, rid, problem = parse_request(raw)
@@ -759,7 +777,12 @@ class Steering:
 
     # ------------------------------------------------------------ recording
     def _out(self, row: Mapping[str, Any]) -> None:
-        self.mailbox.append(OUTBOX, {"schema": SCHEMA, **row})
+        if self.broken is not None:
+            return
+        try:
+            self.mailbox.append(OUTBOX, {"schema": SCHEMA, **row})
+        except SteerError as error:
+            self._fail(error)
 
     def _ack(self, rid: str, state: str, request: Request | None, **more: Any) -> None:
         row: dict[str, Any] = {"type": "ack", "id": rid, "state": state, **more}
@@ -819,7 +842,7 @@ class Steering:
         audit is paused, looking again about once a second. A stop, or a Ctrl-C, ends the
         wait."""
         self.poll()
-        while self.paused and not self.audit.interrupts:
+        while self.paused and not self.audit.interrupts and self.broken is None:
             time.sleep(self.poll_s)
             self.poll()
         if self.paused:
@@ -830,7 +853,7 @@ class Steering:
         import anyio
 
         self.poll()
-        while self.paused and not self.audit.interrupts:
+        while self.paused and not self.audit.interrupts and self.broken is None:
             await anyio.sleep(self.poll_s)
             self.poll()
         if self.paused:
@@ -882,13 +905,12 @@ class Steering:
         self._out({"type": "ask", "ask_key": ask.key, "text": ask.text,
                    "choices": ask.choices, "allow_text": ask.allow_text,
                    "default_choice": ask.default,
-                   "cost": None if cost is None else {"usd": cost},
-                   "timeout_s": int(timeout) if timeout == int(timeout) else timeout})
+                   "cost": None if cost is None else {"usd": cost}, "timeout_s": timeout})
         self.asks[ask.key] = ask
         self.say(f"steering: L2 asks ({ask.key}): {escape(ask.text)}\n  choices: "
                  + ", ".join(escape(c) for c in ask.choices)
                  + (f"; default {escape(ask.default)}" if ask.default is not None else "")
-                 + f"; answers itself in {timeout:g} s. Answer with: python -m "
+                 + f"; answers itself in {timeout} s. Answer with: python -m "
                  f"experiments.l2.steer answer {ask.key} <choice>")
         until = time.monotonic() + timeout
         stopped = self.audit.interrupts
@@ -904,7 +926,7 @@ class Steering:
             if time.monotonic() >= until:
                 self._close_ask(ask.key, "timed_out")
                 self.flush()
-                return (f"No answer to {ask.key} within {timeout:g} s: "
+                return (f"No answer to {ask.key} within {timeout} s: "
                         + (f"the default applies: {ask.default}." if ask.default is not None
                            else "there is no default, so decide yourself."))
             await anyio.sleep(min(self.poll_s, max(until - time.monotonic(), 0.0)))
@@ -920,9 +942,11 @@ class Steering:
         return "\n".join(lines)
 
     def _question(self, question: Any, choices: Any, default: Any, timeout_s: Any,
-                  allow_text: Any, cost_usd: Any) -> tuple[Ask, float, str | None]:
+                  allow_text: Any, cost_usd: Any) -> tuple[Ask, int, str | None]:
         if self.ended or self.audit.ended:
             raise Refusal("refused: the audit has ended")
+        if self.broken is not None:
+            raise Refusal(f"refused: the researchers' mailbox is no longer read ({self.broken})")
         if self.audit.interrupts:
             raise Refusal(f"refused: the audit is stopping ({self.audit.halted}): conclude")
         if not isinstance(question, str) or not question.strip() or len(question) > MAX_TEXT \
@@ -942,7 +966,9 @@ class Steering:
                 timeout > 0) or timeout != timeout:
             raise Refusal("timeout_s must be a number of seconds above 0")
         left = self.audit.clock_state()["time_left_s"]
-        timeout = min(float(timeout), ASK_MAX, *([max(left, 0.0)] if left is not None else []))
+        # whole seconds, as the outbox gives them
+        timeout = max(1, math.ceil(min(float(timeout), ASK_MAX,
+                                       *([max(left, 0.0)] if left is not None else []))))
         cost = None
         if cost_usd is not None:
             if isinstance(cost_usd, bool) or not isinstance(cost_usd, int | float) or not (

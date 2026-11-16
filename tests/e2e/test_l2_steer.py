@@ -332,6 +332,20 @@ def test_ctrl_c_while_paused_ends_the_wait(tmp_path):
     assert audit.paused_since is None
 
 
+def test_a_mailbox_that_turns_bad_during_the_audit_is_no_longer_read(tmp_path):
+    audit, box = steered(tmp_path)
+    Tools(audit)
+    audit.steering.open()
+    send(box, "pause")
+    audit.steering.poll()
+    os.chmod(box.path, 0o750)  # open to the group: nothing more is read from it
+    result = audit.launch([], 1, rationale=WHY)  # the pause ends rather than hold forever
+    assert result["reason"] == "no variants to run" and audit.paused_since is None
+    assert "has mode 0750" in audit.steering.broken
+    assert audit.notes == [f"steering stopped during the audit: {audit.steering.broken}"]
+    audit.steering.close()
+
+
 def test_a_pause_holds_l2_between_turns_until_resumed(tmp_path):
     audit, box = steered(tmp_path)
     tools = Tools(audit, on_end=write_report)
@@ -425,16 +439,16 @@ def trace_result(tools, name):
 def test_an_unanswered_question_takes_its_default(tmp_path, capfd):
     audit, box = steered(tmp_path)
     tools = Tools(audit, on_end=write_report)
-    log = run_l2(tools, fake_model([("ask_researcher", {**ASK, "timeout_s": 0.5}), *END]),
+    log = run_l2(tools, fake_model([("ask_researcher", {**ASK, "timeout_s": 0.4}), *END]),
                  PROMPT, prices=FREE)
     [row] = trace_result(tools, "ask_researcher")
     assert row["ok"] and row["seq"] == 1
-    assert "No answer to ask-1 within 0.5 s: the default applies: Skip." in row["result"]
+    assert "No answer to ask-1 within 1 s: the default applies: Skip." in row["result"]
     [ask] = outbox(box, "ask")
     assert ask == {"schema": steer.SCHEMA, "type": "ask", "ask_key": "ask-1",
                    "text": ASK["question"], "choices": ["Approve", "Skip"],
                    "allow_text": False, "default_choice": "Skip", "cost": {"usd": "4.10"},
-                   "timeout_s": 0.5}
+                   "timeout_s": 1}  # whole seconds
     assert outbox(box, "ask_closed") == [{"schema": steer.SCHEMA, "type": "ask_closed",
                                           "ask_key": "ask-1", "state": "timed_out"}]
     assert steer_events(log) == []
