@@ -169,7 +169,9 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
 - **`manifest.json`** (`build_manifest` in `experiments/run.py`, `"schema":
   "cosmos.manifest/1"`): `sha`, `short_sha`, `branch`, `dirty`, `pr`,
   `scenarios`, `conditions`, `epochs`, `seats`, `models` (per role, plus
-  `agents` per scenario), `started_at`, `finished_at`, `argv`. cosmos files the
+  `agents` per scenario), `started_at`, `finished_at`, `argv`, and `live_run`
+  (only when the run was streamed with `COSMOS_STREAM=1`: the slug `cosmos live
+  open` returned, which makes `cosmos upload` continue that run). cosmos files the
   run by `sha`, `branch` and `pr`, shows `dirty`, `epochs` and the per-role
   `models`, and reads `seats`. Bump `MANIFEST_SCHEMA` for an incompatible
   change too. cosmos does not check it, so the matching cosmos change is still
