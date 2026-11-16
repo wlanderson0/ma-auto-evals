@@ -1,6 +1,6 @@
 """The steering mailbox's format, its checks and the local command (Cosmos spec 22 §5,
-§5.1; ``experiments.l2.steer``). Pure: no audit runs here (``tests/e2e/test_l2_steer.py``
-has those)."""
+§5.1; ``experiments.l2.steer``; contract test L2-25 of ``docs/level2-interface.md``).
+Pure: no audit runs here (``tests/e2e/test_l2_steer.py`` has those)."""
 
 from __future__ import annotations
 

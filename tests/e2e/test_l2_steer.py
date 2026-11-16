@@ -1,4 +1,5 @@
-"""Steering a running audit through its mailbox (Cosmos spec 22 §6; ``experiments.l2.steer``).
+"""Steering a running audit through its mailbox (Cosmos spec 22 §6; ``experiments.l2.steer``;
+contract test L2-25 of ``docs/level2-interface.md``).
 
 Scripted audits (the fake L2, mock experiments), steered with the local command
 (``steer.main`` with ``--dir``) or with lines written straight to the inbox where a test
@@ -7,6 +8,7 @@ needs a line the command would refuse. Offline; waits are short (``poll_s``).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -617,6 +619,46 @@ def test_a_reply_to_a_mailbox_no_longer_read_is_refused(tmp_path):
     audit.steering.close()
     assert not ok and "mailbox is no longer read" in text
     assert outbox(box, "say") == [] and audit.steering.numbers["say"] == 0
+
+
+def test_a_reply_the_mailbox_refused_at_the_write_is_not_reported_as_sent(tmp_path):
+    audit, box = steered(tmp_path)
+    tools = Tools(audit)
+    audit.steering.open()
+    os.chmod(box.path, 0o750)  # turns bad after the last read: the write itself fails
+    ok, text = tools.call("reply_researcher", text="hello")
+    os.chmod(box.path, 0o700)
+    audit.steering.close()
+    assert not ok and "so the reply was not sent" in text
+    assert outbox(box, "say") == []
+
+
+def test_a_question_the_mailbox_refused_at_the_write_is_not_waited_on(tmp_path):
+    audit, box = steered(tmp_path)
+    audit.steering.open()
+    os.chmod(box.path, 0o750)
+    started = time.monotonic()
+    with pytest.raises(steer.Refusal, match="so the question was not asked"):
+        asyncio.run(audit.steering.ask("Go?", ["Yes", "No"], default="No", timeout_s=30))
+    os.chmod(box.path, 0o700)
+    audit.steering.close()
+    assert time.monotonic() - started < 5 and audit.steering.asks == {}
+    assert outbox(box, "ask") == []
+
+
+def test_a_question_stops_waiting_when_its_mailbox_is_no_longer_read(tmp_path):
+    audit, box = steered(tmp_path)
+    steering = audit.steering
+    steering.open()
+    threading.Timer(0.2, os.chmod, (box.path, 0o750)).start()  # while the question waits
+    started = time.monotonic()
+    said = asyncio.run(steering.ask("Go?", ["Yes", "No"], default="No", timeout_s=30))
+    os.chmod(box.path, 0o700)
+    steering.close()
+    assert time.monotonic() - started < 5
+    assert said.startswith("Question ask-1 can no longer be answered: the researchers' "
+                           "mailbox is no longer read")
+    assert said.endswith("the default applies: No.")
 
 
 def test_a_stop_while_l2_asks_withdraws_the_question(tmp_path):
