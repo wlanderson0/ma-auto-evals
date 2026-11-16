@@ -323,6 +323,8 @@ def figures_json(audit: Path, out: Path,
     calls = figure_calls(audit)
     entries = []
     for sidecar in sorted((audit / FIGURES).glob("*.json")):
+        if sidecar.is_symlink() or not sidecar.is_file():
+            continue  # never read through a link: figures/ is written by L2's code
         path = sidecar.with_suffix(".png").relative_to(audit).as_posix()
         if not (Path(out) / path).is_file():
             continue  # the image was left out, or never drawn: a JSON of L2's own

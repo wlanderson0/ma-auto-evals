@@ -55,7 +55,9 @@ from experiments.l2 import written as written_
 from experiments.l2.apply import recorded
 from experiments.l2.brief import VARIANT_ID, BriefError, _variants, parse_brief
 from experiments.l2.cost import log_cost
+from experiments.l2.figures import FIGURES
 from experiments.l2.model import SCENARIO, L2Brief, Problems, Variant
+from experiments.l2.sandbox import Sandbox
 
 RESERVE = 0.10
 """Share of the budget held back from experiments for L2's final calls (spec §7)."""
@@ -80,7 +82,8 @@ class Audit:
                  cost_of: m1.CostOf = log_cost,
                  estimator: Callable[..., dict[str, Any]] = m1.estimate,
                  clock: Callable[[], float] = time.monotonic,
-                 progress: Callable[[dict[str, Any]], None] | None = None) -> None:
+                 progress: Callable[[dict[str, Any]], None] | None = None,
+                 sandbox: Sandbox | None = None) -> None:
         if not 0 <= reserve < 1:
             raise ValueError(f"reserve must be a share of the budget in [0, 1), not {reserve}")
         self.out = Path(out)
@@ -107,6 +110,9 @@ class Audit:
         self.progress = progress
         """Called with each progress event (``say``); the CLI shows them
         (``experiments.l2.progress``). None: silent."""
+        self.sandbox = sandbox
+        """Where L2's code runs (``run_python``, the check of a written scenario), or
+        ``None``: outside any sandbox, as before (``experiments.l2.sandbox``)."""
 
     @classmethod
     def create(cls, brief_path: str | Path, out: str | Path, **options: Any) -> Audit:
@@ -160,6 +166,16 @@ class Audit:
         brief's ``allowed_changes``, when set, names ``scenario``."""
         allowed = self.brief.allowed_changes
         return self.analysis is None and (allowed is None or SCENARIO in allowed)
+
+    def sandbox_report(self) -> dict[str, Any] | None:
+        """The sandbox this audit may report (Cosmos spec 22 §5, ``program.json``):
+        ``{"kind", "network": False, "write"}`` only when it has one and writes no
+        scenarios, since a written scenario is imported into this process and run in each
+        epoch's subprocess, both outside the sandbox. ``None`` otherwise."""
+        if self.sandbox is None or self.writes_scenarios:
+            return None
+        return {"kind": self.sandbox.kind, "network": False,
+                "write": str((self.out / FIGURES).resolve())}
 
     def runs_of(self, base: str) -> list[str]:
         """The variants of ``base`` that have run in this audit (at least one epoch)."""
@@ -509,14 +525,19 @@ def _json(path: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
     """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
-    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>]``.
+    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>] [--sandbox]``.
 
     ``--question`` with ``--budget`` is the shortest brief: the question and the budget,
     everything else left to L2 (spec §1.1); the audit keeps it as its ``brief.md``.
 
+    ``--sandbox`` (or ``L2_SANDBOX=1``) runs L2's code in the sandbox
+    (``experiments.l2.sandbox``); the audit first checks it and does not start when a
+    property fails.
+
     Without ``--fake``, L2 is an LLM (``--model``, default ``agent.MODEL``) and its own
     calls are live (OpenRouter) even when the experiments run on mocks (``--mock``)."""
     import argparse
+    import os
 
     from experiments.l2 import agent
     from experiments.l2.audit_report import write_report
@@ -552,6 +573,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                              "the report to them (experiments.l2.share)")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
+    parser.add_argument("--sandbox", action="store_true",
+                        help="run L2's code (run_python, the check of a written scenario) in "
+                             "a sandbox: no network, reads only the runs, writes only "
+                             "figures/ (also L2_SANDBOX=1); refused when it cannot start")
     parser.add_argument("--quiet", action="store_true",
                         help="show no progress (the live status panel, or lines when the "
                              "output is not a terminal) while the audit runs")
@@ -565,6 +590,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.fake and not args.mock and args.analysis_only is None:
         raise SystemExit("--fake runs experiments live (OpenRouter spend) unless --mock is "
                          "given; a scripted L2 has no use for live runs, so use --mock")
+    sandbox = None
+    if args.sandbox or os.environ.get("L2_SANDBOX") == "1":
+        from experiments.l2 import sandbox as sandbox_
+
+        found = sandbox_.check()  # before anything is created or spent
+        if not found.passed:
+            raise SystemExit("\n".join(["the sandbox does not hold here, so the audit does "
+                                         "not start:", *found.failed()]))
+        sandbox = sandbox_.detect()
     if not args.fake:
         from experiments.l2.cost import UnknownPrice, price
 
@@ -580,8 +614,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         if not args.live:
             raise SystemExit(f"{what} would call OpenRouter and spend money: add --live to "
                              "allow it (budget: the brief's budget_usd)")
-        import os
-
         from dotenv import load_dotenv
 
         load_dotenv(m1.REPO / ".env")  # OPENROUTER_API_KEY
@@ -597,7 +629,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
                                   f"{args.question.strip()}\n")
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
-                             history=args.history)
+                             history=args.history, sandbox=sandbox)
     tools = Tools(audit, on_end=write_report)
     model = None if args.fake else args.model or agent.MODEL
     if model is not None:

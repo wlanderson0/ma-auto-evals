@@ -52,7 +52,7 @@ from typing import Any
 import anyio
 from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
-from inspect_ai.tool import Tool, ToolError, tool
+from inspect_ai.tool import Tool, ToolError, tool, tool_with
 from markdown_it import MarkdownIt
 
 from experiments.l2 import claims as claims_
@@ -66,6 +66,7 @@ from experiments.l2.experiment import variant_from
 from experiments.l2.model import L2Brief, Variant
 from experiments.l2.report import SCORER as MEASURE_SCORER
 from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
+from experiments.l2.sandbox import SandboxFailed
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import read_sample
 
@@ -85,6 +86,19 @@ ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
 TOOLS = ("run_experiment", "write_scenario", "list_runs", "scores", "transcript", "find",
          "run_python", "note_decision", "budget", "request_review", "end_audit")
+SANDBOXED_RUN_PYTHON = (
+    "Run your own Python on the audit's logs, e.g. to compute a measure the other tools do "
+    "not give. It runs in a fresh process each call, in a sandbox, with the audit directory "
+    "as its working directory. It can read the audit's runs and nothing else of the "
+    "machine: L2_SOURCES (environment) lists the directories the runs are in, separated by "
+    "':', each with runs.jsonl (one row per variant: its recorded variant and its eval log "
+    "paths, relative to that directory, one per epoch). Read the logs with "
+    "inspect_ai.log.read_eval_log (each has one sample, with its scores and store); pandas "
+    "and matplotlib are available. It can write only under figures/ (save figures for "
+    f"your write-up there). It has no network and no API keys. It is stopped after "
+    f"{workspace.TIME_LIMIT} seconds, and output past {workspace.OUTPUT_CHARS} characters "
+    "is cut: print what you need.")
+"""``run_python``'s description when the audit runs it in a sandbox (``Audit.sandbox``)."""
 
 
 class Refused(Exception):
@@ -571,7 +585,11 @@ class Tools:
             f" up to round {rounds}" if rounds is not None else "")
         try:
             compared = self.results().compare(a, b, scorer, rounds=rounds, field=field)
-            path = figures.compare_figure(compared, a, b, measure, self.audit.out / name)
+            target = self.audit.out / name
+            for planted in (target, target.with_suffix(".json")):  # never write through a
+                if planted.is_symlink() or (planted.exists() and not planted.is_file()):
+                    planted.unlink()  # link (or onto a fifo) left in figures/
+            path = figures.compare_figure(compared, a, b, measure, target)
             # what the image shows, as drawn (the Cosmos export reads it: figures.json)
             path.with_suffix(".json").write_text(json.dumps(
                 {"compared": compared, "a": a, "b": b, "scorer": scorer, "field": field,
@@ -758,7 +776,11 @@ class Tools:
     def run_python(self, code: str) -> str:
         if not isinstance(code, str) or not code.strip():
             raise Refused("code is required: the Python to run")
-        return workspace.run_python(code, self.audit.out, self.audit.sources())
+        try:
+            return workspace.run_python(code, self.audit.out, self.audit.sources(),
+                                        self.audit.sandbox)
+        except SandboxFailed as error:  # never run outside the sandbox
+            raise Refused(f"refused: {error}") from error
 
     def write_scenario(self, name: str, code: str) -> str:
         """Check ``code`` in a subprocess without keys, then save it as ``name``."""
@@ -781,7 +803,10 @@ class Tools:
                           "version needs a new name, so runs of two versions never mix")
         if not isinstance(code, str) or not code.strip():
             raise Refused("code is required: the module's Python source")
-        passed, text = written_.check_code(name, code)
+        try:
+            passed, text = written_.check_code(name, code, audit.sandbox)
+        except SandboxFailed as error:  # never checked outside the sandbox
+            raise Refused(f"refused: {error}. Nothing was saved.") from error
         if not passed:
             kept = (f" Nothing was saved; the earlier version of {name} is kept."
                     if name in self.written else " Nothing was saved.")
@@ -1300,6 +1325,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                 code: The Python to run (print the results).
             """
             return await call("run_python", code=code)
+        if getattr(tools.audit, "sandbox", None) is not None:
+            return tool_with(execute, description=SANDBOXED_RUN_PYTHON)
         return execute
 
     @tool
