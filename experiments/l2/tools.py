@@ -27,6 +27,9 @@ for L2 rather than an exception.
   reads L2's draft, with the claims' verdicts and the query tools (``READ``), and its
   critique comes back to L2, which then revises once with ``end_audit`` (``response``: how
   it answered); saved in ``review.json``.
+- ``ask_researcher(question, choices, ...)`` and ``reply_researcher(text, note_id)``, only
+  in a steered audit (``experiments.l2.steer``): a question to the researchers, which waits
+  for an answer or its timeout, and a reply to their notes.
 
 Outputs are short by default: small plain tables, the first N posts or matches. L2 sees
 each result after its call number (`[call N]`, the call's `seq` in `trace.jsonl`), and each
@@ -56,7 +59,7 @@ from inspect_ai.tool import Tool, ToolError, tool
 from markdown_it import MarkdownIt
 
 from experiments.l2 import claims as claims_
-from experiments.l2 import figures, workspace
+from experiments.l2 import figures, steer, workspace
 from experiments.l2 import written as written_
 from experiments.l2.apply import recorded_inner
 from experiments.l2.audit import Audit
@@ -75,7 +78,7 @@ TRACE_CHARS = 4000
 """Results longer than this are cut in ``trace.jsonl`` (the full text went to L2)."""
 POST_CHARS = 600
 """Posts longer than this are cut in tool output."""
-FREE = ("budget", "request_review", "end_audit")
+FREE = ("budget", "request_review", "end_audit", "reply_researcher")
 """Tools that still run after the hard stop."""
 READ = ("list_runs", "scores", "transcript", "find")
 """The query tools the reviewer may use (read only: no code, no runs)."""
@@ -84,7 +87,10 @@ MAKES = ("run_experiment", "write_scenario")
 ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
 TOOLS = ("run_experiment", "write_scenario", "list_runs", "scores", "transcript", "find",
-         "run_python", "note_decision", "budget", "request_review", "end_audit")
+         "run_python", "note_decision", "budget", "request_review", "end_audit",
+         "ask_researcher", "reply_researcher")
+STEERED = ("ask_researcher", "reply_researcher")
+"""Tools offered only when the audit is steered."""
 
 
 class Refused(Exception):
@@ -189,6 +195,8 @@ class Tools:
         self.written = audit.written()
         """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
+        if audit.steering is not None:  # a step is L2's tool call number, as L2 sees it
+            audit.steering.step = lambda: self._seq
 
     # ------------------------------------------------------------ dispatch
     def call(self, name: str, /, **args: Any) -> tuple[bool, str]:
@@ -214,6 +222,9 @@ class Tools:
             if name == "request_review":  # it runs the reviewer: see reviewed_call
                 raise Refused("refused: request_review needs the reviewer, which runs only "
                               "inside the L2 agent")
+            if name == "ask_researcher":  # it waits for an answer: see asked_call
+                raise Refused("refused: ask_researcher waits for an answer, which it does "
+                              "only inside the L2 agent")
             ok, text = True, getattr(self, name)(**args)
         except Exception as error:
             ok, text = False, _failure(error)
@@ -253,10 +264,28 @@ class Tools:
                        first_line=(text.strip().splitlines() or [""])[0])
         return True, text, number
 
+    async def asked_call(self, /, **args: Any) -> tuple[bool, str, int]:
+        """``ask_researcher``: the question goes to the mailbox and the call waits for an
+        answer, a stop or its timeout (``steer.Steering.ask``). Numbered like any call."""
+        self.audit.say("tool", name="ask_researcher", done=False)
+        self._seq += 1
+        seq = self._seq
+        try:
+            args = self._admit("ask_researcher", args, "l2")
+            ok, text = True, await self.audit.steering.ask(**args)
+        except Exception as error:
+            ok, text = False, _failure(error)
+        number = self._trace("ask_researcher", args, ok, text, seq)
+        self.audit.say("tool", name="ask_researcher", done=True, ok=ok,
+                       first_line=(text.strip().splitlines() or [""])[0])
+        return ok, text, number
+
     def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
         """The call's arguments if it may run now; ``Refused`` if not."""
         if name not in TOOLS:
             raise Refused(f"unknown tool {name!r}")
+        if name in STEERED and self.audit.steering is None:
+            raise Refused(f"refused: {name} needs a steered audit, and this one is not")
         if by == "reviewer" and name not in READ:
             raise Refused(f"refused: the reviewer can use only {', '.join(READ)}")
         if self.audit.ended and name != "budget":
@@ -483,6 +512,8 @@ class Tools:
                 + (f" Time: {max(b['time_left_s'], 0) / 60:.1f} min left of "
                    f"{b['time_limit_s'] / 60:.1f} min ({b['time_reserve_s'] / 60:.1f} min "
                    "held back for your report)." if b["time_limit_s"] is not None else "")
+                + "".join(f" The budget was raised from ${r['from']:.2f} to ${r['to']:.2f} by "
+                          f"{r['by']} at step {r['at_step']}." for r in b.get("raised", []))
                 + (f" STOPPED: {b['stopped']}." if b["stopped"] else "")
                 + (f" STOPPING: {b['halted']}; no new experiment starts: conclude."
                    if b["halted"] and not b["stopped"] else ""))
@@ -805,6 +836,9 @@ class Tools:
             file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
         return f"Recorded: {field} = {_short(value, 200)}."
 
+    def reply_researcher(self, text: str, note_id: str | None = None) -> str:
+        return self.audit.steering.reply(text, note_id)
+
     def budget(self) -> str:
         b = self.audit.budget()
         lines = [self._budget_line(b), f"By kind: experiments ${b['by_kind']['experiments']:.4f}, "
@@ -944,7 +978,8 @@ def embedded(out: Path, src: str) -> Path | None:
 def _failure(error: Exception) -> str:
     """What L2 sees of a refused or failed call (a bug or a bad argument included: the
     audit goes on)."""
-    return str(error) if isinstance(error, Refused) else f"error: {type(error).__name__}: {error}"
+    return (str(error) if isinstance(error, Refused | steer.Refusal)
+            else f"error: {type(error).__name__}: {error}")
 
 
 def post_ref(post: Mapping[str, Any]) -> int | str:
@@ -1104,13 +1139,14 @@ def _positive(value: Any, name: str) -> None:
 def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = None,
                   experiments: bool = True, scenarios: bool = True,
                   review: Callable[[Tools, dict[str, Any]], Any] | None = None,
-                  by: str = "l2") -> list[Tool]:
+                  by: str = "l2", steered: bool = False) -> list[Tool]:
     """The tools as Inspect tools for an agent. ``spend`` gives L2's own spend so far
     (``transcript_spend``); it is read before every call so the hard stop sees it.
     ``experiments=False`` leaves out ``run_experiment`` (an analysis-only audit), and
     ``scenarios=False`` leaves out ``write_scenario`` (``Audit.writes_scenarios``).
     ``review`` (the reviewer, ``agent.reviewer``) adds ``request_review``. ``by="reviewer"``
-    gives the reviewer's tools: the query tools only (``READ``). A refused call raises
+    gives the reviewer's tools: the query tools only (``READ``). ``steered`` adds
+    ``ask_researcher`` and ``reply_researcher`` (``STEERED``). A refused call raises
     ``ToolError``, so a refused ``end_audit`` never ends the agent."""
 
     def refresh(name: str, args: dict[str, Any]) -> None:
@@ -1136,6 +1172,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
         if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
             ok, text, seq = await anyio.to_thread.run_sync(
                 partial(tools.numbered_call, name, by, **args))
+            if tools.audit.steering is not None:  # what the launch applied, now on the loop
+                tools.audit.steering.flush()
         else:
             ok, text, seq = tools.numbered_call(name, by, **args)
         return answer(ok, text, seq)
@@ -1399,10 +1437,51 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                               writeup=writeup, response=response)
         return execute
 
+    @tool
+    def ask_researcher() -> Tool:
+        async def execute(question: str, choices: list[str], default: str | None = None,
+                          timeout_s: float | None = None, allow_text: bool = False,
+                          cost_usd: float | None = None) -> str:
+            """Ask the researchers running this audit a question, and wait for the answer:
+            one of the choices you offer (and, if you allow it, their text). Use it before
+            a step they may want to decide, such as an experiment that spends much of the
+            budget. If nobody answers in time, the default applies.
+
+            Args:
+                question: The question, in a few plain sentences.
+                choices: One to four short answers they can pick (e.g. ["Approve",
+                    "Skip"]).
+                default: The choice that applies if nobody answers in time.
+                timeout_s: Seconds to wait (default 300, at most 1800 and never past the
+                    audit's time limit).
+                allow_text: Whether they may answer in words as well.
+                cost_usd: What the step you ask about would cost, if it has a cost.
+            """
+            args = {"question": question, "choices": choices, "default": default,
+                    "timeout_s": timeout_s, "allow_text": allow_text, "cost_usd": cost_usd}
+            refresh("ask_researcher", args)
+            return answer(*await tools.asked_call(**args))
+        return execute
+
+    @tool
+    def reply_researcher() -> Tool:
+        async def execute(text: str, note_id: str | None = None) -> str:
+            """Reply to the researchers running this audit, e.g. to a note they sent you.
+            What you say only in your own turns stays in your transcript; this is what
+            they read.
+
+            Args:
+                text: Your reply, at most 4000 characters.
+                note_id: The id of the note you answer (its frame names it), if any.
+            """
+            return await call("reply_researcher", text=text, note_id=note_id)
+        return execute
+
     if by == "reviewer":
         return [list_runs(), scores(), transcript(), find()]
     made = [list_runs(), scores(), transcript(), find(), run_python(),
-            note_decision(), budget()]
+            note_decision(), budget(),
+            *([ask_researcher(), reply_researcher()] if steered else [])]
     return (([run_experiment()] if experiments else [])
             + ([write_scenario()] if scenarios else []) + made
             + ([request_review()] if review is not None else []) + [end_audit()])

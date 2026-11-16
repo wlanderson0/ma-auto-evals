@@ -27,7 +27,9 @@ The **audit run** is one more Cosmos run beside the experiments'. Its folder hol
   ``brief.json`` (``{"text": <brief.md as given>}``), and ``decisions.json``,
   ``proposed.json`` and ``launches.json``, the audit's JSONL files as JSON arrays (empty
   when the audit has none), so Cosmos reads them by name. ``review.json`` too, copied as
-  it is, when the audit has one;
+  it is, when the audit has one, and, when the audit was steered, ``steer.json`` (its
+  ``steer.jsonl``, every request read from the mailbox, applied or refused) and
+  ``report.json`` (``{"steered": n}``);
 - L2's outputs as documents (Cosmos spec 16 §4.6), each only when the audit has it:
   ``writeup.md``, byte for byte; the images: every ``.png``, ``.jpg``, ``.jpeg`` and
   ``.webp`` directly under ``figures/``, and any other the write-up embeds by a path
@@ -179,6 +181,10 @@ def export_audit(audit: Path, out: Path, *, pr: int | None = None,
         **{name: jsonl(audit / f"{name}.jsonl") for name in JSONL}}
     if (audit / "claims.json").exists():  # absent until L2 ends the audit
         files["claims"] = json.loads((audit / "claims.json").read_text())
+    if (audit / "steer.jsonl").exists():  # only a steered audit has these
+        files["steer"] = jsonl(audit / "steer.jsonl")
+    if (audit / "report.json").exists():
+        files["report"] = json.loads((audit / "report.json").read_text())
     (out / "study").mkdir()
     for name, data in files.items():
         (out / "study" / f"{name}.json").write_text(json.dumps(data, indent=2) + "\n")

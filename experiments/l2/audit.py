@@ -46,7 +46,7 @@ import tempfile
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -56,6 +56,9 @@ from experiments.l2.apply import recorded
 from experiments.l2.brief import VARIANT_ID, BriefError, _variants, parse_brief
 from experiments.l2.cost import log_cost
 from experiments.l2.model import SCENARIO, L2Brief, Problems, Variant
+
+if TYPE_CHECKING:
+    from experiments.l2.steer import Steering
 
 RESERVE = 0.10
 """Share of the budget held back from experiments for L2's final calls (spec §7)."""
@@ -100,6 +103,19 @@ class Audit:
         self.started: float | None = None
         self.interrupts = 0
         """How many times the audit was interrupted by hand (``interrupt``)."""
+        self.interrupt_reason: str | None = None
+        """Why the first interrupt came, when it was not Ctrl-C (a stop request)."""
+        self.paused_since: float | None = None
+        """When the audit was paused (``pause``), while it is."""
+        self.paused_s = 0.0
+        """Seconds the audit spent paused before the current pause; its clock stops then."""
+        self.budget_usd = brief.budget_usd
+        """The audit's total now: the brief's budget, or what a budget request raised it to
+        (``raise_budget``)."""
+        self.raises: list[dict[str, Any]] = []
+        """Each raise of the total: from, to, by whom, at which step of L2's, when."""
+        self.steering: Steering | None = None
+        """The mailbox reader when the audit is steered (``experiments.l2.steer``)."""
         self.launching = False
         """Whether a launch is running (its record is still to be written)."""
         self.notes: list[str] = []
@@ -208,8 +224,9 @@ class Audit:
         self.time_limit, self.started = time_limit, self.clock()
 
     def clock_state(self) -> dict[str, float | None]:
-        """Elapsed and left of the time limit, and the share held back for L2's report."""
-        elapsed = None if self.started is None else self.clock() - self.started
+        """Elapsed and left of the time limit, and the share held back for L2's report. The
+        clock does not run while the audit is paused."""
+        elapsed = None if self.started is None else self.clock() - self.started - self.paused()
         if self.time_limit is None or elapsed is None:
             return {"time_limit_s": None, "elapsed_s": elapsed, "time_left_s": None,
                     "time_reserve_s": None}
@@ -226,15 +243,54 @@ class Audit:
                 f"min gone, and the last {t['time_reserve_s'] / 60:.1f} min are held back "
                 "for L2's report")
 
-    def interrupt(self) -> None:
+    def interrupt(self, reason: str | None = None) -> None:
         """Stop by hand: no new experiment starts, and L2 concludes. A first interrupt lets
-        a running experiment finish; a second stops it before its next epoch."""
+        a running experiment finish; a second stops it before its next epoch. ``reason``
+        says why, when it was not Ctrl-C (a researcher's stop request, through the mailbox);
+        a Ctrl-C after it counts as the second."""
+        if not self.interrupts:
+            self.interrupt_reason = reason
         self.interrupts += 1
 
     @property
     def interrupted(self) -> str | None:
-        return (None if not self.interrupts else "interrupted by hand (Ctrl-C)"
+        return (None if not self.interrupts else
+                self.interrupt_reason or "interrupted by hand (Ctrl-C)"
                 if self.interrupts == 1 else "stopped by hand (Ctrl-C twice)")
+
+    def pause(self) -> None:
+        """Hold new launches (a pause request): the audit's clock stops until ``resume``."""
+        if self.paused_since is None:
+            self.paused_since = self.clock()
+            self.write_ledger()
+
+    def resume(self) -> None:
+        if self.paused_since is not None:
+            self.paused_s += self.clock() - self.paused_since
+            self.paused_since = None
+            self.write_ledger()
+
+    def paused(self) -> float:
+        """Seconds the audit has been paused, the pause running now included."""
+        now = 0.0 if self.paused_since is None else self.clock() - self.paused_since
+        return self.paused_s + now
+
+    def raise_budget(self, usd: float, *, by: str, at_step: int) -> None:
+        """Raise the audit's total to ``usd`` (a budget request): from the next experiment
+        on, as one that is running keeps the budget it was launched with."""
+        if not usd > self.budget_usd:
+            raise ValueError(f"${usd} is not above the total ${self.budget_usd}")
+        self.raises.append({"from": self.budget_usd, "to": usd, "by": by, "at_step": at_step,
+                            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+        self.budget_usd = usd
+        self.write_ledger()
+
+    def sandbox_report(self) -> dict[str, Any] | None:
+        """The sandbox every place L2's model-written code runs in, as ``program.json``
+        reports it (Cosmos spec 22 §5: ``{"kind", "network", "write"}``), or ``None``.
+        Always ``None`` in this package: the sandbox (package 22-S) fills it in. Without
+        one, text from Cosmos never reaches L2 (rule R18)."""
+        return None
 
     @property
     def halted(self) -> str | None:
@@ -255,7 +311,7 @@ class Audit:
         experiments = self.experiment_spend()
         runs = sum(experiments.values())
         spent = runs + self.l2["usd"]
-        total = self.brief.budget_usd
+        total = self.budget_usd
         reserve = self.reserve * total
         remaining = total - spent
         available = remaining - reserve
@@ -270,7 +326,8 @@ class Audit:
             "by_kind": {"experiments": sum(experiments.values()), "l2": self.l2["usd"]},
             "by_experiment": experiments, "l2_by_model": self.l2["by_model"],
             **self.clock_state(), "halted": self.halted,
-            "stopped": self.stop_reason(spent, reserve, total)}
+            "stopped": self.stop_reason(spent, reserve, total),
+            **({"raised": list(self.raises)} if self.raises else {})}
 
     @staticmethod
     def stop_reason(spent: float, reserve: float, total: float) -> str | None:
@@ -286,6 +343,8 @@ class Audit:
     def write_ledger(self, final: bool = False) -> dict[str, Any]:
         ledger = {**self.budget(), "reserve_share": self.reserve, "mock": self.mock,
                   "final": final, "note": OVERRUN, "problems": self.notes}
+        if self.steering is not None:
+            ledger["steering"] = self.steering.summary()
         (self.out / "ledger.json").write_text(json.dumps(ledger, indent=1, sort_keys=True))
         return ledger
 
@@ -344,9 +403,14 @@ class Audit:
         ``rejected`` (a variant failed its checks: nothing ran), ``needs_confirmation``
         (the estimate exceeds what is available for experiments), ``ran`` or
         ``failed`` (an epoch failed; finished epochs are kept). A launch that ran or
-        failed uses up its variant ids, even with no epoch done."""
+        failed uses up its variant ids, even with no epoch done.
+
+        A steered audit looks at its mailbox first, and waits while it is paused, so a
+        stop or a raise that comes meanwhile is seen by the checks."""
         self.launching = True
         try:
+            if self.steering is not None:
+                self.steering.hold()
             return self._launch(variants, epochs, confirm, rationale)
         finally:
             self.launching = False
@@ -509,16 +573,21 @@ def _json(path: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
     """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
-    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>]``.
+    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>] [--steer]``.
 
     ``--question`` with ``--budget`` is the shortest brief: the question and the budget,
     everything else left to L2 (spec §1.1); the audit keeps it as its ``brief.md``.
 
     Without ``--fake``, L2 is an LLM (``--model``, default ``agent.MODEL``) and its own
-    calls are live (OpenRouter) even when the experiments run on mocks (``--mock``)."""
+    calls are live (OpenRouter) even when the experiments run on mocks (``--mock``).
+
+    ``--steer`` (or ``COSMOS_STEER=1``, or ``COSMOS_STEER_DIR``) lets the audit be steered
+    through its mailbox (``experiments.l2.steer``). With ``COSMOS_REQUIRE_SANDBOX=1`` the
+    audit starts only if it will report a sandbox (``Audit.sandbox_report``)."""
     import argparse
 
     from experiments.l2 import agent
+    from experiments.l2 import steer as steer_
     from experiments.l2.audit_report import write_report
     from experiments.l2.fake import ANALYSIS, FULL, PROMPT, fake_model
     from experiments.l2.progress import reporter
@@ -555,6 +624,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--quiet", action="store_true",
                         help="show no progress (the live status panel, or lines when the "
                              "output is not a terminal) while the audit runs")
+    parser.add_argument("--steer", action="store_true",
+                        help="read requests from the audit's mailbox (COSMOS_STEER_DIR, else "
+                             "<audit>/l2/.cosmos-steer): pause, resume, stop, budget, "
+                             "answers and notes, sent with python -m experiments.l2.steer "
+                             "or by Cosmos")
     args = parser.parse_args(argv)
     if (args.question is None) != (args.budget is None):
         parser.error("--question and --budget go together (a --brief sets its own budget)")
@@ -590,14 +664,27 @@ def main(argv: Sequence[str] | None = None) -> None:
     out = args.out or Path(f"logs/l2-audit/{time.strftime('%Y%m%d-%H%M%S')}"
                            + ("-analysis" if args.analysis_only else "")
                            + ("-mock" if args.mock else "") + ("-fake" if args.fake else ""))
+    try:  # refused before anything is made
+        steering = steer_.configure(out, flag=args.steer)
+    except steer_.SteerError as error:
+        raise SystemExit(str(error)) from None
     with tempfile.TemporaryDirectory() as tmp:
         brief_path = args.brief
         if args.question is not None:
             brief_path = Path(tmp) / "brief.md"
             brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
                                   f"{args.question.strip()}\n")
+        if steer_.sandbox_required() and Audit(
+                out, parse_brief(brief_path), mock=args.mock,
+                analysis=args.analysis_only).sandbox_report() is None:
+            raise SystemExit("COSMOS_REQUIRE_SANDBOX=1, but this audit would run L2's "
+                             "model-written code without a sandbox: not started")
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
                              history=args.history)
+    if steering is not None:
+        mailbox, limit = steering
+        audit.steering = steer_.Steering(mailbox, audit, max_budget=limit,
+                                         sandbox=audit.sandbox_report())
     tools = Tools(audit, on_end=write_report)
     model = None if args.fake else args.model or agent.MODEL
     if model is not None:
