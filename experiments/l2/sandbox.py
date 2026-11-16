@@ -337,7 +337,9 @@ def seatbelt(run: Plan, scratch: str) -> tuple[str, dict[str, str]]:
         rule("file-read-metadata", ['(literal "/")', '(literal "/etc")', '(literal "/tmp")',
                                     '(literal "/var")', *(f"(literal {p})" for p in metadata)]),
         rule("file-read* file-write*", [f"(subpath {write})", f"(subpath {tmp})"]),
-        *([rule("file-read-data", [f"(literal {p})" for p in listed])] if listed else []),
+        # The names in the root directory, no file: macOS 26's loader opens ``/`` before the
+        # program starts, and aborts (dyld, libignition) where it may not.
+        rule("file-read-data", ['(literal "/")', *(f"(literal {p})" for p in listed)]),
         rule("file-read* file-write-data", ['(literal "/dev/null")', '(subpath "/dev/fd")']),
     ]
     for value in params.values():

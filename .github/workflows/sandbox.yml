@@ -67,6 +67,7 @@ jobs:
       - name: Check the sandbox
         run: uv run --locked python -m experiments.l2.sandbox --check
       - name: Run the sandbox tests
+        if: ${{ !cancelled() }}
         run: >-
           L2_SANDBOX_TESTS=require uv run --locked pytest -q --tb=short
           tests/unit/test_l2_sandbox.py tests/e2e/test_l2_sandbox.py

@@ -352,3 +352,12 @@ def test_the_seatbelt_profile_lets_a_link_to_the_interpreter_be_followed_not_rea
     [name] = [k for k, v in params.items() if v == link]
     assert name.startswith("ANCESTOR")  # metadata only
     assert link not in profile
+
+
+def test_the_seatbelt_profile_lets_the_loader_list_the_root_and_read_nothing_there():
+    """macOS 26's loader aborts before the program starts unless it may open ``/``."""
+    profile, _ = seatbelt(RUN, "/private/tmp/s")
+    [listing] = [block for block in profile.split("\n(allow ") if block.startswith(
+        "file-read-data")]
+    assert listing.splitlines() == ["file-read-data", '  (literal "/"))']
+    assert '(subpath "/")' not in profile
