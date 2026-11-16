@@ -130,6 +130,12 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
     out += [f"Status: {status}. {where}", ""]
+    if audit.sandbox is not None:
+        out += [f"L2's own code (`run_python`, the check of a written scenario) ran in a "
+                f"sandbox ({audit.sandbox.kind}): no network, writes only under `figures/`. "
+                + ("L2 could write scenarios, whose code runs outside it (in the audit's "
+                   "process and in each epoch)." if audit.writes_scenarios else
+                   "L2 could write no scenarios, so none of its code ran outside it."), ""]
     if writeup_text(tools) is not None:
         out += ["L2's readable write-up, with tables and figures, is in `writeup.md`; this "
                 "report is the record it rests on.", ""]

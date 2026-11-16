@@ -6,7 +6,7 @@ the Inspect log directory of L2's own eval (``<audit>/l2/.cosmos-steer``). It ho
 files, each line one JSON object with ``"schema": "cosmos.steer/1"``:
 
 - ``program.json``: written by the audit when it first looks at the mailbox: its process,
-  when it began to read, the kinds it takes, its sandbox (``None`` in this package) and the
+  when it began to read, the kinds it takes, its sandbox (``Audit.sandbox_report``) and the
   highest budget a ``budget`` request may set (``COSMOS_STEER_MAX_BUDGET_USD``).
 - ``inbox.jsonl``: one line per request (``pause``, ``resume``, ``stop``, ``budget``,
   ``answer``, ``note``), written by a Cosmos plugin (``"via": "cosmos"``) or by this
@@ -134,6 +134,18 @@ def directory(audit_out: Path, environ: Mapping[str, str] = os.environ) -> Path:
     """The mailbox: ``COSMOS_STEER_DIR``, else ``<audit>/l2/.cosmos-steer``."""
     given = environ.get("COSMOS_STEER_DIR")
     return Path(given) if given else Path(audit_out) / "l2" / DIR_NAME
+
+
+def under(mailbox: Path, visible: Sequence[Path]) -> Path | None:
+    """The first of ``visible`` (paths a sandbox can read or write) that holds ``mailbox``,
+    links resolved; ``None`` when the mailbox is outside them all, as it must be: code in
+    the sandbox must not be able to read or write a line (Cosmos spec 22 §5)."""
+    place = Path(os.path.realpath(mailbox))
+    for path in visible:
+        root = Path(os.path.realpath(path))
+        if place == root or root in place.parents:
+            return Path(path)
+    return None
 
 
 def amount(value: Any) -> Decimal | None:

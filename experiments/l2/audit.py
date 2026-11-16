@@ -355,6 +355,8 @@ class Audit:
                   "final": final, "note": OVERRUN, "problems": self.notes}
         if self.steering is not None:
             ledger["steering"] = self.steering.summary()
+        if self.sandbox is not None:
+            ledger["sandbox"] = {"kind": self.sandbox.kind, "reported": self.sandbox_report()}
         (self.out / "ledger.json").write_text(json.dumps(ledger, indent=1, sort_keys=True))
         return ledger
 
@@ -660,7 +662,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit("--fake runs experiments live (OpenRouter spend) unless --mock is "
                          "given; a scripted L2 has no use for live runs, so use --mock")
     sandbox = None
-    if args.sandbox or os.environ.get("L2_SANDBOX") == "1":
+    required = steer_.sandbox_required()  # COSMOS_REQUIRE_SANDBOX=1 turns the sandbox on
+    if args.sandbox or os.environ.get("L2_SANDBOX") == "1" or required:
         from experiments.l2 import sandbox as sandbox_
 
         found = sandbox_.check()  # before anything is created or spent
@@ -701,11 +704,20 @@ def main(argv: Sequence[str] | None = None) -> None:
             brief_path = Path(tmp) / "brief.md"
             brief_path.write_text(f"---\nbudget_usd: {args.budget}\n---\n"
                                   f"{args.question.strip()}\n")
-        if steer_.sandbox_required() and Audit(
-                out, parse_brief(brief_path), mock=args.mock,
-                analysis=args.analysis_only).sandbox_report() is None:
-            raise SystemExit("COSMOS_REQUIRE_SANDBOX=1, but this audit would run L2's "
-                             "model-written code without a sandbox: not started")
+        if required and Audit(out, parse_brief(brief_path), mock=args.mock,
+                              analysis=args.analysis_only,
+                              sandbox=sandbox).sandbox_report() is None:
+            raise SystemExit(
+                "COSMOS_REQUIRE_SANDBOX=1, but this audit lets L2 write scenarios, whose "
+                "code runs outside the sandbox (in this process, and in each epoch with the "
+                "provider's key and the network): not started. Leave scenario out of the "
+                "brief's allowed_changes, or run --analysis-only")
+        if steering is not None and sandbox is not None:
+            visible = [out / FIGURES, out / "experiments",
+                       *([args.analysis_only] if args.analysis_only else [])]
+            if inside := steer_.under(steering[0].path, visible):
+                raise SystemExit(f"the mailbox {steering[0].path} is inside {inside}, which "
+                                 "the sandbox can read: put it outside (COSMOS_STEER_DIR)")
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
                              history=args.history, sandbox=sandbox)
     if steering is not None:

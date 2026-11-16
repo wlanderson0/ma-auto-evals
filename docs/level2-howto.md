@@ -96,7 +96,8 @@ uv run python -m experiments.l2.steer status
   it with the command that answers it. Unanswered, its default applies when it times out.
 - `budget` needs `COSMOS_STEER_MAX_BUDGET_USD` (for example `25.00`) set when the audit
   starts: the audit takes no raise above it, and none without it.
-- The audit runs L2's code without a sandbox, so send only words you wrote yourself.
+- Unless the audit reports a sandbox (`--sandbox` and no written scenarios, below), it
+  runs L2's code without one, so send only words you wrote yourself.
   The terminal shows each note and text answer as it reaches L2.
 - Every request is recorded: `steer.jsonl` and the "Steering" section of `report.md`.
 

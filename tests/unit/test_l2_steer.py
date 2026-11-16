@@ -335,3 +335,15 @@ def test_without_flock_steering_is_off(tmp_path, monkeypatch, capfd):
     assert steer.OFF_HERE in capfd.readouterr().err
     assert command(tmp_path, "pause") == 1
     assert steer.OFF_HERE in capfd.readouterr().err
+
+
+def test_a_mailbox_under_a_path_the_sandbox_reads_is_found_through_links(tmp_path):
+    figures, runs = tmp_path / "audit" / "figures", tmp_path / "audit" / "experiments"
+    figures.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(figures)
+    visible = [figures, runs]
+    assert steer.under(tmp_path / "audit" / "l2" / steer.DIR_NAME, visible) is None
+    assert steer.under(tmp_path / "audit", visible) is None  # above them: not visible inside
+    assert steer.under(figures, visible) == figures
+    assert steer.under(runs / "exp-1" / "box", visible) == runs
+    assert steer.under(tmp_path / "link" / "box", visible) == figures

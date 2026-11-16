@@ -20,6 +20,7 @@ import pytest
 from inspect_ai.log import read_eval_log
 from inspect_ai.tool import ToolDef
 
+from experiments.l2 import sandbox as sandbox_
 from experiments.l2 import steer
 from experiments.l2.agent import run_l2
 from experiments.l2.audit import Audit, main
@@ -33,6 +34,10 @@ END = [("request_review", {"conclusions": "Done.", "claims": "[]", "writeup": "W
        ("end_audit", {"conclusions": "Done.", "claims": "[]", "writeup": "W.",
                       "response": "Kept."})]
 WHY = "a test launch"
+NO_SCENARIOS = "\nallowed_changes: [topology]"
+"""A brief header line that keeps L2 from writing scenarios, so a sandbox can be reported."""
+BOX = sandbox_.Sandbox("bwrap", "/usr/bin/bwrap")
+"""A sandbox to report; these tests run no code in it."""
 
 
 class Clock:
@@ -208,6 +213,45 @@ def test_text_from_cosmos_is_refused_without_a_sandbox_and_the_same_text_sent_lo
     assert found[sent["local"]]["state"] == "applied"
     assert [e["id"] for e in steer_events(log)] == [sent["local"]]
     assert steer.NO_SANDBOX in capfd.readouterr().err  # the command said so first
+
+
+@pytest.mark.parametrize("scenarios", [False, True])
+def test_text_from_cosmos_reaches_only_a_sandboxed_audit_that_writes_no_scenarios(
+        tmp_path, scenarios):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    audit = Audit.create(brief(tmp_path, 1.0, extra="" if scenarios else NO_SCENARIOS),
+                         tmp_path / "audit", mock=True, launch=InProcess(), clock=Clock(),
+                         sandbox=BOX)
+    box = steer.Mailbox(audit.out / "l2" / steer.DIR_NAME)
+    audit.steering = steer.Steering(box, audit, sandbox=audit.sandbox_report(), poll_s=0.05)
+    tools = Tools(audit, on_end=write_report)
+    sent = {}
+
+    def before(turn):
+        if turn == 1:
+            sent["note"] = raw(box, "note", {"text": "try the variant"}, via="cosmos")
+
+    log = run_l2(tools, fake_model([("budget", {}), ("budget", {}), *END], before=before),
+                 PROMPT, prices=FREE)
+    program = json.loads((box.path / steer.PROGRAM_FILE).read_text())
+    ledger = json.loads((audit.out / "ledger.json").read_text())
+    report = (audit.out / "report.md").read_text()
+    assert "ran in a sandbox (bwrap)" in report
+    if scenarios:  # its scenario code would run outside the sandbox: nothing is reported
+        assert program["sandbox"] is None and "note" not in program["kinds"]
+        assert acks(box)[sent["note"]]["reason"] == "no sandbox"
+        assert steer_events(log) == []
+        assert ledger["sandbox"] == {"kind": "bwrap", "reported": None}
+        assert "whose code runs outside it" in report
+        return
+    reported = {"kind": "bwrap", "network": False,
+                "write": str((audit.out / "figures").resolve())}
+    assert program["sandbox"] == reported and "note" in program["kinds"]
+    assert acks(box)[sent["note"]]["state"] == "applied"
+    [event] = steer_events(log)
+    assert (event["via"], event["text"]) == ("cosmos", "try the variant")
+    assert ledger["sandbox"] == {"kind": "bwrap", "reported": reported}
+    assert "none of its code ran outside it" in report
 
 
 # ---------------------------------------------------------- refused lines
@@ -635,12 +679,52 @@ def test_a_stop_while_l2_asks_withdraws_the_question(tmp_path):
 
 
 # ------------------------------------------------------------- the audit command
-def test_with_cosmos_require_sandbox_the_audit_does_not_start(tmp_path, monkeypatch):
+def holds(monkeypatch):
+    """A sandbox whose check passes here, without running one."""
+    monkeypatch.setattr(sandbox_, "check", lambda: sandbox_.Check(
+        "bwrap", {name: (True, "fine") for name in sandbox_.PROPERTIES}))
+    monkeypatch.setattr(sandbox_, "detect", lambda: BOX)
+
+
+def test_with_cosmos_require_sandbox_the_audit_starts_only_if_it_will_report_one(
+        tmp_path, monkeypatch):
+    import experiments.l2.agent as agent
+
     monkeypatch.setenv("COSMOS_REQUIRE_SANDBOX", "1")
-    with pytest.raises(SystemExit, match="COSMOS_REQUIRE_SANDBOX=1"):
+    monkeypatch.delenv("L2_SANDBOX", raising=False)
+    monkeypatch.setattr(sandbox_, "check", lambda: sandbox_.Check(
+        None, {"starts": (False, "bwrap (bubblewrap) is not installed")}))
+    with pytest.raises(SystemExit, match="the sandbox does not hold here"):  # none here
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
               "--fake"])
     assert not (tmp_path / "a").exists()
+    holds(monkeypatch)
+    with pytest.raises(SystemExit, match="COSMOS_REQUIRE_SANDBOX=1"):  # L2 may write scenarios
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "b"), "--mock",
+              "--fake"])
+    assert not (tmp_path / "b").exists()
+    seen = []
+    monkeypatch.setattr(agent, "run_l2", lambda tools, *args, **kwargs: seen.append(tools))
+    with pytest.raises(SystemExit):  # the stand-in never ends the audit
+        main(["--brief", str(brief(tmp_path, 1.0, extra=NO_SCENARIOS)), "--out",
+              str(tmp_path / "c"), "--mock", "--fake", "--quiet", "--steer"])
+    [tools] = seen  # it started, sandboxed without --sandbox, and reports it
+    assert tools.audit.sandbox is BOX
+    assert tools.audit.steering.sandbox == tools.audit.sandbox_report() == {
+        "kind": "bwrap", "network": False,
+        "write": str((tmp_path / "c" / "figures").resolve())}
+
+
+@pytest.mark.parametrize("inside", ["figures/box", "experiments/exp-1/box"])
+def test_a_mailbox_the_sandbox_could_read_stops_the_audit_from_starting(
+        tmp_path, monkeypatch, inside):
+    holds(monkeypatch)
+    out = tmp_path / "a"
+    monkeypatch.setenv("COSMOS_STEER_DIR", str(out / inside))
+    with pytest.raises(SystemExit, match="which the sandbox can read"):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(out), "--mock", "--fake",
+              "--sandbox"])
+    assert not out.exists()
 
 
 @pytest.mark.parametrize("bad", ["link", "open", "theirs"])
