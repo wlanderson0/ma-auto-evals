@@ -257,6 +257,19 @@ def test_review_json_is_copied_when_the_audit_has_one(audit, tmp_path):
     assert json.loads((out / "study" / "review.json").read_text()) == review
 
 
+def test_a_steered_audit_s_record_goes_with_the_audit_run(audit, tmp_path):
+    out = export_audit(audit, tmp_path / "out")
+    assert not (out / "study" / "steer.json").exists()  # not steered: nothing more
+    assert not (out / "study" / "report.json").exists()
+    rows = [{"id": "a", "kind": "pause", "state": "applied", "at_step": 2},
+            {"id": "b", "kind": None, "state": "refused", "reason": "malformed"}]
+    (audit / "steer.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (audit / "report.json").write_text(json.dumps({"steered": 1}))
+    out = export_audit(audit, tmp_path / "again")
+    assert json.loads((out / "study" / "steer.json").read_text()) == rows
+    assert json.loads((out / "study" / "report.json").read_text()) == {"steered": 1}
+
+
 def test_the_audit_run_carries_the_write_up_byte_for_byte_and_the_report(audit, tmp_path):
     """The module's audit has a write-up (the fake's last, after its review) and no
     comparison: no figures and no figures.json."""

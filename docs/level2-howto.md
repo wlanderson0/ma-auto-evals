@@ -73,6 +73,33 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   runs $0.2290)`. `--quiet` shows neither.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
+### Steering it while it runs
+
+Add `--steer` (or set `COSMOS_STEER=1`) to send requests to the audit while it runs, from
+another terminal on the same machine (or over SSH). The audit then reads a mailbox,
+`<audit>/l2/.cosmos-steer` (or `COSMOS_STEER_DIR`; spec §7.1):
+
+```bash
+uv run python -m experiments.l2.steer note "try the variant without the deadline"
+uv run python -m experiments.l2.steer pause      # no new experiment starts; L2 waits
+uv run python -m experiments.l2.steer resume
+uv run python -m experiments.l2.steer stop       # as one Ctrl-C: L2 concludes
+uv run python -m experiments.l2.steer budget 15.00
+uv run python -m experiments.l2.steer answer ask-1 Approve [--text "..."]
+uv run python -m experiments.l2.steer status
+```
+
+- Without `--dir` the command uses `COSMOS_STEER_DIR`, else the newest audit under
+  `logs/l2-audit/`. It prints `written <id>`, or one line saying why it refused.
+- L2 reads a note after its current turn, framed as a note from you, and may answer with
+  `reply_researcher`. It may ask you a question with `ask_researcher`; the terminal shows
+  it with the command that answers it. Unanswered, its default applies when it times out.
+- `budget` needs `COSMOS_STEER_MAX_BUDGET_USD` (for example `25.00`) set when the audit
+  starts: the audit takes no raise above it, and none without it.
+- The audit runs L2's code without a sandbox, so send only words you wrote yourself.
+  The terminal shows each note and text answer as it reaches L2.
+- Every request is recorded: `steer.jsonl` and the "Steering" section of `report.md`.
+
 ### Running L2's code in a sandbox
 
 `--sandbox` (or `L2_SANDBOX=1` in the environment) runs the Python L2 writes in a
@@ -117,7 +144,8 @@ The audit directory holds `writeup.md` (L2's write-up: a results report with tab
 figures, under a table of the audit's facts; start here), `figures/`, `report.md` (L2's claims with their verdicts, its conclusions,
 the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
 evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
-`scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
+`scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch). A steered
+audit also has `steer.jsonl` (every request read from its mailbox) and `report.json`.
 
 ## 3. Read it critically
 
