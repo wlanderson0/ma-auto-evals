@@ -70,3 +70,16 @@ jobs:
         run: >-
           L2_SANDBOX_TESTS=require uv run --locked pytest -q --tb=short
           tests/unit/test_l2_sandbox.py tests/e2e/test_l2_sandbox.py
+      - name: Show what the macOS sandbox denied
+        if: failure() && runner.os == 'macOS'
+        run: |
+          # The profile denies by default, and a denied operation at start ends the
+          # interpreter without a word: the system log names each one.
+          sw_vers
+          sleep 10
+          sudo log show --last 10m --style compact \
+            --predicate 'eventMessage CONTAINS "deny("' 2>/dev/null \
+            | grep -E 'python|sandbox-exec' | sed -E 's/^[^ ]+ [^ ]+ +//' \
+            | sort | uniq -c | sort -rn | head -n 150 || true
+          report=$(ls -t ~/Library/Logs/DiagnosticReports/python*.ips 2>/dev/null | head -n 1)
+          if [ -n "$report" ]; then head -c 6000 "$report"; fi
