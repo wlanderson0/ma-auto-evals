@@ -574,6 +574,7 @@ def test_an_unanswered_question_takes_its_default(tmp_path, capfd):
     assert row["ok"] and row["seq"] == 1
     assert "No answer to ask-1 within 1 s: the default applies: Skip." in row["result"]
     [ask] = outbox(box, "ask")
+    assert audit.steering.started_at <= steer.parse_time(ask.pop("asked_at")) <= steer.now()
     assert ask == {"schema": steer.SCHEMA, "type": "ask", "ask_key": "ask-1",
                    "text": ASK["question"], "choices": ["Approve", "Skip"],
                    "allow_text": False, "default_choice": "Skip", "cost": {"usd": "4.10"},
