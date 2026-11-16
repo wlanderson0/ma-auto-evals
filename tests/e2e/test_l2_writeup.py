@@ -11,7 +11,7 @@ from inspect_ai.log import read_eval_log, resolve_sample_attachments
 
 from experiments.l2.agent import run_l2
 from experiments.l2.audit import Audit
-from experiments.l2.audit_report import write_report
+from experiments.l2.audit_report import write_report, writeup_parts
 from experiments.l2.fake import FULL, PROMPT, fake_model
 from experiments.l2.figures import figure_name, wilson
 from experiments.l2.tools import Tools
@@ -40,6 +40,12 @@ def test_every_comparison_draws_a_figure_and_names_it(written):
     name = "figures/V1-vs-C0-probe.png"
     assert f"Figure: {name}" in row["result"]
     assert (tools.audit.out / name).read_bytes().startswith(PNG)
+    drawn = json.loads((tools.audit.out / "figures" / "V1-vs-C0-probe.json").read_text())
+    assert {k: v for k, v in drawn.items() if k != "compared"} == {
+        "a": "V1", "b": "C0", "scorer": "probe", "field": None, "rounds": None,
+        "measure": "probe"}
+    assert drawn["compared"] == json.loads(json.dumps(
+        tools.results().compare("V1", "C0", "probe")))  # what the image was drawn from
 
 
 def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
@@ -52,6 +58,12 @@ def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
     assert "| L2 | mockllm/l2 |" in facts and "of which $" in facts  # the reviewer's share
     assert "Draft" not in facts
     assert body.strip() == FULL[-1][1]["writeup"].strip()
+    facts, final, body_line = writeup_parts(tools)
+    assert final and ("How it ended", "L2 ended the audit") in facts
+    assert "\n".join(text.split("\n")[body_line - 1:]).strip() == body.strip()
+    assert json.loads((tools.audit.out / "writeup.json").read_text()) == {
+        "final": True, "body_line": body_line,
+        "facts": [{"name": name, "value": value} for name, value in facts]}
     assert "is in `writeup.md`" in (tools.audit.out / "report.md").read_text()
 
 
@@ -103,6 +115,7 @@ def test_an_empty_write_up_is_no_write_up(tmp_path):
     ok, text = tools.call("end_audit", conclusions="None.", writeup="  ")
     assert ok and "No write-up was given" in text
     assert not (tools.audit.out / "writeup.md").exists()
+    assert not (tools.audit.out / "writeup.json").exists()
 
 
 def test_l2_can_draw_its_own_figure_and_embed_it(tmp_path):
@@ -129,6 +142,9 @@ def test_an_audit_not_ended_keeps_the_reviewed_draft_marked_as_such(tmp_path):
     text = (tools.audit.out / "writeup.md").read_text()
     assert "**Draft:** L2 did not end the audit" in text and "The draft write-up." in text
     assert "not ended by L2: L2 spent the whole budget" in text
+    kept = json.loads((tools.audit.out / "writeup.json").read_text())
+    assert kept["final"] is False
+    assert text.split("\n")[kept["body_line"] - 1] == "The draft write-up."
     assert "`writeup.md`" in (tools.audit.out / "report.md").read_text()  # in its record
     assert tools.call("end_audit", conclusions="Ended.", response="Kept.")[0]  # no write-up
     assert "**Draft:** L2 gave no final write-up" in (tools.audit.out / "writeup.md").read_text()
@@ -138,6 +154,7 @@ def test_no_write_up_no_file(tmp_path):
     tools = tools_for(tmp_path)
     assert tools.call("end_audit", conclusions="None.")[0]
     assert not (tools.audit.out / "writeup.md").exists()
+    assert not (tools.audit.out / "writeup.json").exists()
 
 
 def test_figure_names_and_intervals():

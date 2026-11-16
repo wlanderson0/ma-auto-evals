@@ -37,9 +37,11 @@ project admin and the site admin (server settings, disk use, project requests).
 2. Create a token: in your user menu, **Settings → API tokens**
    (`/settings/tokens`). Give it a name such as `laptop`, pick a scope
    and press **Create token**. Copy it at once: it is shown only once. An
-   **upload** token can only upload, which is all the CLI needs; a **full**
-   token can do anything you can do in the browser. Revoke tokens on the same
-   page.
+   **upload** token can only upload, which is all `cosmos upload` needs; a
+   **full** token can do anything you can do in the browser. L2's share
+   (`experiments.l2.share`) also reads its runs back, so it needs a full token
+   saved with `cosmos login`: an upload-only token stops at its first
+   `GET /api/runs/{slug}` with 403. Revoke tokens on the same page.
 3. Install the CLI. `Danhelo/cosmos` is private: accept your GitHub invitation
    to it first (ask Daniel if you have none). Then install it with your own
    GitHub access (requires [uv](https://docs.astral.sh/uv/)):
@@ -84,8 +86,10 @@ dirty), the PR, scenarios, conditions, epochs, the seat of each scenario, the
 models per role and agent, start and finish times, and the arguments (with
 local absolute paths shortened).
 
-`cosmos upload` collects the `.eval`, `.json` and `.html` files in the folder,
-skips everything else, scans them for secrets (see
+`cosmos upload` collects the `.eval`, `.json` and `.html` files in the folder
+(and, from a CLI and server that take reports, `.md` files and `.png`, `.jpg`,
+`.jpeg` and `.webp` images, which an L2 audit run carries: its write-up and
+figures), skips everything else, scans them for secrets (see
 [Troubleshooting](#troubleshooting)), hashes them and sends only the files the
 server does not already have. It prints the run link on stdout; progress goes
 to stderr.
