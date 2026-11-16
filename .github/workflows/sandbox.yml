@@ -82,4 +82,7 @@ jobs:
             | grep -E 'python|sandbox-exec' | sed -E 's/^[^ ]+ [^ ]+ +//' \
             | sort | uniq -c | sort -rn | head -n 150 || true
           report=$(ls -t ~/Library/Logs/DiagnosticReports/python*.ips 2>/dev/null | head -n 1)
-          if [ -n "$report" ]; then head -c 6000 "$report"; fi
+          if [ -n "$report" ]; then head -c 1500 "$report"; fi
+      - name: Probe the macOS profile (temporary)
+        if: failure() && runner.os == 'macOS'
+        run: PYTHONPATH=. uv run --locked python .github/debug/macos_sandbox_probe.py
