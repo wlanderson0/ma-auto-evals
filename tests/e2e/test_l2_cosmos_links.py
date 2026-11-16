@@ -246,20 +246,37 @@ def test_a_run_with_no_recorded_count_lists_no_messages(audit, monkeypatch):
     assert "[1 ?]" in text and "The messages counted" not in text  # mfa has no recorded count
 
 
+def with_audit_run(tools, get):
+    """``get``, plus the audit run (slug ``aud456``) as Cosmos keeps its manifest; and an
+    upload that gives the experiment ``abc123`` and the audit run ``aud456``."""
+    from experiments.l2.study import study_of
+
+    audit_run = {"manifest": {"study": {**study_of(tools.audit.out), "role": "audit"}},
+                 "samples": [], "status": "ready"}
+
+    def cosmos(path):
+        return audit_run if path == "/api/runs/aud456" else get(path)
+
+    def upload(folder, name, pr):
+        return "aud456" if name.endswith(" audit") else "abc123"
+    return cosmos, upload
+
+
 def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
-    """Each experiment is exported and uploaded once (its slug kept in cosmos-runs.json),
-    the runs are waited on until ready, and the report gets its links. A second call
-    uploads nothing."""
+    """Each experiment, then the audit run, is exported and uploaded once (its slug kept
+    in cosmos-runs.json), the runs are waited on until ready, and the report gets its
+    links. A second call uploads nothing."""
     from experiments.l2.share import share
 
     tools, _ = audit
     get, *_ = fake_cosmos(tools)
+    get, upload_as = with_audit_run(tools, get)
     uploads, polls = [], {}
 
     def upload(folder, name, pr):
-        assert (folder / "manifest.json").exists() and name.endswith(" exp-1")
+        assert (folder / "manifest.json").exists() and name.endswith((" exp-1", " audit"))
         uploads.append(folder)
-        return "abc123"
+        return upload_as(folder, name, pr)
 
     def cosmos(path):
         if path == "/api/runs/abc123":  # parsing until polled a few times, then ready
@@ -269,15 +286,18 @@ def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
     said = []
     links = share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE,
                   sleep=lambda s: None, say=said.append)
-    assert len(uploads) == 1 and links["runs"] == {"exp-1": f"{BASE}/runs/abc123"}
-    assert uploads[0] == tools.audit.out / "cosmos" / "exp-1"  # inside the audit
+    assert len(uploads) == 2 and links["runs"] == {"exp-1": f"{BASE}/runs/abc123"}
+    assert uploads == [tools.audit.out / "cosmos" / "exp-1",  # inside the audit
+                       tools.audit.out / "cosmos" / "audit"]
     assert not [p for p in uploads[0].parent.iterdir() if p.name.startswith(".")]
-    assert json.loads((tools.audit.out / "cosmos-runs.json").read_text()) == {"exp-1": "abc123"}
+    assert json.loads((tools.audit.out / "cosmos-runs.json").read_text()) == {
+        "exp-1": "abc123", "audit": "aud456"}
     assert "dave in each run of V1" in (tools.audit.out / "report.md").read_text()
-    assert said[0] == f"exp-1: {BASE}/runs/abc123" and "report with Cosmos links" in said[1]
+    assert said[:2] == [f"exp-1: {BASE}/runs/abc123", f"audit: {BASE}/runs/aud456"]
+    assert "report with Cosmos links" in said[2]
     share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE, sleep=lambda s: None,
           say=said.append)
-    assert len(uploads) == 1  # nothing uploaded twice
+    assert len(uploads) == 2  # nothing uploaded twice
 
 
 def test_share_stops_on_a_run_cosmos_could_not_parse(audit):
@@ -285,8 +305,9 @@ def test_share_stops_on_a_run_cosmos_could_not_parse(audit):
 
     tools, _ = audit
     get, *_ = fake_cosmos(tools)
+    get, upload = with_audit_run(tools, get)
     with pytest.raises(SystemExit, match="could not parse"):
-        share(tools.audit.out, upload=lambda f, n, p: "abc123",
+        share(tools.audit.out, upload=upload,
               get=lambda path: {**get(path), "status": "failed"}, base_url=BASE,
               sleep=lambda s: None, say=lambda s: None)
 
