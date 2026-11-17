@@ -40,6 +40,7 @@ import os
 import re
 import stat
 import sys
+import threading
 import time
 import unicodedata
 import uuid
@@ -88,6 +89,10 @@ POLL = 1.0
 NO_SANDBOX = ("this audit runs model-written code without a sandbox: send only words you "
               "wrote yourself")
 """The command's fixed line before it writes text to an audit without a sandbox."""
+NEEDS_SANDBOX = ("a steered audit whose L2 is a model starts only with a sandbox for every "
+                 "place L2's code runs (without one, code L2 writes can write the mailbox as "
+                 "this user: raise its own budget, answer its own questions)")
+"""Why a steered audit must report a sandbox: ``audit.main`` adds what this audit lacks."""
 OFF_HERE = ("steering is off: the mailbox needs POSIX file modes and flock, which this "
             "system does not have")
 EVENT = "l2_steer"
@@ -603,10 +608,10 @@ class Ask:
 
 class Steering:
     """The audit's side of the mailbox (spec 22 §6): it writes ``program.json``, reads the
-    inbox where the audit looks (``poll``: on L2's turns, before a launch, while a question
-    waits), applies or refuses each line and records it: an ack in the outbox, a row in the
-    audit's ``steer.jsonl``, and, for an applied line, an ``l2_steer`` event in L2's log
-    (``flush``, from the event loop only).
+    inbox where the audit looks (``poll``: on L2's turns, before a launch, before and after
+    each epoch, while a question waits), applies or refuses each line and records it: an
+    ack in the outbox, a row in the audit's ``steer.jsonl``, and, for an applied line, an
+    ``l2_steer`` event in L2's log (``flush``, from the event loop only).
 
     ``audit`` is the ``Audit`` (``interrupt``, ``pause``, ``resume``, ``raise_budget``,
     ``budget``, ``clock_state``, ``ended``, ``interrupts``, ``out``); ``step`` gives L2's
@@ -646,6 +651,9 @@ class Steering:
         self.broken: str | None = None
         """Why the mailbox is no longer read, if it failed its checks during the audit."""
         self._lock: int | None = None
+        self._reading = threading.RLock()
+        """Held while lines are taken or events written: a launch reads the mailbox from
+        its worker thread while a question of L2's may be reading it from the event loop."""
 
     # --------------------------------------------------------- start and end
     def program(self) -> dict[str, Any]:
@@ -701,19 +709,20 @@ class Steering:
     # -------------------------------------------------------------- reading
     def poll(self) -> None:
         """Read the inbox's new lines and apply or refuse each."""
-        if self.broken is not None:
-            return
-        try:
-            lines, self.offset = self.mailbox.read(INBOX, self.offset)
-        except SteerError as error:
-            self._fail(error)
-            return
-        for raw in lines:
+        with self._reading:
+            if self.broken is not None:
+                return
             try:
-                self._take(raw)
-            except Exception as error:  # one line must not stop the lines after it
-                self.say(f"steering: an inbox line could not be read and is skipped "
-                         f"({escape(type(error).__name__)}: {escape(error)[:200]})")
+                lines, self.offset = self.mailbox.read(INBOX, self.offset)
+            except SteerError as error:
+                self._fail(error)
+                return
+            for raw in lines:
+                try:
+                    self._take(raw)
+                except Exception as error:  # one line must not stop the lines after it
+                    self.say(f"steering: an inbox line could not be read and is skipped "
+                             f"({escape(type(error).__name__)}: {escape(error)[:200]})")
 
     def _fail(self, error: SteerError) -> None:
         """The mailbox failed its checks during the audit (e.g. its mode was changed): it is
@@ -779,8 +788,9 @@ class Steering:
         if request.kind == "stop":
             if self.paused:
                 self._unpause()
-            if not self.audit.interrupts:  # a second stop is not a harder stop
-                self.audit.interrupt(f"stopped at a researcher's request ({by})")
+            # A second stop is not a harder one; after a Ctrl-C it still ends a running
+            # experiment at its next epoch (``Audit.interrupt``).
+            self.audit.interrupt(f"stopped at a researcher's request ({by})")
         elif request.kind == "pause" and not self.paused:
             self.paused = True
             self.audit.pause()
@@ -861,15 +871,16 @@ class Steering:
         loop: a worker thread (a launch) leaves them for the next flush."""
         from inspect_ai.log import transcript
 
-        events, self.events = self.events, []
+        with self._reading:
+            events, self.events = self.events, []
         for event in events:
             transcript().info(event, source="l2")
 
     # ---------------------------------------------------------------- waits
     def hold(self) -> None:
-        """Before a launch (in its worker thread): look at the mailbox, and wait while the
-        audit is paused, looking again about once a second. A stop, or a Ctrl-C, ends the
-        wait."""
+        """Before a launch and before each of its epochs (in the launch's worker thread):
+        look at the mailbox, and wait while the audit is paused, looking again about once a
+        second. A stop, or a Ctrl-C, ends the wait."""
         self.poll()
         while self.paused and not self.audit.interrupts and self.broken is None:
             time.sleep(self.poll_s)
@@ -892,9 +903,10 @@ class Steering:
     def deliver(self) -> str | None:
         """The notes read and not yet given to L2, oldest first, in their frame; each is
         shown in the terminal first and recorded as applied at this step."""
-        if not self.notes:
+        with self._reading:
+            notes, self.notes = self.notes, []
+        if not notes:
             return None
-        notes, self.notes = self.notes, []
         step = self.step()
         parts = []
         for note in notes:
@@ -1229,8 +1241,8 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("note", help="a note L2 reads at its next step").add_argument("text")
     for name, what in (("pause", "no new experiment starts, and L2 waits"),
                        ("resume", "end a pause"),
-                       ("stop", "the graceful stop: the running experiment finishes, then "
-                                "L2 concludes")):
+                       ("stop", "the graceful stop: the running epoch finishes, no other "
+                                "starts, then L2 concludes")):
         commands.add_parser(name, help=what)
     commands.add_parser("budget", help="raise the audit's total to USD").add_argument("usd")
     answer = commands.add_parser("answer", help="answer an open question of L2's")
@@ -1243,8 +1255,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """The local command (spec 22 §5.1): 0 and ``written <id>``; 1 and one line naming the
-    reason it refused; 2 for arguments it cannot read."""
+    """The local command (spec 22 §5.1): 0 and ``written <id> to <mailbox>``; 1 and one
+    line naming the reason it refused; 2 for arguments it cannot read."""
     made = parser()
     args = made.parse_args(argv)
     try:
@@ -1281,7 +1293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SteerError as error:
         print(str(error), file=sys.stderr)
         return 1
-    print(f"written {rid}")
+    print(f"written {rid} to {escape(mailbox.path)}")  # which audit, when several run
     return 0
 
 

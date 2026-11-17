@@ -77,20 +77,27 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
 
 Add `--steer` (or set `COSMOS_STEER=1`) to send requests to the audit while it runs, from
 another terminal on the same machine (or over SSH). The audit then reads a mailbox,
-`<audit>/l2/.cosmos-steer` (or `COSMOS_STEER_DIR`; spec §7.1):
+`<audit>/l2/.cosmos-steer` (or `COSMOS_STEER_DIR`; spec §7.1). When L2 is a model, a
+steered audit starts only with a sandbox: without one, code L2 writes could write the
+mailbox itself, raise its own budget and answer its own questions. A scripted L2
+(`--fake`) can be steered without one, to try the commands:
 
 ```bash
 uv run python -m experiments.l2.steer note "try the variant without the deadline"
-uv run python -m experiments.l2.steer pause      # no new experiment starts; L2 waits
+uv run python -m experiments.l2.steer pause      # no new experiment or epoch starts; L2 waits
 uv run python -m experiments.l2.steer resume
-uv run python -m experiments.l2.steer stop       # as one Ctrl-C: L2 concludes
+uv run python -m experiments.l2.steer stop       # the running epoch finishes, then L2 concludes
 uv run python -m experiments.l2.steer budget 15.00
 uv run python -m experiments.l2.steer answer ask-1 Approve [--text "..."]
 uv run python -m experiments.l2.steer status
 ```
 
 - Without `--dir` the command uses `COSMOS_STEER_DIR`, else the newest audit under
-  `logs/l2-audit/`. It prints `written <id>`, or one line saying why it refused.
+  `logs/l2-audit/`. It prints `written <id> to <mailbox>`, or one line saying why it
+  refused.
+- The audit reads the mailbox after each of L2's turns and at the end of each epoch, so a
+  `pause` or a `stop` sent during a long experiment takes effect when the running epoch
+  finishes.
 - L2 reads a note after its current turn, framed as a note from you, and may answer with
   `reply_researcher`. It may ask you a question with `ask_researcher`; the terminal shows
   it with the command that answers it. Unanswered, its default applies when it times out.
