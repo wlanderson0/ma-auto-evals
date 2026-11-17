@@ -438,15 +438,47 @@ def test_pause_holds_a_launch_and_the_clock_resume_releases_it_and_stop_ends_it(
     assert done["second"]["status"] == "refused"
     assert "stopped at a researcher's request" in done["second"]["reason"]
     assert audit.paused_since is None and not audit.steering.paused
-    again = send(box, "stop")  # a second stop is not a harder stop
+    again = raw(box, "stop", {}, via="cosmos")  # a second stop is not a harder stop
     audit.steering.poll()
     found = acks(box)
     assert found[stop]["state"] == found[again]["state"] == "applied"
     assert audit.interrupts == 1 and audit.epoch_stop() == audit.halted  # no next epoch
     assert audit.halted.startswith("stopped at a researcher's request (") and \
-        "sent on the machine" in audit.halted
+        "sent on the machine" in audit.halted  # the first request's sender, not the second's
+    assert "danhelo" not in audit.halted
     ok, text = tools.call("budget")
     assert ok and "STOPPING: stopped at a researcher's request" in text
+
+
+def test_the_mailbox_is_read_by_one_thread_at_a_time(tmp_path, monkeypatch):
+    """A launch reads the mailbox from its worker thread while a question of L2's may be
+    reading it from the event loop: the two never read at once, and a line is applied once."""
+    audit, box = steered(tmp_path)
+    audit.steering.open()
+    read, counts, inside, most = box.read, threading.Lock(), [0], [0]
+
+    def slow(name, offset=0):
+        with counts:
+            inside[0] += 1
+            most[0] = max(most[0], inside[0])
+        time.sleep(0.2)  # long enough for the other thread to arrive
+        try:
+            return read(name, offset)
+        finally:
+            with counts:
+                inside[0] -= 1
+
+    rid = send(box, "pause")
+    monkeypatch.setattr(box, "read", slow)
+    threads = [threading.Thread(target=audit.steering.poll, daemon=True) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    monkeypatch.undo()
+    assert most[0] == 1
+    assert [r["id"] for r in outbox(box)] == [rid] and audit.steering.counts["applied"] == 1
+    audit.steering.close()
 
 
 class During(InProcess):
