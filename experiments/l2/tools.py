@@ -1190,7 +1190,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             migration team, and its arguments set any other team (org, setting, personas,
             channels, roster, round_order, output_agent); a tool of the scenario may end
             the run before its schedule is done with end_run(reason), e.g. when a deal
-            passes. make ignores its argument: the
+            passes; a game in rounds of phases uses team_setup(phased=phased_rounds(...)),
+            whose tools check their phase with in_phase. make ignores its argument: the
             module sets its agents' models itself, each one in the price table. The
             Scenario's name (and base) must be the name given here, and its team the
             TeamSetup its task was built from. A name that already has runs cannot be

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inspect_ai.dataset import Sample
+from inspect_ai.model import GenerateConfig
 from inspect_ai.tool import Tool, ToolDef, ToolError, tool
 from inspect_ai.util import Store, StoreModel, store, store_as
 from orbit import (
@@ -54,7 +55,9 @@ from orbit import (
     SetupConfig,
     ToolFactory,
 )
+from orbit.communication.runtime import send_message
 from orbit.configs import HaltConditionConfig
+from orbit.execution.plans import current_schedule
 
 from orbit_audit.scope import AuditScope
 
@@ -312,20 +315,51 @@ class TeamSetup:
     """The agent whose final reply is the run's output."""
     round_order: tuple[str, ...]
     """The agents one round cycles through, in order."""
+    time_limit: int | None = None
+    """Seconds one run may take, as both Orbit's scheduler cap and Inspect's sample limit.
+    ``None`` keeps the defaults (Orbit halts at 600 s, Inspect at 900 s). A run Orbit
+    halts at its cap ends quietly, as if its schedule were done, so slow or many
+    parallel games need a higher limit."""
+    generate_configs: dict[str, GenerateConfig] = field(default_factory=dict)
+    """Agent -> its own generation settings (e.g. ``reasoning_effort="low"``), which win
+    over the settings a run gives every agent (L2's ``RUN_CONFIG``)."""
+    phased: PhasedRounds | None = None
+    """Rounds made of named phases (``phased_rounds``); ``None``: each round is one
+    turn per agent of ``round_order``."""
 
     def __post_init__(self) -> None:
         if (self.schedule is None) == (self.rounds is None):
             raise ValueError("give either rounds or an explicit schedule, not both or neither")
+        if self.phased is not None:
+            self.phased.check(self)
 
     def steps(self) -> tuple[tuple[str, ...], ...]:
+        """The schedule's steps, each the agents it runs in order."""
+        return tuple(tuple(step["agents"]) for step in self.plan_steps())
+
+    def plan_steps(self) -> list[dict[str, Any]]:
+        """The steps for Orbit's ``ScheduleConfig``: a phased round's steps carry their
+        phase in their id (``r<round>-<phase>``, ``step_phase``), the others get Orbit's
+        own ids."""
         if self.schedule is not None:
-            return self.schedule
-        return tuple((agent,) for _ in range(self.rounds or 0) for agent in self.round_order)
+            return [{"agents": list(step)} for step in self.schedule]
+        if self.phased is not None:
+            return [{"id": f"r{n}-{phase.name}", "agents": list(self.phase_agents(phase))}
+                    for n in range(1, (self.rounds or 0) + 1) for phase in self.phased.phases]
+        return [{"agents": [agent]} for _ in range(self.rounds or 0)
+                for agent in self.round_order]
+
+    def phase_agents(self, phase: Phase) -> tuple[str, ...]:
+        return phase.agents if phase.agents is not None else self.round_order
 
     def turns_per_round(self) -> int:
-        """Schedule steps in one round; an explicit schedule has no rounds."""
+        """Schedule steps (turns) in one round: one per agent of ``round_order``, or one
+        per phase, in which the phase's agents act one after another. An explicit
+        schedule has no rounds."""
         if self.schedule is not None:
             raise ValueError("an explicit schedule has no rounds")
+        if self.phased is not None:
+            return len(self.phased.phases)
         return len(self.round_order)
 
 
@@ -336,9 +370,14 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
                roster: tuple[str, ...] = TEAM,
                schedule: tuple[tuple[str, ...], ...] | None = None, org: str = ORG,
                setting: str = SETTING, output_agent: str = "dave",
-               round_order: tuple[str, ...] = TEAM) -> TeamSetup:
+               round_order: tuple[str, ...] = TEAM,
+               time_limit: int | None = None,
+               generate_configs: dict[str, GenerateConfig] | None = None,
+               phased: PhasedRounds | None = None) -> TeamSetup:
     """``build_team``'s inputs. The defaults are the Northwind migration team (3 rounds
-    unless ``rounds`` or an explicit ``schedule`` is given; not both)."""
+    unless ``rounds`` or an explicit ``schedule`` is given; not both). ``phased`` splits
+    each round into named phases (``phased_rounds``); ``generate_configs`` gives an agent its
+    own generation settings."""
     if rounds is None and schedule is None:
         rounds = 3
     return TeamSetup(
@@ -348,6 +387,8 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
         schedule=None if schedule is None else tuple(tuple(step) for step in schedule),
         rounds=rounds, task=task, duty=duty, tools=dict(tools or {}), org=org,
         setting=setting, output_agent=output_agent, round_order=tuple(round_order),
+        time_limit=time_limit, generate_configs=dict(generate_configs or {}),
+        phased=phased,
     )
 
 
@@ -383,6 +424,182 @@ def run_ended(scheduler: Any) -> bool:
     return bool(store().get(RUN_END_KEY))
 
 
+@dataclass(frozen=True)
+class Phase:
+    """One phase of every round of a phased game (``phased_rounds``)."""
+
+    name: str
+    """A word naming the phase, e.g. ``"propose"``; the step ids carry it."""
+    agents: tuple[str, ...] | None = None
+    """Who acts in this phase, one after another; ``None``: ``round_order``."""
+    announce: str | Callable[[int], str] = ""
+    """What the referee posts as this phase begins, e.g. "Call propose now.", or a
+    function of the round that writes it from the store (e.g. the proposals to vote
+    on). Each post opens "Round <n> of <rounds>, <name> phase."; round 1's first
+    phase starts before anyone can post, so the task says what it is. An agent sees a
+    channel post once, in its next generation's input, so put what a phase needs into
+    its announcement rather than relying on an earlier post."""
+
+
+@dataclass(frozen=True)
+class RoundResult:
+    """What ``PhasedRounds.resolve`` makes of a finished round."""
+
+    announce: str = ""
+    """The referee posts this to everyone (e.g. the round's proposals and votes)."""
+    end: str = ""
+    """Not empty: end the run with this reason (``end_run``), e.g. "deal in round 3"."""
+
+
+@dataclass(frozen=True)
+class PhasedRounds:
+    """Rounds made of named phases, which the schedule itself keeps track of.
+
+    Every round runs ``phases`` in order, each one schedule step. A phase's tool asks
+    which phase it is in with ``in_phase`` (or ``current_phase``), never by counting
+    turns, so a turn wasted on a wrong move cannot put the game out of step. Once a
+    round's last phase has run, ``resolve(round)`` is called whether or not every
+    agent made its move, and its ``RoundResult`` can end the run. ``referee`` (an
+    agent of the roster with no turns, a writer of ``channel``) posts the round's
+    result and each phase's ``announce`` on ``channel``.
+    """
+
+    phases: tuple[Phase, ...]
+    resolve: Callable[[int], RoundResult | None]
+    """Called with the round (from 1) once its last phase has run, with the store of the
+    run; reads the moves the phases' tools recorded there."""
+    referee: str
+    channel: str
+
+    def check(self, team: TeamSetup) -> None:
+        names = [phase.name for phase in self.phases]
+        if not names:
+            raise ValueError("phased rounds need at least one phase")
+        if bad := [name for name in names if not PHASE_NAME.fullmatch(name)]:
+            raise ValueError(f"phase names are lower-case words (a-z, 0-9, _): {bad}")
+        if len(set(names)) != len(names):
+            raise ValueError(f"phase names must differ: {names}")
+        if team.rounds is None:
+            raise ValueError("phased rounds need rounds, not an explicit schedule")
+        acting = {agent for phase in self.phases for agent in team.phase_agents(phase)}
+        if unknown := sorted(acting - set(team.roster)):
+            raise ValueError(f"phase agents not in the roster: {unknown}")
+        if any(not team.phase_agents(phase) for phase in self.phases):
+            raise ValueError("every phase needs at least one agent")
+        if self.referee not in team.roster or self.referee in acting:
+            raise ValueError(f"the referee {self.referee!r} must be in the roster and act "
+                             "in no phase")
+        channel = next((c for c in team.channels if c.id == self.channel), None)
+        if channel is None:
+            raise ValueError(f"the referee's channel {self.channel!r} is not a channel")
+        if self.referee not in (channel.writers if channel.writers is not None
+                                else channel.members):
+            raise ValueError(f"the referee {self.referee!r} cannot write to {self.channel!r}")
+
+    def phase(self, name: str) -> Phase:
+        return next(phase for phase in self.phases if phase.name == name)
+
+
+PHASE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+_PHASE_STEP = re.compile(r"r([1-9][0-9]*)-([a-z][a-z0-9_]*)")
+
+
+def phased_rounds(phases: list[Phase] | tuple[Phase, ...],
+                  resolve: Callable[[int], RoundResult | None], *, referee: str,
+                  channel: str) -> PhasedRounds:
+    """``team_setup(phased=...)``: every round runs ``phases`` in order, then
+    ``resolve(round)`` (see ``PhasedRounds``)."""
+    return PhasedRounds(phases=tuple(phases), resolve=resolve, referee=referee,
+                        channel=channel)
+
+
+def step_phase(step_id: str) -> tuple[int, str] | None:
+    """``(round, phase)`` from a phased step's id (``r3-vote`` -> ``(3, "vote")``)."""
+    match = _PHASE_STEP.fullmatch(step_id)
+    return (int(match[1]), match[2]) if match else None
+
+
+def current_phase() -> tuple[int, str] | None:
+    """``(round, phase)`` of the step running now, from Orbit's schedule; ``None`` outside
+    a phased schedule (or once an auditor has rewritten the steps still to run)."""
+    try:
+        history = current_schedule().history
+    except RuntimeError:
+        return None
+    return step_phase(history[-1].step.id) if history else None
+
+
+def in_phase(phase: str) -> int:
+    """The round, if this turn is in ``phase``; otherwise a ``ToolError`` saying which
+    phase it is, for a phase's tool to refuse a move made at the wrong time."""
+    now = current_phase()
+    if now is None:
+        raise ToolError(f"This is for the {phase} phase, and no phase is running.")
+    if now[1] != phase:
+        raise ToolError(f"Round {now[0]} is in its {now[1]} phase; this is for the {phase} "
+                        "phase.")
+    return now[0]
+
+
+_PHASE_HOOKS: dict[int, tuple[PhasedRounds, str]] = {}
+"""``id(phased)`` -> the ``PhasedRounds`` and the name of its callback in this module."""
+
+
+def phase_hook(phased: PhasedRounds) -> str:
+    """Register ``phased``'s after-activation callback in this module (once per
+    ``PhasedRounds``, so rebuilding a task gives the same config) and return its dotted
+    path, which is what Orbit's ``ScheduleConfig.after_activation`` takes. Once a round's
+    last phase has run, the callback resolves the round; once any phase has run, it
+    announces the next one. The number of rounds is read from the schedule's step ids,
+    so a variant with other rounds shares the callback."""
+    if (known := _PHASE_HOOKS.get(id(phased))) is not None and known[0] is phased:
+        return f"{__name__}.{known[1]}"
+    names = [phase.name for phase in phased.phases]
+
+    def say(text: str, turn: int) -> None:
+        send_message(phased.channel, agent_id=phased.referee, content=text, turn=turn)
+
+    def hook(runtime: Any, result: Any, global_turn: int) -> None:
+        if runtime.remaining_agents or run_ended(None):
+            return
+        history = runtime.history
+        now = step_phase(history[-1].step.id) if history else None
+        if now is None:
+            return
+        rounds = max((parsed[0] for step in runtime.config.steps
+                      if (parsed := step_phase(step.id)) is not None), default=0)
+        n, name = now
+        index = names.index(name) + 1
+        if index == len(names):
+            resolved = phased.resolve(n) or RoundResult()
+            if resolved.announce:
+                say(resolved.announce, global_turn)
+            if resolved.end:
+                end_run(resolved.end)
+                return
+            n, index = n + 1, 0
+        following = phased.phases[index]
+        if n > rounds or not following.announce:
+            return
+        text = (following.announce if isinstance(following.announce, str)
+                else following.announce(n))
+        say(f"Round {n} of {rounds}, {following.name} phase. {text}".strip(), global_turn)
+
+    key = f"_phase_hook_{len(_PHASE_HOOKS)}"
+    _PHASE_HOOKS[id(phased)] = (phased, key)
+    globals()[key] = hook
+    return f"{__name__}.{key}"
+
+
+def message_limit(team: TeamSetup, agent: str) -> int:
+    """``agent``'s Orbit ``max_messages``: room for its whole schedule. Orbit skips an
+    agent once its history holds that many messages (50 by default), and each turn adds
+    about two (the reply and its tool result), so a long schedule would silently stop
+    the agent partway. Four per turn, plus the opening messages, and never under 50."""
+    turns = sum(agent in step for step in team.steps())
+    return max(50, 4 * turns + 10)
+
+
 def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     """A team's ``audit_task`` kwargs; by default the Northwind platform team migrating
     the admin panel.
@@ -399,7 +616,8 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     agents = [
         AgentSpec(
             name=agent, role="engineer", submit=False, model=team.models.get(agent),
-            tools=list(team.tools),
+            tools=list(team.tools), generate_config=team.generate_configs.get(agent),
+            max_messages=message_limit(team, agent),
             system_prompt=(f"You are {team.personas[agent]} at {team.org}. "
                            + (f"{team.setting} " if team.setting else "")
                            + (f"{team.duty} " if team.duty else "")
@@ -413,15 +631,18 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
         communication=CommunicationConfig(delivery="auto", channels=channels),
         execution=ExecutionConfig(
             quantum="model_step", output_agent=team.output_agent,
-            plan=ScheduleConfig(steps=[list(step) for step in team.steps()]),
+            plan=ScheduleConfig(steps=team.plan_steps(), after_activation=(
+                phase_hook(team.phased) if team.phased is not None else None)),
         ),
-        scheduler=SchedulerConfig(halt_on_convergence=False, custom_halt_conditions=[
-            HaltConditionConfig(name="end_run", module_path=__name__, function="run_ended"),
-        ]),
+        scheduler=SchedulerConfig(
+            halt_on_convergence=False, custom_halt_conditions=[
+                HaltConditionConfig(name="end_run", module_path=__name__, function="run_ended"),
+            ],
+            **({} if team.time_limit is None else {"max_time_seconds": team.time_limit})),
         dataset=[Sample(input=team.task)],
         tool_bindings={binding: ToolFactory(lambda ctx, make=make: make(ctx.agent_name))
                        for binding, make in team.tools.items()},
-        token_limit=2_000_000, time_limit=900,
+        token_limit=2_000_000, time_limit=900 if team.time_limit is None else team.time_limit,
     )
 
 
