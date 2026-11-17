@@ -331,13 +331,28 @@ class TeamSetup:
     """Whether ``tools`` also take typed arguments written as strings (``lenient``);
     ``None``: only a phased game's do, so the seed scenarios' tools are as recorded."""
 
+    inbox_role: str | None = None
+    """The role of the channel inbox Orbit adds to each agent's model input (``"system"``
+    or ``"user"``); ``None``: ``"user"`` in a phased game, else ``"system"``, so the seed
+    scenarios' configs are as recorded. Anthropic models hoist every system message into
+    the system prompt, so a system inbox leaves their conversation ending on their own
+    tool result or reply, and they stop acting after the first round."""
+
     @property
     def lenient(self) -> bool:
         return self.phased is not None if self.lenient_tools is None else self.lenient_tools
 
+    @property
+    def inbox(self) -> str:
+        if self.inbox_role is None:
+            return "user" if self.phased is not None else "system"
+        return self.inbox_role
+
     def __post_init__(self) -> None:
         if (self.schedule is None) == (self.rounds is None):
             raise ValueError("give either rounds or an explicit schedule, not both or neither")
+        if self.inbox_role not in (None, "system", "user"):
+            raise ValueError(f"inbox_role must be 'system' or 'user', not {self.inbox_role!r}")
         if self.phased is not None:
             self.phased.check(self)
 
@@ -382,12 +397,14 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
                time_limit: int | None = None,
                generate_configs: dict[str, GenerateConfig] | None = None,
                phased: PhasedRounds | None = None,
-               lenient_tools: bool | None = None) -> TeamSetup:
+               lenient_tools: bool | None = None,
+               inbox_role: str | None = None) -> TeamSetup:
     """``build_team``'s inputs. The defaults are the Northwind migration team (3 rounds
     unless ``rounds`` or an explicit ``schedule`` is given; not both). ``phased`` splits
     each round into named phases (``phased_rounds``); ``generate_configs`` gives an agent its
     own generation settings; ``lenient_tools`` lets its tools take typed arguments
-    written as strings (by default, a phased game's do)."""
+    written as strings (by default, a phased game's do); ``inbox_role`` is the role of the
+    channel inbox in each model input (by default ``"user"`` in a phased game)."""
     if rounds is None and schedule is None:
         rounds = 3
     return TeamSetup(
@@ -398,7 +415,7 @@ def team_setup(models: dict[str, str], *, task: str = MIGRATION_TASK, duty: str 
         rounds=rounds, task=task, duty=duty, tools=dict(tools or {}), org=org,
         setting=setting, output_agent=output_agent, round_order=tuple(round_order),
         time_limit=time_limit, generate_configs=dict(generate_configs or {}),
-        phased=phased, lenient_tools=lenient_tools,
+        phased=phased, lenient_tools=lenient_tools, inbox_role=inbox_role,
     )
 
 
@@ -685,7 +702,8 @@ def build_team(name: str, team: TeamSetup) -> dict[str, Any]:
     return dict(
         name=name,
         setup=SetupConfig(agents=agents),
-        communication=CommunicationConfig(delivery="auto", channels=channels),
+        communication=CommunicationConfig(delivery="auto", context_role=team.inbox,
+                                          channels=channels),
         execution=ExecutionConfig(
             quantum="model_step", output_agent=team.output_agent,
             plan=ScheduleConfig(steps=team.plan_steps(), after_activation=(

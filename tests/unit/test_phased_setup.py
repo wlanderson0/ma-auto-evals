@@ -146,3 +146,16 @@ def test_only_a_phased_games_tools_are_lenient_by_default():
     plain = team_setup({}, personas={a: a for a in ROSTER}, roster=ROSTER,
                        round_order=("alice", "bob"), channels=TABLE, output_agent="bob")
     assert not plain.lenient and dataclasses.replace(plain, lenient_tools=True).lenient
+
+
+def test_only_a_phased_games_inbox_is_a_user_message_by_default():
+    assert game().inbox == "user"
+    assert build_team("g", game())["communication"].context_role == "user"
+    assert dataclasses.replace(game(), inbox_role="system").inbox == "system"
+    plain = team_setup({}, personas={a: a for a in ROSTER}, roster=ROSTER,
+                       round_order=("alice", "bob"), channels=TABLE, output_agent="bob")
+    assert plain.inbox == "system"
+    assert build_team("p", plain)["communication"].context_role == "system"
+    assert dataclasses.replace(plain, inbox_role="user").inbox == "user"
+    with pytest.raises(ValueError, match="inbox_role"):
+        dataclasses.replace(plain, inbox_role="assistant")
