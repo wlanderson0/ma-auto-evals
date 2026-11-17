@@ -62,6 +62,11 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   its review and report grows with it: 10% of the budget, or four of its calls at its
   latest price plus the reviewer's share, if that is more. To leave L2 room to think,
   cap the runs in the brief with `run_budget_usd` (e.g. 6 on a $10 budget).
+- A model provider's safeguards can withhold replies (`stop_reason` `content_filter`),
+  for example Anthropic's cyber safeguards on a brief about an attack (issue #55). L2 is
+  told when one of its replies was withheld, and not to reword it to get past the
+  safeguard; after three in a row the agent loop stops, and the report says so. For the
+  agents, a launch labels samples with withheld replies as blocked, not as refusals.
 - To stop it early with a report, press Ctrl-C once: the experiment running now
   finishes, then L2 has its draft reviewed and writes its report. Ctrl-C twice stops at
   once (the ledger and report are still written).

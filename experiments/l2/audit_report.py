@@ -126,6 +126,15 @@ def ended(tools: Tools, why_no_conclusions: str | None = None) -> str:
     return f"not ended by L2: {why}"
 
 
+def blocked_line(tools: Tools) -> str | None:
+    """How many of L2's replies its provider's safeguards withheld, if any (issue #55)."""
+    b = tools.blocked
+    if not b or not b["blocked"]:
+        return None
+    return (f"L2's model provider's safeguards withheld {b['blocked']} of its {b['calls']} "
+            "replies (stop_reason content_filter); what L2 meant to do in them is unknown.")
+
+
 def carried_line(audit: Any) -> str:
     """What a continued audit took over from the earlier one (``carried.json``)."""
     carried = audit.carried
@@ -148,6 +157,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
     out += [f"Status: {status}. {where}", ""]
+    if blocked := blocked_line(tools):
+        out += [blocked, ""]
     if audit.carried is not None:
         out += [carried_line(audit), ""]
     if writeup_text(tools) is not None:
@@ -813,6 +824,9 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
         ("How it ended", "L2 ended the audit" if tools.conclusions is not None
          and not tools.unrevised else ended(tools, why_no_conclusions)),
         ("Stopped", b["stopped"] or b["halted"] or "no"),
+        *([("Withheld by L2's provider", f"{tools.blocked['blocked']} of "
+            f"{tools.blocked['calls']} replies (content_filter)")]
+          if tools.blocked and tools.blocked["blocked"] else []),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),

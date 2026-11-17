@@ -186,6 +186,9 @@ class Tools:
         self.review: dict[str, Any] | None = None
         """The review once requested (``review.json``): L2's draft, the critique, and L2's
         response once it ends the audit."""
+        self.blocked: dict[str, int] | None = None
+        """L2's calls whose reply its provider's safeguards withheld, out of all its calls
+        (``agent.blocked_calls``), once the audit is finalized."""
         self.unrevised = False
         """Whether the conclusions and claims are the reviewed draft's, kept because L2
         stopped before revising them (``adopt_draft``)."""
