@@ -4,7 +4,8 @@
 ``run_python(code, ...)`` runs L2's Python in a subprocess, with the audit directory as
 its working directory, a time limit and a cap on the output it returns.
 
-**In the sandbox** (``sandbox``, when the audit has one: ``--sandbox`` or
+**In the sandbox** (``sandbox``, when the audit has one: every audit that needs
+``--live``, unless ``--no-sandbox`` is given, and a scripted audit with ``--sandbox`` or
 ``L2_SANDBOX=1``): the code has no network, reads only the interpreter's environment, the
 directories of the audit's runs (``L2_SOURCES``) and ``figures/``, and writes only
 ``<audit>/figures``. Its environment is built from nothing, so it holds no key. Nothing
@@ -17,7 +18,8 @@ signal ``N`` shows as ``exit code -N``, as without the sandbox. Under
 sandbox-exec the code cannot start a process: macOS has no pid namespace, so one that
 left the process group could outlive the time limit.
 
-**Without the sandbox** (the default) the subprocess has no provider keys: every
+**Without the sandbox** (``--no-sandbox``, or a scripted audit that did not ask for
+one) the subprocess has no provider keys: every
 ``*_API_KEY`` in this environment, and every one named in a ``.env`` file Inspect would
 load from the workspace (it searches upward from the working directory), is set to the
 empty string. Empty, not removed: ``python-dotenv`` never overwrites a variable that is

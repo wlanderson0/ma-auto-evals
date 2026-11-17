@@ -786,7 +786,9 @@ def main(argv: Sequence[str] | None = None) -> None:
               f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "
               "then L2 concludes; twice: stop at once.", flush=True)
         print(f"L2's code runs in the sandbox ({sandbox.kind})." if sandbox is not None else
-              "L2's code runs as you, outside a sandbox (--no-sandbox).", flush=True)
+              "L2's code runs as you, outside a sandbox (" + (
+                  "--no-sandbox" if args.no_sandbox else
+                  "a scripted audit; --sandbox turns one on") + ").", flush=True)
     try:
         with reporter(audit, quiet=args.quiet, model=model or "the fake L2"):
             if model is None:

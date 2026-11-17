@@ -211,6 +211,16 @@ def test_an_audit_whose_l2_is_a_model_runs_its_code_in_the_sandbox_by_default(
         main([*args, "--out", str(tmp_path / "g"), "--no-sandbox"])
     assert seen == [box, None, None, None]
     assert not any((tmp_path / name).exists() for name in "def")
+    capsys.readouterr()
+    scripted = ["--brief", args[1], "--quiet", "--model", "mockllm/l2"]
+    with pytest.raises(SystemExit):  # nothing live: as before, and no flag is blamed
+        main([*scripted, "--mock", "--out", str(tmp_path / "h")])
+    assert seen[4:] == [None] and "outside a sandbox (a scripted audit; --sandbox turns one " \
+        "on)." in capsys.readouterr().out
+    box = sandbox_holds(monkeypatch)
+    with pytest.raises(SystemExit):  # live experiments alone need --live too
+        main([*scripted, "--live", "--out", str(tmp_path / "i")])
+    assert seen[5:] == [box]
 
 
 def test_live_needs_a_key_before_anything_is_made(tmp_path, monkeypatch):
