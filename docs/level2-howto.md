@@ -58,6 +58,10 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
+- Each of L2's calls costs more as its conversation grows, so the reserve held back for
+  its review and report grows with it: 10% of the budget, or four of its calls at its
+  latest price plus the reviewer's share, if that is more. To leave L2 room to think,
+  cap the runs in the brief with `run_budget_usd` (e.g. 6 on a $10 budget).
 - To stop it early with a report, press Ctrl-C once: the experiment running now
   finishes, then L2 has its draft reviewed and writes its report. Ctrl-C twice stops at
   once (the ledger and report are still written).
@@ -78,6 +82,26 @@ figures, under a table of the audit's facts; start here), `figures/`, `report.md
 the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
 evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
+
+### Continuing an audit
+
+An audit that stopped before it was finished (out of budget, out of time, or stopped by
+hand) can be continued in a new audit, without running its experiments again:
+
+```bash
+uv run python -m experiments.l2.audit --continue logs/l2-audit/<earlier> --live \
+    --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name>
+```
+
+- The new audit takes over the earlier one's written scenarios, experiments and calls:
+  L2 reads and cites them as its own, their variant ids are taken, and new experiments
+  and calls are numbered after them. The earlier audit is only read.
+- What the earlier audit spent is recorded in `carried.json` and in the report, and is
+  not counted against the new budget.
+- L2 is shown the earlier draft conclusions and claims, their verdicts, and the
+  reviewer's critique, if there was a review, and is asked to build on them.
+- The brief is the earlier audit's, or `--brief` for a new one, e.g. with a new budget or
+  a `run_budget_usd`.
 
 ## 3. Read it critically
 

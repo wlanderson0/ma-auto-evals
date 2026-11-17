@@ -115,18 +115,41 @@ def proposals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(best.values())
 
 
+def ended(tools: Tools, why_no_conclusions: str | None = None) -> str:
+    """How the audit ended, in words, for the report and the write-up."""
+    why = why_no_conclusions or "end_audit was never called"
+    if tools.unrevised:
+        return (f"not ended by L2 ({why}); its reviewed draft is kept as its conclusions "
+                "and claims, not revised")
+    if tools.conclusions is not None:
+        return "ended by L2 (end_audit)"
+    return f"not ended by L2: {why}"
+
+
+def carried_line(audit: Any) -> str:
+    """What a continued audit took over from the earlier one (``carried.json``)."""
+    carried = audit.carried
+    spent = carried.get("spent_usd")
+    return (f"This audit continues {carried['from']}: its experiments "
+            f"({', '.join(carried.get('experiments') or []) or 'none'}), scenarios and calls "
+            f"1 to {carried.get('calls', 0)} were carried over"
+            + (f", and the ${spent:.4f} spent there is not counted in this audit's budget"
+               if spent is not None else "") + ".")
+
+
 def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     audit = tools.audit
     brief = audit.brief
     everything = tools.trace()
     trace = [row for row in everything if row.get("by") != "reviewer"]  # L2's own search
     out = [f"# L2 audit report: {audit.out.name}", ""]
-    status = ("ended by L2 (end_audit)" if tools.conclusions is not None else
-              f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}")
+    status = ended(tools, why_no_conclusions)
     where = (f"Analysis only, on the runs in {audit.analysis}." if audit.analysis else
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
     out += [f"Status: {status}. {where}", ""]
+    if audit.carried is not None:
+        out += [carried_line(audit), ""]
     if writeup_text(tools) is not None:
         out += ["L2's readable write-up, with tables and figures, is in `writeup.md`; this "
                 "report is the record it rests on.", ""]
@@ -152,7 +175,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"- Left to L2: {', '.join(open_) or 'none'}", ""]
 
     out += _claims(tools)
-    out += ["## Conclusions (L2's own words, quoted; not checked)", ""]
+    out += ["## Conclusions (L2's " + ("reviewed draft, not revised; its" if tools.unrevised
+                                         else "own") + " words, quoted; not checked)", ""]
     if tools.conclusions is not None:
         out += [f"> {line}" if line.strip() else ">" for line in tools.conclusions.splitlines()]
     else:
@@ -777,15 +801,17 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
         ("Budget", f"${audit.brief.budget_usd:.2f}; ${b['spent_usd']:.4f} spent "
                    f"(${usd['l2']:.4f} on L2's own calls"
                    + (f", of which ${reviewer:.4f} the reviewer" if reviewer else "")
-                   + f"; ${usd['experiments']:.4f} on runs)"),
+                   + f"; ${usd['experiments']:.4f} on runs)"
+                   + (f"; ${b['carried_usd']:.4f} spent by the audit it continues, not "
+                      "counted" if b.get("carried_usd") is not None else "")),
         ("Time", f"{t['elapsed_s'] / 60:.1f} min" + (
             f" of a {t['time_limit_s'] / 60:.1f}-min limit" if t["time_limit_s"] else "")
          if t["elapsed_s"] is not None else "not recorded"),
         ("Runs (variant × epochs run)",
          ("analysis only, of " + str(audit.analysis) + ": " if audit.analysis else "")
          + ("; ".join(f"{exp}: {', '.join(rows)}" for exp, rows in ran.items()) or "none")),
-        ("How it ended", "L2 ended the audit" if tools.conclusions is not None else
-         f"not ended by L2: {why_no_conclusions or 'end_audit was never called'}"),
+        ("How it ended", "L2 ended the audit" if tools.conclusions is not None
+         and not tools.unrevised else ended(tools, why_no_conclusions)),
         ("Stopped", b["stopped"] or b["halted"] or "no"),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
@@ -796,7 +822,7 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
 def _head(tools: Tools, facts: list[tuple[str, str]], final: bool) -> list[str]:
     """``writeup.md``'s lines before L2's text."""
     why_draft = ("gave no final write-up" if tools.conclusions is not None
-                 else "did not end the audit")
+                 and not tools.unrevised else "did not end the audit")
     return [f"# {tools.audit.out.name}: L2's write-up", "",
             *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
                "revised.", ""] if not final else []),

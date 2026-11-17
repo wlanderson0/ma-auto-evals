@@ -186,6 +186,9 @@ class Tools:
         self.review: dict[str, Any] | None = None
         """The review once requested (``review.json``): L2's draft, the critique, and L2's
         response once it ends the audit."""
+        self.unrevised = False
+        """Whether the conclusions and claims are the reviewed draft's, kept because L2
+        stopped before revising them (``adopt_draft``)."""
         self.written = audit.written()
         """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
@@ -920,6 +923,23 @@ class Tools:
                    " No write-up was given.") + self._embeds_note(self.writeup))
 
 
+    def adopt_draft(self) -> bool:
+        """When L2 stopped after the review without ending the audit, keep its reviewed
+        draft as the audit's conclusions and claims, marked as not revised: the claims
+        were checked against the logs when the review was asked for, and no run has been
+        made since. ``claims.json`` is written as ``end_audit`` writes it. Whether the
+        draft was kept."""
+        if self.conclusions is not None or self.review is None:
+            return False
+        draft = self.review["draft"]
+        self.conclusions, self.claims = draft["conclusions"], draft["claims"]
+        self.unrevised = True
+        if self.claims is not None:
+            (self.audit.out / "claims.json").write_text(
+                json.dumps(self.claims, indent=2, sort_keys=True, default=str) + "\n")
+        return True
+
+
 def embeds(writeup: str | None) -> list[str]:
     """The images a write-up embeds, as Markdown reads them, in order."""
     found = []
@@ -1354,7 +1374,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             lead, contradicted, invalid or unchecked) in the report. Malformed claims or
             citations are refused, and nothing ends until they are fixed. If
             request_review is among your tools, call it first: end_audit is then your
-            one revision.
+            one revision (an end_audit before the review sends its draft to the review
+            instead, and you then revise with end_audit).
 
             Args:
                 conclusions: What can and cannot be concluded, your mode and the measures
@@ -1395,6 +1416,16 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     claim's text must be its own counts (e.g. the two sides of its
                     comparison for its target).
             """
+            if review is not None and tools.needs_review and tools.review is None:
+                # Not refused, which would cost L2 a turn to resend the same draft: the
+                # draft goes to the review, and the critique comes back as the result.
+                # Raised, so the agent goes on to revise (a submit that returns ends it).
+                args = {"conclusions": conclusions, "claims": claims, "writeup": writeup}
+                refresh("request_review", args)
+                ok, text, seq = await tools.reviewed_call(review, **args)
+                answer(ok, text, seq)  # a draft that cannot be checked is refused as usual
+                raise ToolError(f"[call {seq}] end_audit came before the review, so your "
+                                "draft was sent for review (request_review). " + text)
             return await call("end_audit", conclusions=conclusions, claims=claims,
                               writeup=writeup, response=response)
         return execute
