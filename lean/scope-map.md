@@ -80,6 +80,7 @@ Design observations for the team (not bugs):
 ## Decisions for the theorem statements (before step 3)
 
 - **D1. `halt`.** It ends every agent's remaining turns but lists no agents, and the L1 seat brief relies on it (`experiments/scenarios.py:221-224`: `agents={seat}` with `halt`). Options: exempt from the agents limit by definition; or `affected` = all agents with an explicit carve-out.
+  **Decided (17 Nov 2026): exempt.** Halting changes nothing an agent already said or saw; it only ends the run, and the seat brief needs it for `end_audit`. The real lever is *when* the auditor stops (just before a target would object), which the scope cannot judge: analyses compare variants at the rounds they share, and should record where the auditor halted and flag runs it ended early.
 - **D2. What a "delivery" is.** Two consistent choices:
   - (a) Only overlay changes count. Then generation ops that post (`tests/contract/test_scope.py:31-33, 62-69` relies on this: the seat's post flips the reviewer) and tool ops on channel tools are fine as they are.
   - (b) Anything that changes what another agent reads counts. Then posting via a generation op, blocking/simulating `channel_post`, and overriding/simulating `channel_read` must count the recipients, or the forged sender, as affected, which breaks the seat brief.

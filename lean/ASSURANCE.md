@@ -121,11 +121,10 @@ All three are fixed on `sarah/scope-gap-fixes`.
 
 ## Decisions
 
+- **D1, decided: `halt` stays exempt by name.** It changes nothing an agent already said or saw, and the seat brief needs it to end an audit. When the auditor stops is a lever the scope cannot judge, so analyses compare variants at the rounds they share and should flag runs the auditor halted early (`lean/scope-map.md`, D1).
 - **D2, decided: (a), only overlay changes count as deliveries.** Under a seat scope, a forged `channel_read` result reaches only the seat, whose inputs are not measured; it cannot change what an out-of-scope agent receives or does. If a brief's scope includes a measured agent, treat forged reads by that agent as auditor input in the analysis, and revisit (`lean/scope-map.md`, D2).
 
 ## Open decisions
-
-- **D1.** Keep `halt` exempt, or count it as affecting every agent and carve it out of the seat brief.
 
 - **D3.** Turns are in the view. Keep that.
 - **Nested scopes.** If an L2 helper and an inner L1 ever share a controller, scopes must become per-policy, and property 5 needs a real statement.
