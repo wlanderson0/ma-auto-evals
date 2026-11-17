@@ -109,11 +109,19 @@ uv run python -m experiments.l2.share logs/l2-audit/<name>
 ```
 
 It exports each experiment, uploads it with your `cosmos login` (each experiment is one
-Cosmos run), waits until Cosmos has processed it, and writes the report's claims section
-again with links to the runs and messages each claim rests on. It prints each run's
-link. Run it again if it stops partway: an experiment already uploaded (its slug is kept
-in the audit's `cosmos-runs.json`) is never uploaded twice. `--pr N` files the runs under
-a pull request.
+Cosmos run; share also reads the runs back, so the login must be a full token, not an
+upload-only one: see [`cosmos.md`](cosmos.md)), then uploads the audit run (L2's own log, its claims, ledger, brief and
+records), waits until Cosmos has processed them, and writes the report's claims section
+again with links to the runs and messages each claim rests on. Every run's manifest
+names the audit's study (`study`), so Cosmos groups them; an audit shared before studies
+existed becomes one when shared again (the audit run lists its experiments' runs). Then
+each experiment's `annotations.jsonl` is posted to its run, and the audit's own, if it
+has one, to the runs its records are on; a post that fails (a Cosmos without the import,
+an error, a timeout) is a warning, and the runs and links are shared anyway. It prints
+each run's link. Run it again if it stops partway: a run already uploaded (its slug is
+kept in the audit's `cosmos-runs.json`, the audit run as `audit`) is never uploaded
+twice, and Cosmos imports an annotation only once. `--pr N` files the runs under a pull
+request.
 
 The same, step by step. Each experiment of the audit is one Cosmos run:
 
@@ -121,10 +129,14 @@ The same, step by step. Each experiment of the audit is one Cosmos run:
 for d in logs/l2-audit/<name>/experiments/exp-*; do
   uv run python -m experiments.l2.cosmos "$d" --out "logs/cosmos/<name>/$(basename $d)" --pr <N>
 done
-for d in logs/cosmos/<name>/exp-*; do
+uv run python -m experiments.l2.study logs/l2-audit/<name> --out logs/cosmos/<name>/audit --pr <N>
+for d in logs/cosmos/<name>/*; do
   cosmos upload "$d" --name "<name> $(basename $d)"
 done
 ```
+
+`experiments.l2.study` writes the audit run; its module docstring lists what it holds.
+Step by step, the annotations are not posted.
 
 - The export never changes the audit and never uploads; it prints the upload command.
 - `--pr` files the run under a pull request; without it, under the commit the
@@ -132,6 +144,8 @@ done
 - `cosmos upload <folder> --dry-run` checks a folder without uploading.
 - An `HTTP 401` means the Cosmos sign-in has lapsed: sign in again on
   <https://cosmos.danhelo.com> (or `cosmos login` with a new token) and rerun.
+  An `HTTP 403` on `GET /api/runs/<slug>` means the saved token is upload-only:
+  make a full token and run `cosmos login` again.
 - Each upload prints the run's link; put the links in the PR or the write-up.
 - Then link the report to Cosmos. Give each experiment its run's slug (the end of the
   link the upload printed):
