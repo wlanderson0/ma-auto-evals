@@ -16,20 +16,23 @@ experiment of the audit it
    manifest's commit and start time), and keeps its slug in the audit's
    ``cosmos-runs.json``, so running the command again never uploads it twice.
 
-Then it does the same for the audit run (``experiments.l2.study``: L2's own log, its
-claims, ledger, brief and records), in ``cosmos/audit``, uploaded as ``"<audit> audit"``
-and kept in ``cosmos-runs.json`` as ``audit``; the run Cosmos made must name the audit's
-study. Its manifest lists the slug of every experiment already on Cosmos
-(``study.runs``), so an audit whose experiments were shared before manifests named a
-study becomes one when shared again: only the audit run is uploaded.
+Then (after the links, below) it does the same for the audit run
+(``experiments.l2.study``: L2's own log, its claims, ledger, brief and records), in
+``cosmos/audit``, uploaded as ``"<audit> audit"`` and kept in ``cosmos-runs.json`` as
+``audit``; the run Cosmos made must name the audit's study. Its manifest lists the slug of
+every experiment already on Cosmos (``study.runs``), so an audit whose experiments were
+shared before manifests named a study becomes one when shared again: only the audit run is
+uploaded.
 
-It waits until Cosmos has parsed every run (status ``ready``), 15 minutes at most;
-resolves the links (``experiments.l2.cosmos_links``) and writes the claims section of
-``report.md`` again with them; then posts the audit's ``annotations.jsonl`` files, if it
-has any (each experiment's, and the audit's own), to the runs that hold their targets
-(``POST /api/runs/{slug}/annotations``: Cosmos never imports a record twice, so posting
-again changes nothing). A failed post is a warning naming the run, never an error. It
-prints each run's link and the report's path.
+Before the audit run is exported, it waits until Cosmos has parsed every experiment's run
+(status ``ready``), 15 minutes at most, resolves the links
+(``experiments.l2.cosmos_links``) and writes them into ``report.md`` and ``writeup.md``,
+so the copies the audit run takes to Cosmos have them too; then it waits for the audit
+run, and posts the audit's ``annotations.jsonl`` files, if it has any (each experiment's,
+and the audit's own), to the runs that hold their targets (``POST
+/api/runs/{slug}/annotations``: Cosmos never imports a record twice, so posting again
+changes nothing). A failed post is a warning naming the run, never an error. It prints
+each run's link and the report's path.
 """
 
 from __future__ import annotations
@@ -154,20 +157,9 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
             runs[exp.name] = slug
             record.write_text(json.dumps(runs, indent=2) + "\n")  # kept at once: never twice
         say(f"{exp.name}: {base_url.rstrip('/')}/runs/{runs[exp.name]}")
-    if AUDIT_RUN not in runs:
-        folder = audit_dir / "cosmos" / AUDIT_RUN
-        if not (folder / "manifest.json").exists():
-            _export(export_audit, audit_dir, folder, pr)
-        _name_study(folder, audit_study(audit_dir, runs))
-        slug = upload(folder, f"{audit_dir.name} {AUDIT_RUN}", pr)
-        named = (get(f"/api/runs/{slug}").get("manifest") or {}).get("study") or {}
-        if named.get("id") != study["id"] or named.get("role") != "audit":
-            raise SystemExit(f"{slug} is not this audit's run (its study is {named or None}, "
-                             f"this audit's is {study['id']}); it was not recorded")
-        runs[AUDIT_RUN] = slug
-        record.write_text(json.dumps(runs, indent=2) + "\n")
-    say(f"{AUDIT_RUN}: {base_url.rstrip('/')}/runs/{runs[AUDIT_RUN]}")
-    wait_ready(get, [runs[exp.name] for exp in experiments] + [runs[AUDIT_RUN]], sleep=sleep)
+    # The links need only the experiments' runs, and are resolved before the audit run is
+    # exported, so the report and write-up it carries to Cosmos have them too.
+    wait_ready(get, [runs[exp.name] for exp in experiments], sleep=sleep)
     claims = audit_dir / "claims.json"
     tools.claims = json.loads(claims.read_text()) if claims.exists() else []
     try:
@@ -181,6 +173,19 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
         f"{len(links['posts'])} cited messages)")
     for problem in links["problems"]:
         say(f"not linked: {problem}")
+    if AUDIT_RUN not in runs:
+        folder = audit_dir / "cosmos" / AUDIT_RUN
+        _export(export_audit, audit_dir, folder, pr)  # afresh: it carries the links
+        _name_study(folder, audit_study(audit_dir, runs))
+        slug = upload(folder, f"{audit_dir.name} {AUDIT_RUN}", pr)
+        named = (get(f"/api/runs/{slug}").get("manifest") or {}).get("study") or {}
+        if named.get("id") != study["id"] or named.get("role") != "audit":
+            raise SystemExit(f"{slug} is not this audit's run (its study is {named or None}, "
+                             f"this audit's is {study['id']}); it was not recorded")
+        runs[AUDIT_RUN] = slug
+        record.write_text(json.dumps(runs, indent=2) + "\n")
+    say(f"{AUDIT_RUN}: {base_url.rstrip('/')}/runs/{runs[AUDIT_RUN]}")
+    wait_ready(get, [runs[AUDIT_RUN]], sleep=sleep)
     if annotated:  # after the links, so an import that fails never costs them
         assert post is not None
         tools.results()  # which experiment ran each variant

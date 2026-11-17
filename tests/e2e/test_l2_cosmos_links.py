@@ -263,9 +263,10 @@ def with_audit_run(tools, get):
 
 
 def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
-    """Each experiment, then the audit run, is exported and uploaded once (its slug kept
-    in cosmos-runs.json), the runs are waited on until ready, and the report gets its
-    links. A second call uploads nothing."""
+    """Each experiment is exported and uploaded once (its slug kept in cosmos-runs.json)
+    and waited on until ready; the report gets its links; then the audit run is exported,
+    so the report it takes to Cosmos has them, and uploaded once. A second call uploads
+    nothing."""
     from experiments.l2.share import share
 
     tools, _ = audit
@@ -284,6 +285,7 @@ def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
             return {**get(path), "status": "ready" if polls[path] > 3 else "parsing"}
         return get(path)
     said = []
+    (tools.audit.out / "writeup.md").write_text("# L2's write-up\n\nL2's own text.\n")
     links = share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE,
                   sleep=lambda s: None, say=said.append)
     assert len(uploads) == 2 and links["runs"] == {"exp-1": f"{BASE}/runs/abc123"}
@@ -293,8 +295,13 @@ def test_share_exports_uploads_waits_and_links_in_one_step(audit, tmp_path):
     assert json.loads((tools.audit.out / "cosmos-runs.json").read_text()) == {
         "exp-1": "abc123", "audit": "aud456"}
     assert "dave in each run of V1" in (tools.audit.out / "report.md").read_text()
-    assert said[:2] == [f"exp-1: {BASE}/runs/abc123", f"audit: {BASE}/runs/aud456"]
-    assert "report with Cosmos links" in said[2]
+    assert said[0] == f"exp-1: {BASE}/runs/abc123"
+    assert "report with Cosmos links" in said[1]
+    assert said[2] == f"audit: {BASE}/runs/aud456"
+    assert f"{BASE}/samples/" in (uploads[1] / "report.html").read_text()  # linked on Cosmos
+    writeup = (uploads[1] / "writeup.md").read_text()  # the write-up too, its text kept
+    assert writeup.startswith("# L2's write-up\n\nL2's own text.\n")
+    assert "Each claim's evidence is linked on Cosmos." in writeup and f"{BASE}/" in writeup
     share(tools.audit.out, upload=upload, get=cosmos, base_url=BASE, sleep=lambda s: None,
           say=said.append)
     assert len(uploads) == 2  # nothing uploaded twice

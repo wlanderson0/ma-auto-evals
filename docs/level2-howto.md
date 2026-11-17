@@ -112,9 +112,13 @@ uv run python -m experiments.l2.audit --continue logs/l2-audit/<earlier> --live 
 
 - Read `writeup.md` for the story, then check it against `report.md`: the write-up is
   L2's own and unchecked (the reviewer read its draft), the claims are checked.
-- Start from the claims at the top of `report.md`. Each was read again from the logs
-  (spec §6.4): only *checked* claims are findings; a *lead* falls short (e.g. not told
-  apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
+- Start from the claims at the top of `report.md`: a table gives each claim's verdict,
+  its counts as the checker read them, and where to see it on Cosmos (its experiment, a
+  run where the target showed the behaviour, or the message it quotes); each claim
+  follows in L2's order, and the links to every run behind each claim come at the end
+  of the section. `writeup.md` ends with the same table.
+- Each claim was read again from the logs (spec §6.4): only *checked* claims are
+  findings; a *lead* falls short (e.g. not told apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
   ones (kind `other`, e.g. a result of L2's own code) and anything stated only in the
   prose need reading by hand, against the call or post they cite.
 - To check a claim yourself, use "Where the cited evidence is" under the claims: for
@@ -193,9 +197,10 @@ Step by step, the annotations are not posted.
   posts (`counts`: a target's uses of a name in its own words) also links, run by run,
   every message that was counted. A claim on probe answers links to the runs only: the
   answer is given in a private interview after the run, not in a message. A slug that is not its
-  experiment's run (another commit, start time or set of samples) is refused. The
-  report uploaded to Cosmos ("Open report") was made before the links existed, so it
-  has none.
+  experiment's run (another commit, start time or set of samples) is refused.
+  `--share` (and `experiments.l2.share`) resolves the links before it uploads the audit
+  run, so the report and write-up on Cosmos ("Open report") have them too. An audit
+  whose audit run was uploaded before this keeps an unlinked copy there.
 
 The same export works for a fixed grid run by hand with the milestone 1 CLI
 (`uv run python -m experiments.l2.experiment --brief ... --out <dir>`): pass `<dir>`.

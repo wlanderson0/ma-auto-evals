@@ -382,19 +382,22 @@ def _claims(tools: Tools) -> list[str]:
             "departure from the reading guidance); a *lead* falls short; the rules are in "
             "spec §6.4. Anything L2 wrote outside its claims is not checked.", ""]
     links = _cosmos(tools)
-    if links:
-        out += ["Each claim links to its evidence on Cosmos: the messages it quotes, and every "
-                "run its counts come from (✓ the target showed the behaviour, ✗ it did not, "
-                "? unknown).", ""]
-    order = {v: i for i, v in enumerate(("contradicted", "invalid", "lead", "unchecked",
-                                         "checked"))}
-    for i, claim in sorted(enumerate(tools.claims, 1),
-                           key=lambda pair: order.get(pair[1]["verdict"], 0)):
+    out += [*claims_table(tools, links), ""]
+    every_run: list[str] = []
+    for i, claim in enumerate(tools.claims, 1):
         out += claim_lines(i, claim)
         try:
-            out += [f"   - {line}" for line in _claim_links(tools, claim, links)]
+            found = _claim_links(tools, claim, links)
         except Exception as error:  # the report is still written
-            out.append(f"   - (Cosmos links could not be made: {_inline(error)})")
+            found = [f"(Cosmos links could not be made: {_inline(error)})"]
+        out += [f"   - {line}" for line in found if not line.startswith(EACH_RUN)]
+        every_run += [f"- Claim {i}: {line[len(EACH_RUN):]}" for line in found
+                      if line.startswith(EACH_RUN)]
+    if every_run:
+        out += ["", "### Every run behind the claims, on Cosmos", "",
+                "For each claim on a rate or a comparison, the target in every run of its "
+                "variants: ✓ it showed the behaviour, ✗ it did not, ? unknown.", "",
+                *every_run]
     try:
         where = _where(tools)
     except Exception as error:  # the report is still written
@@ -402,6 +405,92 @@ def _claims(tools: Tools) -> list[str]:
                  f"(could not be worked out: {_inline(f'{type(error).__name__}: {error}')})",
                  ""]
     return out + ["", *where]
+
+
+EACH_RUN = "On Cosmos, "
+"""How a claim's per-run links start (``_claim_links``); the report lists them after the
+claims, so each claim stays short."""
+WRITEUP_CLAIMS = "<!-- checked claims: written by the harness, not by L2 -->"
+"""Where the harness's table of checked claims starts in ``writeup.md``."""
+
+
+def claims_table(tools: Tools, links: dict[str, Any] | None = None) -> list[str]:
+    """The claims at a glance: number, verdict, words, counts (the checker's own reading),
+    and where to see them on Cosmos (the experiment, and an example run or the message
+    quoted)."""
+    if not tools.claims:
+        return []
+    rows = ["| # | verdict | claim | counts | on Cosmos |", "|---|---|---|---|---|"]
+    for i, claim in enumerate(tools.claims, 1):
+        try:
+            where = _example_links(tools, claim, links or {})
+        except Exception:  # the table is still written
+            where = []
+        rows.append(f"| {i} | **{claim['verdict']}** | {_cell(_short(claim['text'], 160))} | "
+                    f"{_cell(_counts(claim))} | {' · '.join(where) or '-'} |")
+    return rows
+
+
+def _short(text: Any, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _counts(claim: dict[str, Any]) -> str:
+    """The claim's counts as the checker read them: the k/n part of its first reason."""
+    for reason in claim.get("reasons") or []:
+        found = (re.search(r"\S+ \d+/\d+ vs \S+ \d+/\d+", str(reason))
+                 or re.search(r"\d+/\d+", str(reason)))
+        if found:
+            return found.group(0).replace("\\", "")
+    if claim["kind"] == "rate" and "k" in claim and "n" in claim:
+        return f"{claim['k']}/{claim['n']}"
+    return ""
+
+
+def _example_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> list[str]:
+    """Where to look first on Cosmos: the experiment run holding the claim's variant, a
+    run where the target showed the behaviour (✓), and the first message it quotes."""
+    if not links:
+        return []
+    out = []
+    posts = [links["posts"].get(f"{r['variant']}/{r['epoch']}/{r['post']}")
+             for r in claim["evidence"] if "call" not in r]
+    if posts and posts[0]:
+        out.append(f"[quoted message]({posts[0]})")
+    if claim["kind"] not in ("rate", "difference", "no_difference"):
+        return out
+    vid = claim["variant"] if claim["kind"] == "rate" else claim["a"]
+    results = tools.results()
+    exp = tools._where.get(vid)
+    if exp and (run := links.get("runs", {}).get(exp)):
+        out.insert(0, f"[{exp}]({run})")
+    used = claims_.basis(tools, claim)
+    if used is None:
+        return out
+    for sample in sorted(results.of(vid), key=lambda s: s.epoch):
+        try:
+            did = results.adopted(sample, claim["target"], used["scorer"], used["rounds"],
+                                  used["field"])
+        except ValueError:
+            continue
+        url = links["samples"].get(f"{vid}/{sample.epoch}")
+        if did and url:
+            out.append(f"[{_inline(vid)} epoch {sample.epoch} ✓]({url})")
+            break
+    return out
+
+
+def writeup_claims(tools: Tools, links: dict[str, Any] | None = None) -> list[str]:
+    """The harness's part at the end of ``writeup.md``: the checked claims at a glance,
+    with their evidence on Cosmos once the audit is shared."""
+    if not tools.claims:
+        return []
+    note = ("Each claim's evidence is linked on Cosmos." if links else
+            "Links to Cosmos are added when the audit is shared.")
+    return [WRITEUP_CLAIMS, "", "## Claims, as checked against the logs", "",
+            f"The harness's reading of L2's claims (details in `report.md`). {note}", "",
+            *claims_table(tools, links)]
 
 
 def claim_lines(i: int, claim: dict[str, Any]) -> list[str]:
@@ -503,7 +592,7 @@ def _claim_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> 
             cells.append(f"[{sample.epoch} {mark}]({url})" if url else
                          f"{sample.epoch} {mark} (not on Cosmos)")
         if cells:
-            out.append(f"On Cosmos, {_inline(claim['target'])} in each run of "
+            out.append(f"{EACH_RUN}{_inline(claim['target'])} in each run of "
                        f"{_inline(vid)}, as call {used['call']} read it (epoch, then ✓/✗): "
                        + " ".join(cells))
         if used["scorer"] == "counts":
@@ -764,6 +853,14 @@ def relink(out: Path) -> Path:
         tools.claims = json.loads((out / "claims.json").read_text())
     section = "\n".join(_claims(tools))
     report.write_text(text[:start] + section.rstrip("\n") + "\n" + text[end:])
+    writeup = out / "writeup.md"
+    if writeup.exists():  # its table of claims, with the links (L2's text is kept as it is)
+        body = writeup.read_text()
+        cut = body.find(WRITEUP_CLAIMS)
+        body = body if cut < 0 else body[:cut]
+        tail = writeup_claims(tools, _cosmos(tools))
+        writeup.write_text(body.rstrip("\n") + "\n\n" + "\n".join(tail) + "\n" if tail
+                           else body)
     return report
 
 
@@ -855,7 +952,9 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
     facts, final, body_line = parts
     text, _ = writeup_text(tools) or ("", final)
     path = tools.audit.out / "writeup.md"
-    path.write_text("\n".join([*_head(tools, facts, final), text, ""]))
+    tail = writeup_claims(tools, _cosmos(tools))
+    path.write_text("\n".join([*_head(tools, facts, final), text, "",
+                               *([*tail, ""] if tail else [])]))
     (tools.audit.out / "writeup.json").write_text(json.dumps(
         {"final": final, "body_line": body_line,
          "facts": [{"name": name, "value": value} for name, value in facts]},

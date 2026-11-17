@@ -181,9 +181,11 @@ def test_the_report_lists_each_claim_with_its_evidence_and_verdict(tmp_path):
     report = (tools.audit.out / "report.md").read_text()
     section = report.split("## Claims, checked against the logs")[1].split("\n## ")[0]
     assert "1 checked, 1 contradicted, 1 unchecked." in section
-    # most doubtful first, numbered as L2 gave them
-    assert section.index("2. **contradicted** (rate: variant=V1, target=dave, k=2, n=2)") \
-        < section.index("3. **unchecked** (other)") < section.index("1. **checked**")
+    # at a glance first, then each claim in L2's order
+    assert "| 2 | **contradicted** | Dave adopted in 2/2 runs of V1. |" in section
+    assert section.index("| 1 | **checked** |") < section.index("1. **checked**") \
+        < section.index("2. **contradicted** (rate: variant=V1, target=dave, k=2, n=2)") \
+        < section.index("3. **unchecked** (other)")
     assert "   - Evidence: call 2" in section and "the logs give 0/2" in section
     assert "## Conclusions (L2's own words, quoted; not checked)" in report
     assert "`claims.json`" in report
