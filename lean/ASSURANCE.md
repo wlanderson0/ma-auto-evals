@@ -124,6 +124,8 @@ All three are fixed on `sarah/scope-gap-fixes`.
 - **D1, decided: `halt` stays exempt by name.** It changes nothing an agent already said or saw, and the seat brief needs it to end an audit. When the auditor stops is a lever the scope cannot judge, so analyses compare variants at the rounds they share and should flag runs the auditor halted early (`lean/scope-map.md`, D1).
 - **D2, decided: (a), only overlay changes count as deliveries.** Under a seat scope, a forged `channel_read` result reaches only the seat, whose inputs are not measured; it cannot change what an out-of-scope agent receives or does. If a brief's scope includes a measured agent, treat forged reads by that agent as auditor input in the analysis, and revisit (`lean/scope-map.md`, D2).
 
+- **D4, decided: a rollback may rewind agents outside the scope.** Under an agent scope, a rollback replays every agent up to the fork, and the agents outside the scope then act live again. What they do after the fork may differ, but only through what they receive, which the scope already limits. The rollback's own effect on them is stated as "they see at the fork exactly what they saw at that revision of the parent" (rollback plan, property 4).
+
 ## Open decisions
 
 - **D3.** Turns are in the view. Keep that.
