@@ -32,7 +32,7 @@ from experiments.l2.audit_report import write_report
 from experiments.l2.experiment import REPO
 from experiments.l2.fake import PROMPT, fake_model
 from experiments.l2.tools import Tools, inspect_tools
-from tests.support.l2_audit import InProcess, brief
+from tests.support.l2_audit import InProcess, brief, variant
 
 FREE = {"mockllm/l2": (0.0, 0.0)}
 END = [("request_review", {"conclusions": "Done.", "claims": "[]", "writeup": "W."}),
@@ -57,7 +57,8 @@ def steered(tmp_path, *, budget=1.0, max_budget=None, where=None, **options):
     """An audit whose mailbox is read every 0.05 s while it waits."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     audit = Audit.create(brief(tmp_path, budget), tmp_path / "audit", mock=True,
-                         launch=InProcess(), clock=options.pop("clock", Clock()), **options)
+                         launch=options.pop("launch", None) or InProcess(),
+                         clock=options.pop("clock", Clock()), **options)
     box = steer.Mailbox(where or audit.out / "l2" / steer.DIR_NAME)
     audit.steering = steer.Steering(box, audit, max_budget=max_budget, poll_s=0.05)
     return audit, box
@@ -441,11 +442,105 @@ def test_pause_holds_a_launch_and_the_clock_resume_releases_it_and_stop_ends_it(
     audit.steering.poll()
     found = acks(box)
     assert found[stop]["state"] == found[again]["state"] == "applied"
-    assert audit.interrupts == 1 and audit.epoch_stop() is None
+    assert audit.interrupts == 1 and audit.epoch_stop() == audit.halted  # no next epoch
     assert audit.halted.startswith("stopped at a researcher's request (") and \
         "sent on the machine" in audit.halted
     ok, text = tools.call("budget")
     assert ok and "STOPPING: stopped at a researcher's request" in text
+
+
+class During(InProcess):
+    """Runs each epoch in this process, and does ``then`` while epoch ``at`` runs: a
+    request sent during a long epoch."""
+
+    def __init__(self, at, then):
+        super().__init__()
+        self.at, self.then = at, then
+
+    def __call__(self, brief_path, ids, epoch, *args):
+        if epoch == self.at:
+            self.then()
+        return super().__call__(brief_path, ids, epoch, *args)
+
+
+def test_a_stop_sent_during_an_epoch_is_read_at_its_end_and_ends_the_experiment(tmp_path):
+    """The mailbox is read at each epoch's end: a request sent while a long experiment
+    runs is applied there, long before L2's next turn, by when it would have expired."""
+    sent = {}
+    launcher = During(1, lambda: sent.update(
+        stop=raw(box, "stop", {}, expires=steer.now() + timedelta(seconds=20))))
+    audit, box = steered(tmp_path, launch=launcher)
+    Tools(audit)
+    audit.steering.open()
+    path = tmp_path / "brief.md"
+    result = audit.launch([variant(path, "M0", "C0")], 3, rationale=WHY)
+    assert launcher.calls == [(["C0"], 1)]  # the epoch it came in finished; no other began
+    assert result["status"] == "ran" and result["variants"][0]["epochs_done"] == 1
+    assert result["stopped"].startswith("before epoch 2: stopped at a researcher's request (")
+    ack = acks(box)[sent["stop"]]  # read during the launch, not at a later turn
+    assert ack["state"] == "applied" and audit.interrupts == 1
+    again = audit.launch([variant(path, "M0", "V1")], 1, rationale=WHY)
+    assert again["status"] == "refused" and "researcher's request" in again["reason"]
+    audit.steering.close()
+
+
+def test_a_pause_sent_during_an_epoch_holds_the_next_one_until_a_resume(tmp_path):
+    clock = Clock()
+    launcher = During(1, lambda: send(box, "pause"))
+    audit, box = steered(tmp_path, launch=launcher, clock=clock)
+    Tools(audit)
+    audit.start_clock(1000)
+    audit.steering.open()
+    done = {}
+    thread = threading.Thread(target=lambda: done.update(r=audit.launch(
+        [variant(tmp_path / "brief.md", "M0", "C0")], 2, rationale=WHY)), daemon=True)
+    thread.start()
+    until = time.monotonic() + 60
+    while audit.paused_since is None and time.monotonic() < until:
+        time.sleep(0.02)
+    assert audit.paused_since is not None and audit.steering.paused
+    clock.now += 500  # time passes while the experiment is held between its epochs
+    time.sleep(0.3)
+    assert thread.is_alive() and launcher.calls == [(["C0"], 1)]
+    assert audit.clock_state()["elapsed_s"] == 0
+    note = send(box, "note", "read while the experiment waits")  # still read meanwhile
+    send(box, "resume")
+    thread.join(timeout=60)
+    assert launcher.calls == [(["C0"], 1), (["C0"], 2)]
+    assert done["r"]["status"] == "ran" and done["r"]["stopped"] is None
+    assert done["r"]["variants"][0]["epochs_done"] == 2 and audit.paused() == 500
+    assert note not in acks(box)  # a note is acked when L2 gets it, at its next turn
+    assert "read while the experiment waits" in audit.steering.deliver()
+    assert acks(box)[note]["state"] == "applied"
+    audit.steering.close()
+
+
+def test_a_request_sent_during_the_last_epoch_is_read_when_it_ends(tmp_path):
+    sent = {}
+    launcher = During(1, lambda: sent.update(
+        stop=raw(box, "stop", {}, expires=steer.now() + timedelta(seconds=20))))
+    audit, box = steered(tmp_path, launch=launcher)
+    Tools(audit)
+    audit.steering.open()
+    result = audit.launch([variant(tmp_path / "brief.md", "M0", "C0")], 1, rationale=WHY)
+    assert result["status"] == "ran" and result["stopped"] is None  # its one epoch ran
+    assert acks(box)[sent["stop"]]["state"] == "applied"
+    assert audit.halted.startswith("stopped at a researcher's request (")
+    audit.steering.close()
+
+
+def test_a_stop_request_after_one_ctrl_c_still_ends_the_experiment_at_its_next_epoch(tmp_path):
+    audit, box = steered(tmp_path)
+    Tools(audit)
+    audit.steering.open()
+    audit.interrupt()  # the first Ctrl-C: a running experiment would finish
+    assert audit.epoch_stop() is None
+    send(box, "stop")
+    audit.steering.poll()
+    assert audit.interrupts == 1 and "researcher's request" in audit.epoch_stop()
+    audit.interrupt()  # a Ctrl-C after it is the second interrupt
+    assert audit.interrupts == 2 and audit.epoch_stop() == "stopped by hand (Ctrl-C twice)"
+    audit.steering.close()
 
 
 def test_ctrl_c_while_paused_ends_the_wait(tmp_path):
@@ -844,6 +939,60 @@ def test_the_audit_command_steers_when_asked(tmp_path, monkeypatch):
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "b"), "--mock",
               "--fake", "--steer"])
     assert not (tmp_path / "b").exists()
+
+
+def test_a_steered_audit_whose_l2_is_a_model_does_not_start_without_a_sandbox(
+        tmp_path, monkeypatch):
+    """Without a sandbox the code L2 writes could write the mailbox as this user: raise
+    its own budget, answer its own questions. Steering turns the sandbox on, and the audit
+    starts only if every place L2's code runs is in it. Refused before anything is made."""
+    import experiments.l2.agent as agent
+
+    ran = []
+    monkeypatch.setattr(agent, "run_l2", lambda tools, *args, **kwargs: ran.append(tools))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.delenv("L2_SANDBOX", raising=False)
+
+    def start(name, *more, header=""):
+        main(["--brief", str(brief(tmp_path, 1.0, extra=header)), "--out",
+              str(tmp_path / name), "--mock", "--live", "--quiet", *more])
+
+    monkeypatch.setattr(sandbox_, "check", lambda: sandbox_.Check(
+        None, {"starts": (False, "bwrap (bubblewrap) is not installed")}))
+    with pytest.raises(SystemExit, match="the sandbox does not hold here"):  # none here
+        start("a", "--steer", header=NO_SCENARIOS)
+    holds(monkeypatch)
+    with pytest.raises(SystemExit, match="--no-sandbox, but a steered audit whose L2 is a"):
+        start("b", "--steer", "--no-sandbox", header=NO_SCENARIOS)
+    with pytest.raises(SystemExit, match="a steered audit whose L2 is a model.*but this "
+                                         "audit lets L2 write scenarios"):
+        start("c", "--steer")  # a written scenario runs outside the sandbox
+    monkeypatch.setenv("COSMOS_STEER", "1")  # asked for by the environment: the same
+    with pytest.raises(SystemExit, match="a steered audit whose L2 is a model"):
+        start("d")
+    assert not ran and not any((tmp_path / name).exists() for name in "abcd")
+    with pytest.raises(SystemExit):  # the stand-in never ends the audit
+        start("e", header=NO_SCENARIOS)
+    [tools] = ran  # every place L2's code runs is sandboxed: steered, and it says so
+    assert tools.audit.sandbox is BOX and tools.audit.steering.sandbox == {
+        "kind": "bwrap", "network": False,
+        "write": str((tmp_path / "e" / "figures").resolve())}
+
+
+def test_a_scripted_l2_can_be_steered_without_a_sandbox(tmp_path, monkeypatch):
+    """The fake L2 writes no code of its own, so nothing could write its mailbox: the
+    commands can be tried without a sandbox."""
+    import experiments.l2.agent as agent
+
+    ran = []
+    monkeypatch.setattr(agent, "run_l2", lambda tools, *args, **kwargs: ran.append(tools))
+    monkeypatch.delenv("L2_SANDBOX", raising=False)
+    monkeypatch.setattr(sandbox_, "check", lambda: pytest.fail("the sandbox was checked"))
+    with pytest.raises(SystemExit):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
+              "--fake", "--quiet", "--steer"])
+    [tools] = ran
+    assert tools.audit.sandbox is None and tools.audit.steering.sandbox is None
 
 
 # ---------------------------------------------------------------- steering off

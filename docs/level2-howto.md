@@ -77,38 +77,53 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
 
 Add `--steer` (or set `COSMOS_STEER=1`) to send requests to the audit while it runs, from
 another terminal on the same machine (or over SSH). The audit then reads a mailbox,
-`<audit>/l2/.cosmos-steer` (or `COSMOS_STEER_DIR`; spec §7.1):
+`<audit>/l2/.cosmos-steer` (or `COSMOS_STEER_DIR`; spec §7.1). When L2 is a model, a
+steered audit starts only with a sandbox: without one, code L2 writes could write the
+mailbox itself, raise its own budget and answer its own questions. A scripted L2
+(`--fake`) can be steered without one, to try the commands:
 
 ```bash
 uv run python -m experiments.l2.steer note "try the variant without the deadline"
-uv run python -m experiments.l2.steer pause      # no new experiment starts; L2 waits
+uv run python -m experiments.l2.steer pause      # no new experiment or epoch starts; L2 waits
 uv run python -m experiments.l2.steer resume
-uv run python -m experiments.l2.steer stop       # as one Ctrl-C: L2 concludes
+uv run python -m experiments.l2.steer stop       # the running epoch finishes, then L2 concludes
 uv run python -m experiments.l2.steer budget 15.00
 uv run python -m experiments.l2.steer answer ask-1 Approve [--text "..."]
 uv run python -m experiments.l2.steer status
 ```
 
 - Without `--dir` the command uses `COSMOS_STEER_DIR`, else the newest audit under
-  `logs/l2-audit/`. It prints `written <id>`, or one line saying why it refused.
+  `logs/l2-audit/`. It prints `written <id> to <mailbox>`, or one line saying why it
+  refused.
+- The audit reads the mailbox after each of L2's turns and at the end of each epoch, so a
+  `pause` or a `stop` sent during a long experiment takes effect when the running epoch
+  finishes.
 - L2 reads a note after its current turn, framed as a note from you, and may answer with
   `reply_researcher`. It may ask you a question with `ask_researcher`; the terminal shows
   it with the command that answers it. Unanswered, its default applies when it times out.
 - `budget` needs `COSMOS_STEER_MAX_BUDGET_USD` (for example `25.00`) set when the audit
   starts: the audit takes no raise above it, and none without it.
-- Unless the audit reports a sandbox (`--sandbox` and no written scenarios, below), it
-  runs L2's code without one, so send only words you wrote yourself.
-  The terminal shows each note and text answer as it reaches L2.
+- A steered audit whose L2 is a model always has a sandbox (below), and its brief must
+  leave `scenario` out of `allowed_changes`: a scenario L2 writes runs outside the
+  sandbox, where it could write the mailbox.
+- The terminal shows each note and text answer as it reaches L2.
 - Every request is recorded: `steer.jsonl` and the "Steering" section of `report.md`.
 
 ### Running L2's code in a sandbox
 
-`--sandbox` (or `L2_SANDBOX=1` in the environment) runs the Python L2 writes in a
-sandbox: `run_python`, and the check of a scenario L2 writes. Inside it the code has no
-network, reads only the Python environment, the audit's runs and `figures/`, and writes
-only `figures/`. It cannot read the repository's `.env`, your home directory or the
-audit's `l2/` directory. If the sandbox cannot start, the tool is refused and the code
-does not run. Without the flag nothing changes.
+The Python L2 writes runs in a sandbox: `run_python`, and the check of a scenario L2
+writes. Inside it the code has no network, reads only the Python environment, the
+audit's runs and `figures/`, and writes only `figures/`. It cannot read the repository's
+`.env`, your home directory or the audit's `l2/` directory. If the sandbox cannot start,
+the tool is refused and the code does not run.
+
+The sandbox is on by default for every audit that needs `--live` (L2 is a model, or the
+experiments are live), and such an audit does not start on a machine where the sandbox
+does not hold. So a live audit on Linux needs bubblewrap installed (below). `--no-sandbox`
+is the way out: L2's code then runs as you, with the network and every file you can
+read, and where your provider key is added by a proxy outside the machine (some cloud
+containers) that code can call the provider. A scripted audit (`--fake` with `--mock`)
+runs without the sandbox unless you add `--sandbox` (or set `L2_SANDBOX=1`).
 
 Not everything is sandboxed. A scenario L2 writes is imported into the audit's process
 and runs in each epoch with the OpenRouter key and the network, because its agents need

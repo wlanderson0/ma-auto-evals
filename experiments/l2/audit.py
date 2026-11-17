@@ -28,8 +28,8 @@ up to one epoch (recorded in ``ledger.json``).
 limit (``start_clock``; ``TIME_RESERVE`` of it held back for L2's report) stops runs as
 the run budget does: ``halted`` gives its reason, no new experiment starts, and L2 is
 told to conclude; the query tools still work, so it can read what ran. The time limit,
-or a second interrupt, also stops a running experiment before its next epoch; a first
-interrupt lets it finish.
+a second interrupt, or a stop request through the mailbox (read at each epoch's end)
+also stops a running experiment before its next epoch; a first Ctrl-C lets it finish.
 
 **Run budget.** A brief's ``run_budget_usd`` caps spend on runs inside the budget
 (spec §9.4). It stops runs the same way: what is available for experiments is capped
@@ -269,11 +269,15 @@ class Audit:
     def interrupt(self, reason: str | None = None) -> None:
         """Stop by hand: no new experiment starts, and L2 concludes. A first interrupt lets
         a running experiment finish; a second stops it before its next epoch. ``reason``
-        says why, when it was not Ctrl-C (a researcher's stop request, through the mailbox);
-        a Ctrl-C after it counts as the second."""
-        if not self.interrupts:
+        says why, when it was not Ctrl-C: a researcher's stop request, through the mailbox.
+        Such a stop also ends a running experiment before its next epoch (``epoch_stop``),
+        since the person who sent it may be nowhere near the terminal; a second request
+        changes nothing, and a Ctrl-C after it counts as the second interrupt."""
+        if reason is None:
+            self.interrupts += 1
+        elif self.interrupt_reason is None:
             self.interrupt_reason = reason
-        self.interrupts += 1
+            self.interrupts = max(self.interrupts, 1)
 
     @property
     def interrupted(self) -> str | None:
@@ -315,9 +319,11 @@ class Audit:
         return self.time_up() or self.interrupted
 
     def epoch_stop(self) -> str | None:
-        """Why a running experiment stops before its next epoch: the time limit, or a
-        second interrupt."""
-        return self.time_up() or (self.interrupted if self.interrupts > 1 else None)
+        """Why a running experiment stops before its next epoch: the time limit, a second
+        interrupt, or a researcher's stop request (the mailbox is read at each epoch's
+        end)."""
+        asked = self.interrupts > 1 or self.interrupt_reason is not None
+        return self.time_up() or (self.interrupted if asked else None)
 
     def budget(self) -> dict[str, Any]:
         """Spent, remaining (budget − ledger total) and the reserve, by kind (spec §7),
@@ -424,7 +430,9 @@ class Audit:
         failed uses up its variant ids, even with no epoch done.
 
         A steered audit looks at its mailbox first, and waits while it is paused, so a
-        stop or a raise that comes meanwhile is seen by the checks."""
+        stop or a raise that comes meanwhile is seen by the checks. It looks again at the
+        end of each epoch and before the next: a pause holds the next epoch, and a stop
+        ends the experiment there."""
         self.launching = True
         try:
             if self.steering is not None:
@@ -482,10 +490,21 @@ class Audit:
         def launch_epoch(*args: Any) -> Any:
             epoch, started = args[2], time.monotonic()
             self.say("epoch", experiment=exp.name, epoch=epoch, epochs=epochs, done=False)
-            paths = self.launch_epoch(*args)
+            try:
+                paths = self.launch_epoch(*args)
+            finally:  # a request sent during a long epoch is read before it expires
+                if self.steering is not None:
+                    self.steering.poll()
             self.say("epoch", experiment=exp.name, epoch=epoch, epochs=epochs, done=True,
                      seconds=time.monotonic() - started)
             return paths
+
+        def before_epoch() -> str | None:
+            """Why the next epoch does not start. A steered audit looks at its mailbox
+            first and waits while it is paused, as before a launch."""
+            if self.steering is not None:
+                self.steering.hold()
+            return self.epoch_stop()
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "brief.md"
@@ -495,7 +514,7 @@ class Audit:
                                   history=history, launch=launch_epoch,
                                   cost_of=self.cost_of,
                                   estimator=lambda *args, **kwargs: guess,
-                                  stop=self.epoch_stop, scenarios=self.scenarios_dir)
+                                  stop=before_epoch, scenarios=self.scenarios_dir)
                 status, reason = "ran", None
             except Exception as error:  # the record keeps the finished epochs
                 status, reason = "failed", f"{type(error).__name__}: {error}"[:3000]
@@ -591,22 +610,26 @@ def _json(path: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
     """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
-    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>] [--sandbox]
-    [--steer]``.
+    [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>]
+    [--sandbox | --no-sandbox] [--steer]``.
 
     ``--question`` with ``--budget`` is the shortest brief: the question and the budget,
     everything else left to L2 (spec §1.1); the audit keeps it as its ``brief.md``.
 
-    ``--sandbox`` (or ``L2_SANDBOX=1``) runs L2's code in the sandbox
-    (``experiments.l2.sandbox``); the audit first checks it and does not start when a
-    property fails.
+    L2's code runs in the sandbox (``experiments.l2.sandbox``) in every audit that needs
+    ``--live``, and with ``--sandbox`` (or ``L2_SANDBOX=1``) in a scripted one; the audit
+    first checks the sandbox and does not start when a property fails. ``--no-sandbox``
+    runs that code as the user instead.
 
     Without ``--fake``, L2 is an LLM (``--model``, default ``agent.MODEL``) and its own
     calls are live (OpenRouter) even when the experiments run on mocks (``--mock``).
 
     ``--steer`` (or ``COSMOS_STEER=1``, or ``COSMOS_STEER_DIR``) lets the audit be steered
-    through its mailbox (``experiments.l2.steer``). With ``COSMOS_REQUIRE_SANDBOX=1`` the
-    audit starts only if it will report a sandbox (``Audit.sandbox_report``)."""
+    through its mailbox (``experiments.l2.steer``). When L2 is a model, a steered audit
+    starts only if it will report a sandbox (``Audit.sandbox_report``): code L2 wrote
+    could otherwise write the mailbox. With ``COSMOS_REQUIRE_SANDBOX=1`` that holds for
+    every audit, steered or not. Either turns the sandbox on and refuses
+    ``--no-sandbox``."""
     import argparse
     import os
 
@@ -648,7 +671,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--sandbox", action="store_true",
                         help="run L2's code (run_python, the check of a written scenario) in "
                              "a sandbox: no network, reads only the runs, writes only "
-                             "figures/ (also L2_SANDBOX=1); refused when it cannot start")
+                             "figures/ (also L2_SANDBOX=1); refused when it cannot start. "
+                             "On by default for an audit that needs --live")
+    parser.add_argument("--no-sandbox", action="store_true",
+                        help="run L2's code as you, with the network and every file you can "
+                             "read, also in an audit that needs --live (and whatever "
+                             "L2_SANDBOX says); refused for a steered audit whose L2 is a "
+                             "model, and with COSMOS_REQUIRE_SANDBOX=1")
     parser.add_argument("--quiet", action="store_true",
                         help="show no progress (the live status panel, or lines when the "
                              "output is not a terminal) while the audit runs")
@@ -667,16 +696,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.fake and not args.mock and args.analysis_only is None:
         raise SystemExit("--fake runs experiments live (OpenRouter spend) unless --mock is "
                          "given; a scripted L2 has no use for live runs, so use --mock")
-    sandbox = None
-    required = steer_.sandbox_required()  # COSMOS_REQUIRE_SANDBOX=1 turns the sandbox on
-    if args.sandbox or os.environ.get("L2_SANDBOX") == "1" or required:
-        from experiments.l2 import sandbox as sandbox_
-
-        found = sandbox_.check()  # before anything is created or spent
-        if not found.passed:
-            raise SystemExit("\n".join(["the sandbox does not hold here, so the audit does "
-                                         "not start:", *found.failed()]))
-        sandbox = sandbox_.detect()
     if not args.fake:
         from experiments.l2.cost import UnknownPrice, price
 
@@ -704,6 +723,31 @@ def main(argv: Sequence[str] | None = None) -> None:
         steering = steer_.configure(out, flag=args.steer)
     except steer_.SteerError as error:
         raise SystemExit(str(error)) from None
+    # Why this audit must report a sandbox, if it must: asked for outright, or steered
+    # while L2 is a model, whose code could otherwise write the mailbox.
+    required = ("COSMOS_REQUIRE_SANDBOX=1" if steer_.sandbox_required() else
+                steer_.NEEDS_SANDBOX if steering is not None and live_l2 else None)
+    asked = args.sandbox or os.environ.get("L2_SANDBOX") == "1"
+    if args.no_sandbox and (required or args.sandbox):
+        raise SystemExit("--no-sandbox, but " + (required or "--sandbox was given too")
+                         + ": not started")
+    sandbox = None
+    # On when asked for or required, and by default whenever L2's code is a model's
+    # (every audit that needs --live): --no-sandbox is the only way to run that code as
+    # the user, with the network and every file the user can read.
+    if not args.no_sandbox and (asked or required or live_l2 or live_runs):
+        from experiments.l2 import sandbox as sandbox_
+
+        found = sandbox_.check()  # before anything is created or spent
+        if not found.passed:
+            raise SystemExit("\n".join([
+                "the sandbox does not hold here, so the audit does not start:",
+                *found.failed(),
+                *([] if asked or required else [
+                    "A live audit runs L2's code in the sandbox by default. Install it "
+                    "(docs/level2-howto.md: bubblewrap on Linux), or pass --no-sandbox to "
+                    "run that code as you, with the network and every file you can read."])]))
+        sandbox = sandbox_.detect()
     with tempfile.TemporaryDirectory() as tmp:
         brief_path = args.brief
         if args.question is not None:
@@ -714,7 +758,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                         analysis=args.analysis_only, sandbox=sandbox)
         if required and planned.sandbox_report() is None:
             raise SystemExit(
-                "COSMOS_REQUIRE_SANDBOX=1, but " + (
+                required + ", but " + (
                     "this audit lets L2 write scenarios, whose code runs outside the "
                     "sandbox (in this process, and in each epoch with the provider's key "
                     "and the network): not started. Leave scenario out of the brief's "
@@ -741,6 +785,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
               f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "
               "then L2 concludes; twice: stop at once.", flush=True)
+        print(f"L2's code runs in the sandbox ({sandbox.kind})." if sandbox is not None else
+              "L2's code runs as you, outside a sandbox (--no-sandbox).", flush=True)
     try:
         with reporter(audit, quiet=args.quiet, model=model or "the fake L2"):
             if model is None:

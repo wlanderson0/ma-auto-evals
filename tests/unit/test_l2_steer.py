@@ -289,7 +289,8 @@ def test_the_command_checks_its_arguments(tmp_path, capsys):
         assert command(tmp_path, "pause") == 0
         out = capsys.readouterr()
         [written] = [json.loads(x) for x in box.read(steer.INBOX)[0]]
-        assert out.out == f"written {written['id']}\n" and steer.NO_SANDBOX not in out.err
+        assert out.out == f"written {written['id']} to {box.path}\n"  # which audit's
+        assert steer.NO_SANDBOX not in out.err
         assert written["via"] == "local" and written["kind"] == "pause"
         assert set(written["author"]) == {"local"} and "seq" not in written
         sent, expires = (steer.parse_time(written[k]) for k in ("sent_at", "expires_at"))
