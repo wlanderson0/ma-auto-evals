@@ -338,8 +338,9 @@ def test_l2_on_claude_asks_openrouter_to_cache_its_conversation(monkeypatch):
     the top-level cache_control caches the conversation too, for an hour (issue #54)."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # the client is made, never called
     claude = agent._model("openrouter/anthropic/claude-opus-5.5")
-    assert claude.config.extra_body == {"cache_control": {"type": "ephemeral",
-                                                          "ttl": agent.CACHE_TTL}}
+    assert claude.config.extra_body == {
+        "cache_control": {"type": "ephemeral", "ttl": agent.CACHE_TTL},
+        "provider": {"order": ["anthropic"], "allow_fallbacks": True}}
     assert agent.CACHE_TTL == "1h"
     other = agent._model("openrouter/openai/gpt-6.1-sol")  # caches automatically
     assert other.config.extra_body is None
