@@ -602,6 +602,7 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
             await steering.between_turns()
             if (raised := steering.take_raise()) is not None:
                 lift_backstop(*raised)
+                closing["turns"] = 0  # the raised budget has closing turns of its own
         b = audit.budget()
         if b["remaining_usd"] <= EPSILON:
             # Closing turns: past the budget, but bounded, so the audit can still be

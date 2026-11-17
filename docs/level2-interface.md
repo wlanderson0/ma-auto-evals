@@ -505,7 +505,7 @@ The payloads are closed shapes: `stop`, `pause` and `resume` take `{}`; `budget`
 
 - `stop` is the graceful stop (§7, "By request"): sent during an experiment, it ends it before its next epoch.
 - `pause` holds new launches and stops the audit's clock (the time limit does not run down). A launch waits before its checks, and L2 waits after its turn; both look at the mailbox about once a second, so a resume, a stop, a raise or an answer is still read. A stop or a Ctrl-C ends the pause. An experiment already running finishes the epoch it is in and waits before its next one.
-- `budget` raises the audit's total, from the next experiment on. L2's token backstop rises with it, in proportion. The ledger, `budget()` and the report show the new total and the raise: from, to, by whom, at which step.
+- `budget` raises the audit's total, from the next experiment on. L2's token backstop rises with it, in proportion, and closing turns L2 used past the old total (§7) are not counted against the new one. The ledger, `budget()` and the report show the new total and the raise: from, to, by whom, at which step.
 - `answer` answers L2's open question. The first answer applied wins; the question is then closed.
 - `note` reaches L2 after its current turn, as a message in a fixed frame: who wrote it, that it is a note from a researcher allowed to direct this audit, and that the brief and its limits still hold. Several notes come together, oldest first. A note L2 will not read (it is ending) is refused `ended`. The frame is not a boundary: the tools' refusals and the budget are the protection, and a note that asks for something the brief forbids gets the same refusal L2 would get on its own.
 
