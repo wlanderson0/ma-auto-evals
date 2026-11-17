@@ -27,7 +27,9 @@ The **audit run** is one more Cosmos run beside the experiments'. Its folder hol
   ``brief.json`` (``{"text": <brief.md as given>}``), and ``decisions.json``,
   ``proposed.json`` and ``launches.json``, the audit's JSONL files as JSON arrays (empty
   when the audit has none), so Cosmos reads them by name. ``review.json`` too, copied as
-  it is, when the audit has one;
+  it is, when the audit has one, and, when the audit was steered, ``steer.json`` (its
+  ``steer.jsonl``, every request read from the mailbox, applied or refused) and
+  ``report.json`` (``{"steered": n}``);
 - L2's outputs as documents (Cosmos spec 16 §4.6), each only when the audit has it:
   ``writeup.md``, byte for byte; the images: every ``.png``, ``.jpg``, ``.jpeg`` and
   ``.webp`` directly under ``figures/``, and any other the write-up embeds by a path
@@ -179,6 +181,10 @@ def export_audit(audit: Path, out: Path, *, pr: int | None = None,
         **{name: jsonl(audit / f"{name}.jsonl") for name in JSONL}}
     if (audit / "claims.json").exists():  # absent until L2 ends the audit
         files["claims"] = json.loads((audit / "claims.json").read_text())
+    if (audit / "steer.jsonl").exists():  # only a steered audit has these
+        files["steer"] = jsonl(audit / "steer.jsonl")
+    if (audit / "report.json").exists():
+        files["report"] = json.loads((audit / "report.json").read_text())
     (out / "study").mkdir()
     for name, data in files.items():
         (out / "study" / f"{name}.json").write_text(json.dumps(data, indent=2) + "\n")
@@ -245,15 +251,16 @@ def images(audit: Path) -> list[str]:
 
 def _inside(audit: Path, src: str) -> str | None:
     """``src`` as a normalised path relative to the audit directory, when it names a
-    regular file inside it (the links on its way resolved); ``None`` otherwise."""
+    regular file inside it (the links on its way resolved, none out of ``figures/``:
+    ``tools.embedded``); ``None`` otherwise."""
+    from experiments.l2.tools import embedded
+
     if Path(src).is_absolute() or "://" in src or "\\" in src:
         return None
     rel = posixpath.normpath(src)
     if rel in (".", "..") or rel.startswith(("../", "/")):
         return None
-    root = audit.resolve()
-    path = (root / rel).resolve()
-    return rel if path.is_relative_to(root) and path.is_file() else None
+    return rel if embedded(audit, rel) is not None else None
 
 
 def _copy_images(audit: Path, out: Path, say: Callable[[str], None]) -> None:
@@ -323,6 +330,8 @@ def figures_json(audit: Path, out: Path,
     calls = figure_calls(audit)
     entries = []
     for sidecar in sorted((audit / FIGURES).glob("*.json")):
+        if sidecar.is_symlink() or not sidecar.is_file():
+            continue  # never read through a link: figures/ is written by L2's code
         path = sidecar.with_suffix(".png").relative_to(audit).as_posix()
         if not (Path(out) / path).is_file():
             continue  # the image was left out, or never drawn: a JSON of L2's own

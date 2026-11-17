@@ -155,6 +155,13 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   - `orbit_audit_seat_turn` (`auditor/seat.py`): `branch`, `revision`, `seat`,
     `content`, `tool_calls`, `dropped_calls`.
   - `orbit_audit_timeline_error` (`timeline.py`): `error`, `message`.
+  - `l2_steer` (`experiments/l2/steer.py`), with `source="l2"`, not `orbit_audit`, and
+    only in L2's own eval log (`<audit>/l2/*.eval`) of a steered audit: `version`
+    (`EVENT_VERSION`), `id`, `kind`, `via` (`cosmos` or `local`), `author` (the inbox
+    line's author object), `text` (or null), `payload` and `at_step`. One per request the
+    audit applied. The mailbox it comes from (`program.json`, `inbox.jsonl`,
+    `outbox.jsonl`, schema `cosmos.steer/1`) is Cosmos spec 22 §5, documented in
+    `docs/level2-interface.md` §7.1; a change to either needs the matching change there.
   - Any other `event` with `source="orbit_audit"` becomes a parse warning.
   - Values inside these events are hardcoded too: op names (`ops.py`),
     `BranchStatus` values (`branches.py`; `completed` marks the adopted
@@ -184,7 +191,8 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   experiment, where `probes` gives each variant's probe question, options and `adopted`
   answer; `{id, name, role: "audit", runs: {"exp-<n>": "<slug>"}}` on the audit run), and the
   audit run carries `study/claims.json`, `ledger.json`, `brief.json`, `decisions.json`,
-  `proposed.json`, `launches.json` and `review.json`, read by name, and (Cosmos spec 16
+  `proposed.json`, `launches.json` and `review.json`, read by name, `steer.json` and
+  `report.json` (`{"steered": n}`) when the audit was steered, and (Cosmos spec 16
   §4.6) `writeup.md`, the images under `figures/` and any other the write-up embeds (at
   their paths in the audit), `report.html` (the audit's `report.md`), `study/writeup.json`
   (`final`, `body_line`, `facts`, `embeds`, `missing`) and `study/figures.json` (per

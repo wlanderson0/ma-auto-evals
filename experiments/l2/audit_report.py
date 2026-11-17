@@ -6,8 +6,9 @@ variant run with what it changed and why, the tables the conclusions rest on
 (every distinct comparison and score table L2 asked for, read again from the
 logs), the search counts (counted from the record, not taken from L2), where L2's
 reading departed from the guidance (checked automatically; L2's own account is in
-its conclusions), the decisions L2 recorded, and the ledger. It is written when L2
-ends the audit and again when the run finishes (with the final ledger), so it is
+its conclusions), the decisions L2 recorded, the requests that steered it (when it was
+steered: ``steer.jsonl``; ``report.json`` then counts them) and the ledger. It is written
+when L2 ends the audit and again when the run finishes (with the final ledger), so it is
 always complete. Records it cannot read in part (a line cut by a crash) are noted,
 never fatal.
 """
@@ -39,6 +40,8 @@ RECORD = {
                 "the numbers it was drawn from), and L2's own",
     "cosmos.json": "Cosmos links to the claims' runs and messages (experiments.l2.cosmos_links)",
     "ledger.json": "spend by kind, reserve, remaining",
+    "steer.jsonl": "every request read from the steering mailbox, applied or refused",
+    "report.json": "the report's counts: steered, the requests applied other than stop",
     "experiments/": "one milestone 1 audit directory per launch (eval logs under logs/)",
     "l2/": "L2's own Inspect log",
     "report.md": "this report",
@@ -126,6 +129,14 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
     out += [f"Status: {status}. {where}", ""]
+    if audit.sandbox is not None:
+        out += [f"L2's own code (`run_python`, the check of a written scenario) ran in a "
+                f"sandbox ({audit.sandbox.kind}): no network, writes only under `figures/`. "
+                + ("L2 could write scenarios, whose code runs outside it (in the audit's "
+                   "process and in each epoch)." if audit.writes_scenarios else
+                   "The scenarios written before this audit were imported into its process, "
+                   "outside the sandbox." if audit.holds_scenarios else
+                   "L2 could write no scenarios, so none of its code ran outside it."), ""]
     if writeup_text(tools) is not None:
         out += ["L2's readable write-up, with tables and figures, is in `writeup.md`; this "
                 "report is the record it rests on.", ""]
@@ -279,6 +290,8 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += ["", "L2's own account of where it departed from the guidance is in its "
             "conclusions.", ""]
 
+    out += _steering(tools)
+
     b = audit.budget()
     out += ["## Ledger", "",
             f"- Budget ${b['budget_usd']:.2f}; spent ${b['spent_usd']:.4f}; remaining "
@@ -295,6 +308,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             "tokens)" for model, row in b["l2_by_model"].items()]
     if tools.review is not None:
         out.append(f"- Of L2's own calls, the reviewer's: ${tools.review.get('cost_usd') or 0:.4f}")
+    out += [f"- Budget raised from ${r['from']:.2f} to ${r['to']:.2f} by {_inline(r['by'])} at "
+            f"step {r['at_step']}" for r in b.get("raised", [])]
+    if audit.paused():
+        out.append(f"- Paused for {audit.paused():.0f} s (the audit's clock stopped)")
     if b["stopped"]:
         out.append(f"- Stopped: {b['stopped']}")
     if b["halted"]:
@@ -310,6 +327,36 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- `{name}`: {what}" for name, what in RECORD.items()
             if (audit.out / name.rstrip("/")).exists() or name in ("trace.jsonl", "report.md")]
     return "\n".join(out) + "\n"
+
+
+def _steering(tools: Tools) -> list[str]:
+    """The requests that steered the audit, applied and refused (``steer.jsonl``); nothing
+    for an audit that was not steered."""
+    rows = _jsonl(tools.audit.out / "steer.jsonl")
+    if tools.audit.steering is None and not rows:
+        return []
+    applied = [r for r in rows if r.get("state") == "applied"]
+    out = ["## Steering", "",
+           f"{len(applied)} request(s) applied, {len(rows) - len(applied)} refused, from the "
+           "mailbox (`steer.jsonl`); applied text is quoted as it reached L2.", ""]
+    for row in rows:
+        author = row.get("author") or {}
+        by = (f"{author['local']}, on the machine" if "local" in author
+              else author.get("login") or "unknown")
+        what = row.get("kind") or "a malformed line"
+        if row.get("kind") == "budget":
+            what += f" to ${(row.get('payload') or {}).get('usd')}"
+        elif row.get("kind") == "answer":
+            what += f" to {(row.get('payload') or {}).get('ask_key')}: " + str(
+                (row.get("payload") or {}).get("choice", "text only"))
+        line = (f"- {_inline(what)} from {_inline(by)}: "
+                + (f"applied at step {row.get('at_step')}" if row.get("state") == "applied"
+                   else f"refused ({row.get('reason')})"))
+        out.append(line + (f": {_inline(row['text'])}" if row.get("state") == "applied"
+                           and row.get("text") else ""))
+    if not rows:
+        out.append("None read.")
+    return [*out, ""]
 
 
 def _inline(value: Any) -> str:
@@ -744,6 +791,10 @@ def how_it_ended(tools: Tools, why_no_conclusions: str | None = None) -> str:
 
 def write_report(tools: Tools, why_no_conclusions: str | None = None) -> Path:
     write_writeup(tools, why_no_conclusions)  # first: the report's record lists it
+    if tools.audit.steering is not None:
+        steered = sum(1 for row in _jsonl(tools.audit.out / "steer.jsonl")
+                      if row.get("state") == "applied" and row.get("kind") != "stop")
+        (tools.audit.out / "report.json").write_text(json.dumps({"steered": steered}) + "\n")
     path = tools.audit.out / "report.md"
     path.write_text(render(tools, why_no_conclusions))
     return path
@@ -785,7 +836,9 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
     return [
         ("Question", " ".join(audit.brief.question.split())),
         ("L2", ", ".join(b["l2_by_model"]) or "unknown"),
-        ("Budget", f"${audit.brief.budget_usd:.2f}; ${b['spent_usd']:.4f} spent "
+        ("Budget", f"${b['budget_usd']:.2f}"
+                   + (f" (raised from ${audit.brief.budget_usd:.2f})" if b.get("raised")
+                      else "") + f"; ${b['spent_usd']:.4f} spent "
                    f"(${usd['l2']:.4f} on L2's own calls"
                    + (f", of which ${reviewer:.4f} the reviewer" if reviewer else "")
                    + f"; ${usd['experiments']:.4f} on runs)"),

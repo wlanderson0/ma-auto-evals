@@ -27,6 +27,9 @@ for L2 rather than an exception.
   reads L2's draft, with the claims' verdicts and the query tools (``READ``), and its
   critique comes back to L2, which then revises once with ``end_audit`` (``response``: how
   it answered); saved in ``review.json``.
+- ``ask_researcher(question, choices, ...)`` and ``reply_researcher(text, note_id)``, only
+  in a steered audit (``experiments.l2.steer``): a question to the researchers, which waits
+  for an answer or its timeout, and a reply to their notes.
 
 Outputs are short by default: small plain tables, the first N posts or matches. L2 sees
 each result after its call number (`[call N]`, the call's `seq` in `trace.jsonl`), and each
@@ -40,6 +43,7 @@ import hashlib
 import json
 import keyword
 import math
+import posixpath
 import re
 import time
 import urllib.parse
@@ -52,11 +56,11 @@ from typing import Any
 import anyio
 from inspect_ai.log import read_eval_log
 from inspect_ai.log import transcript as inspect_transcript
-from inspect_ai.tool import Tool, ToolError, tool
+from inspect_ai.tool import Tool, ToolError, tool, tool_with
 from markdown_it import MarkdownIt
 
 from experiments.l2 import claims as claims_
-from experiments.l2 import figures, workspace
+from experiments.l2 import figures, steer, workspace
 from experiments.l2 import written as written_
 from experiments.l2.apply import recorded_inner
 from experiments.l2.audit import Audit
@@ -66,6 +70,7 @@ from experiments.l2.experiment import variant_from
 from experiments.l2.model import L2Brief, Variant
 from experiments.l2.report import SCORER as MEASURE_SCORER
 from experiments.l2.results import INCOMPLETE, VALUES, Results, SampleResult
+from experiments.l2.sandbox import SandboxFailed
 from experiments.scenarios import SCENARIOS
 from experiments.scorers import read_sample
 
@@ -75,7 +80,7 @@ TRACE_CHARS = 4000
 """Results longer than this are cut in ``trace.jsonl`` (the full text went to L2)."""
 POST_CHARS = 600
 """Posts longer than this are cut in tool output."""
-FREE = ("budget", "request_review", "end_audit")
+FREE = ("budget", "request_review", "end_audit", "reply_researcher")
 """Tools that still run after the hard stop."""
 READ = ("list_runs", "scores", "transcript", "find")
 """The query tools the reviewer may use (read only: no code, no runs)."""
@@ -84,7 +89,24 @@ MAKES = ("run_experiment", "write_scenario")
 ENTRY_KEYS = VARIANT_KEYS | {"control"}
 SCORERS = (*VALUES, "seat_dose")
 TOOLS = ("run_experiment", "write_scenario", "list_runs", "scores", "transcript", "find",
-         "run_python", "note_decision", "budget", "request_review", "end_audit")
+         "run_python", "note_decision", "budget", "request_review", "end_audit",
+         "ask_researcher", "reply_researcher")
+STEERED = ("ask_researcher", "reply_researcher")
+"""Tools offered only when the audit is steered."""
+SANDBOXED_RUN_PYTHON = (
+    "Run your own Python on the audit's logs, e.g. to compute a measure the other tools do "
+    "not give. It runs in a fresh process each call, in a sandbox, with the audit directory "
+    "as its working directory. It can read the audit's runs and nothing else of the "
+    "machine: L2_SOURCES (environment) lists the directories the runs are in, separated by "
+    "':', each with runs.jsonl (one row per variant: its recorded variant and its eval log "
+    "paths, relative to that directory, one per epoch). Read the logs with "
+    "inspect_ai.log.read_eval_log (each has one sample, with its scores and store); pandas "
+    "and matplotlib are available. It can write only under figures/ (save figures for "
+    f"your write-up there). It has no network and no API keys. It may be unable to start "
+    "other processes (on macOS it cannot). It is stopped after "
+    f"{workspace.TIME_LIMIT} seconds, and output past {workspace.OUTPUT_CHARS} characters "
+    "is cut: print what you need.")
+"""``run_python``'s description when the audit runs it in a sandbox (``Audit.sandbox``)."""
 
 
 class Refused(Exception):
@@ -192,6 +214,8 @@ class Tools:
         self.written = audit.written()
         """The audit's written scenarios (always allowed bases)."""
         self._seq = len(self.trace())
+        if audit.steering is not None:  # a step is L2's tool call number, as L2 sees it
+            audit.steering.step = lambda: self._seq
 
     # ------------------------------------------------------------ dispatch
     def call(self, name: str, /, **args: Any) -> tuple[bool, str]:
@@ -217,6 +241,9 @@ class Tools:
             if name == "request_review":  # it runs the reviewer: see reviewed_call
                 raise Refused("refused: request_review needs the reviewer, which runs only "
                               "inside the L2 agent")
+            if name == "ask_researcher":  # it waits for an answer: see asked_call
+                raise Refused("refused: ask_researcher waits for an answer, which it does "
+                              "only inside the L2 agent")
             ok, text = True, getattr(self, name)(**args)
         except Exception as error:
             ok, text = False, _failure(error)
@@ -256,10 +283,28 @@ class Tools:
                        first_line=(text.strip().splitlines() or [""])[0])
         return True, text, number
 
+    async def asked_call(self, /, **args: Any) -> tuple[bool, str, int]:
+        """``ask_researcher``: the question goes to the mailbox and the call waits for an
+        answer, a stop or its timeout (``steer.Steering.ask``). Numbered like any call."""
+        self.audit.say("tool", name="ask_researcher", done=False)
+        self._seq += 1
+        seq = self._seq
+        try:
+            args = self._admit("ask_researcher", args, "l2")
+            ok, text = True, await self.audit.steering.ask(**args)
+        except Exception as error:
+            ok, text = False, _failure(error)
+        number = self._trace("ask_researcher", args, ok, text, seq)
+        self.audit.say("tool", name="ask_researcher", done=True, ok=ok,
+                       first_line=(text.strip().splitlines() or [""])[0])
+        return ok, text, number
+
     def _admit(self, name: str, args: dict[str, Any], by: str) -> dict[str, Any]:
         """The call's arguments if it may run now; ``Refused`` if not."""
         if name not in TOOLS:
             raise Refused(f"unknown tool {name!r}")
+        if name in STEERED and self.audit.steering is None:
+            raise Refused(f"refused: {name} needs a steered audit, and this one is not")
         if by == "reviewer" and name not in READ:
             raise Refused(f"refused: the reviewer can use only {', '.join(READ)}")
         if self.audit.ended and name != "budget":
@@ -486,6 +531,8 @@ class Tools:
                 + (f" Time: {max(b['time_left_s'], 0) / 60:.1f} min left of "
                    f"{b['time_limit_s'] / 60:.1f} min ({b['time_reserve_s'] / 60:.1f} min "
                    "held back for your report)." if b["time_limit_s"] is not None else "")
+                + "".join(f" The budget was raised from ${r['from']:.2f} to ${r['to']:.2f} by "
+                          f"{r['by']} at step {r['at_step']}." for r in b.get("raised", []))
                 + (f" STOPPED: {b['stopped']}." if b["stopped"] else "")
                 + (f" STOPPING: {b['halted']}; no new experiment starts: conclude."
                    if b["halted"] and not b["stopped"] else ""))
@@ -574,7 +621,11 @@ class Tools:
             f" up to round {rounds}" if rounds is not None else "")
         try:
             compared = self.results().compare(a, b, scorer, rounds=rounds, field=field)
-            path = figures.compare_figure(compared, a, b, measure, self.audit.out / name)
+            target = self.audit.out / name
+            for planted in (target, target.with_suffix(".json")):  # never write through a
+                if planted.is_symlink() or (planted.exists() and not planted.is_file()):
+                    planted.unlink()  # link (or onto a fifo) left in figures/
+            path = figures.compare_figure(compared, a, b, measure, target)
             # what the image shows, as drawn (the Cosmos export reads it: figures.json)
             path.with_suffix(".json").write_text(json.dumps(
                 {"compared": compared, "a": a, "b": b, "scorer": scorer, "field": field,
@@ -761,7 +812,11 @@ class Tools:
     def run_python(self, code: str) -> str:
         if not isinstance(code, str) or not code.strip():
             raise Refused("code is required: the Python to run")
-        return workspace.run_python(code, self.audit.out, self.audit.sources())
+        try:
+            return workspace.run_python(code, self.audit.out, self.audit.sources(),
+                                        self.audit.sandbox)
+        except SandboxFailed as error:  # never run outside the sandbox
+            raise Refused(f"refused: {error}") from error
 
     def write_scenario(self, name: str, code: str) -> str:
         """Check ``code`` in a subprocess without keys, then save it as ``name``."""
@@ -784,7 +839,10 @@ class Tools:
                           "version needs a new name, so runs of two versions never mix")
         if not isinstance(code, str) or not code.strip():
             raise Refused("code is required: the module's Python source")
-        passed, text = written_.check_code(name, code)
+        try:
+            passed, text = written_.check_code(name, code, audit.sandbox)
+        except SandboxFailed as error:  # never checked outside the sandbox
+            raise Refused(f"refused: {error}. Nothing was saved.") from error
         if not passed:
             kept = (f" Nothing was saved; the earlier version of {name} is kept."
                     if name in self.written else " Nothing was saved.")
@@ -807,6 +865,9 @@ class Tools:
         with (self.audit.out / "decisions.jsonl").open("a") as file:
             file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
         return f"Recorded: {field} = {_short(value, 200)}."
+
+    def reply_researcher(self, text: str, note_id: str | None = None) -> str:
+        return self.audit.steering.reply(text, note_id)
 
     def budget(self) -> str:
         b = self.audit.budget()
@@ -955,19 +1016,41 @@ def embeds(writeup: str | None) -> list[str]:
 
 def embedded(out: Path, src: str) -> Path | None:
     """The file an embed ``src`` names in the audit directory ``out``, by a path relative
-    to it; ``None`` when it names none."""
+    to it (normalised first); ``None`` when it names none. A link in ``figures/``, where
+    ``run_python``'s code writes, is followed only to a file inside ``figures/``
+    (``leaves_figures``), so a link that code planted never leads to another file of the
+    audit (``l2/`` holds L2's own log)."""
+    if Path(src).is_absolute() or "://" in src:
+        return None
     out = Path(out).resolve()
-    path = (out / src).resolve()
-    if (Path(src).is_absolute() or "://" in src or not path.is_relative_to(out)
-            or not path.is_file()):
+    rel = posixpath.normpath(src)
+    path = (out / rel).resolve()
+    if not path.is_relative_to(out) or not path.is_file() or leaves_figures(out, rel):
         return None
     return path
+
+
+def leaves_figures(out: Path, rel: str) -> bool:
+    """Whether the way to ``rel`` (normalised, relative to the resolved audit directory
+    ``out``) follows a link out of ``figures/``: ``figures/`` itself is a link, or a link
+    that lies in it resolves outside it. Each step is read with ``lstat``."""
+    folder = out / figures.FIGURES
+    if folder.is_symlink():
+        return Path(rel).parts[:1] == (figures.FIGURES,)
+    path = out
+    for part in Path(rel).parts:
+        path = path / part
+        if (path.is_symlink() and path.parent.resolve().is_relative_to(folder)
+                and not path.resolve().is_relative_to(folder)):
+            return True
+    return False
 
 
 def _failure(error: Exception) -> str:
     """What L2 sees of a refused or failed call (a bug or a bad argument included: the
     audit goes on)."""
-    return str(error) if isinstance(error, Refused) else f"error: {type(error).__name__}: {error}"
+    return (str(error) if isinstance(error, Refused | steer.Refusal)
+            else f"error: {type(error).__name__}: {error}")
 
 
 def post_ref(post: Mapping[str, Any]) -> int | str:
@@ -1127,13 +1210,14 @@ def _positive(value: Any, name: str) -> None:
 def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = None,
                   experiments: bool = True, scenarios: bool = True,
                   review: Callable[[Tools, dict[str, Any]], Any] | None = None,
-                  by: str = "l2") -> list[Tool]:
+                  by: str = "l2", steered: bool = False) -> list[Tool]:
     """The tools as Inspect tools for an agent. ``spend`` gives L2's own spend so far
     (``transcript_spend``); it is read before every call so the hard stop sees it.
     ``experiments=False`` leaves out ``run_experiment`` (an analysis-only audit), and
     ``scenarios=False`` leaves out ``write_scenario`` (``Audit.writes_scenarios``).
     ``review`` (the reviewer, ``agent.reviewer``) adds ``request_review``. ``by="reviewer"``
-    gives the reviewer's tools: the query tools only (``READ``). A refused call raises
+    gives the reviewer's tools: the query tools only (``READ``). ``steered`` adds
+    ``ask_researcher`` and ``reply_researcher`` (``STEERED``). A refused call raises
     ``ToolError``, so a refused ``end_audit`` never ends the agent."""
 
     def refresh(name: str, args: dict[str, Any]) -> None:
@@ -1159,6 +1243,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
         if name in ("run_experiment", "run_python", "write_scenario"):  # subprocesses
             ok, text, seq = await anyio.to_thread.run_sync(
                 partial(tools.numbered_call, name, by, **args))
+            if tools.audit.steering is not None:  # what the launch applied, now on the loop
+                tools.audit.steering.flush()
         else:
             ok, text, seq = tools.numbered_call(name, by, **args)
         return answer(ok, text, seq)
@@ -1423,10 +1509,54 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                               writeup=writeup, response=response)
         return execute
 
+    @tool
+    def ask_researcher() -> Tool:
+        async def execute(question: str, choices: list[str], default: str | None = None,
+                          timeout_s: float | None = None, allow_text: bool = False,
+                          cost_usd: float | None = None) -> str:
+            """Ask the researchers running this audit a question, and wait for the answer:
+            one of the choices you offer (and, if you allow it, their text). Use it before
+            a step they may want to decide, such as an experiment that spends much of the
+            budget. If nobody answers in time, the default applies.
+
+            Args:
+                question: The question, in a few plain sentences.
+                choices: One to four short answers they can pick (e.g. ["Approve",
+                    "Skip"]).
+                default: The choice that applies if nobody answers in time.
+                timeout_s: Seconds to wait (default 300, at most 1800 and never past the
+                    audit's time limit).
+                allow_text: Whether they may answer in words as well.
+                cost_usd: What the step you ask about would cost, if it has a cost.
+            """
+            args = {"question": question, "choices": choices, "default": default,
+                    "timeout_s": timeout_s, "allow_text": allow_text, "cost_usd": cost_usd}
+            refresh("ask_researcher", args)
+            return answer(*await tools.asked_call(**args))
+        return execute
+
+    @tool
+    def reply_researcher() -> Tool:
+        async def execute(text: str, note_id: str | None = None) -> str:
+            """Reply to the researchers running this audit, e.g. to a note they sent you.
+            What you say only in your own turns stays in your transcript; this is what
+            they read. It still works after the hard stop.
+
+            Args:
+                text: Your reply, at most 4000 characters.
+                note_id: The id of the note you answer (its frame names it), if any.
+            """
+            return await call("reply_researcher", text=text, note_id=note_id)
+        return execute
+
     if by == "reviewer":
         return [list_runs(), scores(), transcript(), find()]
-    made = [list_runs(), scores(), transcript(), find(), run_python(),
-            note_decision(), budget()]
+    python = run_python()
+    if getattr(tools.audit, "sandbox", None) is not None:  # what L2 reads says the truth
+        python = tool_with(python, description=SANDBOXED_RUN_PYTHON)
+    made = [list_runs(), scores(), transcript(), find(), python,
+            note_decision(), budget(),
+            *([ask_researcher(), reply_researcher()] if steered else [])]
     return (([run_experiment()] if experiments else [])
             + ([write_scenario()] if scenarios else []) + made
             + ([request_review()] if review is not None else []) + [end_audit()])
