@@ -60,7 +60,7 @@ Each reproduces on the unmodified code. Classes: *reachable* (a scenario or brie
 
 Design observations for the team (not bugs):
 
-- **Forging without counting the forged agent.** Under `agents={alice}`, `override_tool_result` or `simulate_tool_result` on Alice's `channel_read` can show her words attributed to Carol, while the equivalent `rewrite_message(recipients=("alice",))` is rejected because it counts Carol. Under D2 (a) this is outside the theorem; deciding D2 (b) would make it a finding.
+- **Forging without counting the forged agent.** Under `agents={alice}`, `override_tool_result` or `simulate_tool_result` on Alice's `channel_read` can show her words attributed to Carol, while the equivalent `rewrite_message(recipients=("alice",))` is rejected because it counts Carol. Under D2 (a), now decided, this is outside the theorem and harmless under a seat scope (see D2).
 - **Nested scopes are unbounded.** An L2 inner scope comes from its brief and is not bounded by any parent scope; for activations L2 requires `agents=None`, wider than the helper's seat scope.
 
 ## Model notes (step 2 review)
@@ -84,6 +84,7 @@ Design observations for the team (not bugs):
   - (a) Only overlay changes count. Then generation ops that post (`tests/contract/test_scope.py:31-33, 62-69` relies on this: the seat's post flips the reviewer) and tool ops on channel tools are fine as they are.
   - (b) Anything that changes what another agent reads counts. Then posting via a generation op, blocking/simulating `channel_post`, and overriding/simulating `channel_read` must count the recipients, or the forged sender, as affected, which breaks the seat brief.
   Currently the code mixes them: `rewrite_message(recipients=("alice",))` counts the sender, while an equivalent `override_tool_result` on Alice's `channel_read` does not.
+  **Decided (17 Nov 2026): (a).** Under a seat scope the auditor tests the other agents through the seat. Forging what the seat reads (a faked `channel_read` result) reaches only the seat, whose inputs are not measured and whose words the auditor already controls; it cannot change what an out-of-scope agent receives or does, which both routes block. So the mismatch with `rewrite_message` is kept and documented, not closed. Guardrail: if a brief's scope includes an agent whose behaviour is measured, read a forged `channel_read` result by that agent as auditor input when analysing the run (it is labelled auditor-authored in the evidence). Revisit, by counting the quoted sender for tool results on channel tools, if L1 or L2 briefs start scoping measured agents.
 - **D3. Turns.** Add "whose turns it adds, removes or reorders" to the definition? It's needed for G1 to be a violation of property 2, and interacts with D1.
 
 ## Lean model boundary
