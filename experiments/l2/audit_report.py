@@ -34,7 +34,9 @@ RECORD = {
     "claims.json": "L2's claims, each with its evidence, verdict and the checker's reasons",
     "review.json": "the reviewer's critique of L2's draft, the draft, and L2's response",
     "writeup.md": "L2's write-up: a readable results report, under the audit's facts",
-    "figures/": "the write-up's figures: one per comparison L2 made, and L2's own",
+    "writeup.json": "the write-up's facts, whether it is final, and the line L2's text starts",
+    "figures/": "the write-up's figures: one per comparison L2 made (each with a .json of "
+                "the numbers it was drawn from), and L2's own",
     "cosmos.json": "Cosmos links to the claims' runs and messages (experiments.l2.cosmos_links)",
     "ledger.json": "spend by kind, reserve, remaining",
     "experiments/": "one milestone 1 audit directory per launch (eval logs under logs/)",
@@ -756,12 +758,21 @@ def writeup_text(tools: Tools) -> tuple[str, bool] | None:
     return (draft, False) if draft else None
 
 
-def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path | None:
-    """``writeup.md`` (spec §6.6): the audit's facts, from the record, then L2's write-up."""
+def writeup_parts(tools: Tools, why_no_conclusions: str | None = None) -> tuple[
+        list[tuple[str, str]], bool, int] | None:
+    """What ``writeup.md`` is made of besides L2's text: the audit's facts (name, value),
+    whether the write-up is final, and the 1-based line of the file where L2's own text
+    starts. ``None`` when there is no write-up."""
     found = writeup_text(tools)
     if found is None:
         return None
     text, final = found
+    final = final and tools.ended_by_harness is None
+    facts = _facts(tools, text, why_no_conclusions)
+    return facts, final, len(_head(tools, facts, final)) + 1
+
+
+def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tuple[str, str]]:
     audit = tools.audit
     b = audit.budget()
     usd = b["by_kind"]
@@ -771,7 +782,7 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
         ran.setdefault(v["experiment"], []).append(f"{v['id']} × {v['epochs']}")
     t = audit.clock_state()
     broken = tools.broken_embeds(text)
-    facts = [
+    return [
         ("Question", " ".join(audit.brief.question.split())),
         ("L2", ", ".join(b["l2_by_model"]) or "unknown"),
         ("Budget", f"${audit.brief.budget_usd:.2f}; ${b['spent_usd']:.4f} spent "
@@ -792,20 +803,37 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),
     ]
+
+
+def _head(tools: Tools, facts: list[tuple[str, str]], final: bool) -> list[str]:
+    """``writeup.md``'s lines before L2's text."""
     why_draft = ("did not end the audit, so the harness ended it with its reviewed draft"
                  if tools.ended_by_harness is not None else
                  "gave no final write-up" if tools.conclusions is not None
                  else "did not end the audit")
-    draft = not final or tools.ended_by_harness is not None
-    lines = [f"# {audit.out.name}: L2's write-up", "",
-             *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
-                "revised.", ""] if draft else []),
-             "| | |", "|---|---|", *[f"| {name} | {_cell(value)} |" for name, value in facts],
-             "", "The table above is the harness's, from the record. Everything below is "
-             "L2's own: its numbers are not checked here; its checked claims, with their "
-             "evidence, are in `report.md`.", "", "---", "", text, ""]
-    path = audit.out / "writeup.md"
-    path.write_text("\n".join(lines))
+    return [f"# {tools.audit.out.name}: L2's write-up", "",
+            *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
+               "revised.", ""] if not final else []),
+            "| | |", "|---|---|", *[f"| {name} | {_cell(value)} |" for name, value in facts],
+            "", "The table above is the harness's, from the record. Everything below is "
+            "L2's own: its numbers are not checked here; its checked claims, with their "
+            "evidence, are in `report.md`.", "", "---", ""]
+
+
+def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path | None:
+    """``writeup.md`` (spec §6.6): the audit's facts, from the record, then L2's write-up.
+    ``writeup.json`` beside it keeps the parts (``writeup_parts``) for the Cosmos export."""
+    parts = writeup_parts(tools, why_no_conclusions)
+    if parts is None:
+        return None
+    facts, final, body_line = parts
+    text, _ = writeup_text(tools) or ("", final)
+    path = tools.audit.out / "writeup.md"
+    path.write_text("\n".join([*_head(tools, facts, final), text, ""]))
+    (tools.audit.out / "writeup.json").write_text(json.dumps(
+        {"final": final, "body_line": body_line,
+         "facts": [{"name": name, "value": value} for name, value in facts]},
+        indent=2) + "\n")
     return path
 
 
