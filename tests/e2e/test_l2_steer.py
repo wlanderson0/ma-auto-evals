@@ -1,5 +1,5 @@
 """Steering a running audit through its mailbox (Cosmos spec 22 §6; ``experiments.l2.steer``;
-contract test L2-25 of ``docs/level2-interface.md``).
+contract test L2-26 of ``docs/level2-interface.md``).
 
 Scripted audits (the fake L2, mock experiments), steered with the local command
 (``steer.main`` with ``--dir``) or with lines written straight to the inbox where a test
@@ -686,6 +686,27 @@ def test_a_budget_raise_lifts_l2_s_token_backstop(tmp_path):
     assert audit.budget()["budget_usd"] == 0.02
     assert [(e["kind"], e["payload"]) for e in steer_events(log)] == [
         ("budget", {"usd": "0.02"})]
+
+
+def test_a_budget_raise_gives_l2_its_closing_turns_again(tmp_path):
+    """$0.0012 a call and $0.003: L2 is two closing turns past the budget when it is raised
+    to $0.008. When that is spent too, L2 has all its closing turns to get its review and
+    end the audit (with the two it used before, the harness would end it after the review)."""
+    prices = {"mockllm/l2": (1.0, 2.0)}
+    draft = {"conclusions": "Draft.", "claims": "[]", "writeup": "Draft."}
+    final = {"conclusions": "Final.", "claims": "[]", "writeup": "Final.", "response": "Kept."}
+    script = [("list_runs", {})] * 7 + [("request_review", draft), ("end_audit", final)]
+    audit, box = steered(tmp_path, budget=0.003, max_budget=Decimal("1"))
+    tools = Tools(audit, on_end=write_report)
+
+    def before(turn):
+        if turn == 4:  # after two turns past the budget
+            send(box, "budget", "0.008")
+
+    run_l2(tools, fake_model(script, before=before), PROMPT, prices=prices,
+           token_limit=10**6)
+    assert audit.budget()["budget_usd"] == 0.008
+    assert tools.conclusions == "Final." and tools.ended_by_harness is None
 
 
 # --------------------------------------------------------------- L2's questions

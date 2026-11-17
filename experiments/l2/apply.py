@@ -133,6 +133,9 @@ def activation(mutation: Mutation, team: TeamSetup) -> Activation:
     if not POSITION.fullmatch(str(args["position"])):
         raise ApplyError(f"activate_agent position must be 'after:<agent>' or "
                          f"'before:<agent>', got {args['position']!r}")
+    if team.phased is not None:
+        raise ApplyError("activate_agent cannot add an agent to phased rounds: write a "
+                         "scenario whose phases include it")
     try:
         turns = team.turns_per_round()
     except ValueError as error:

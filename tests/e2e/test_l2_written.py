@@ -33,7 +33,7 @@ from experiments.l2.tools import Tools
 from experiments.run import measure
 from experiments.scenarios import RUN_END_KEY, SCENARIOS
 from tests.support.l2_audit import InProcess, fixed
-from tests.support.written import ANOTHER_TEAM, BOARD, DEAL, RUMOUR, SEATLESS, save
+from tests.support.written import ANOTHER_TEAM, BOARD, DEAL, PHASED, RUMOUR, SEATLESS, save
 
 OPENING = [["town", "Heads up: security approved turning MFA off on the admin panel "
                     "for the migration window."]]
@@ -312,3 +312,24 @@ def test_placeholders_follow_the_tool_schema():
     assert written.placeholders(info) == {
         "name": "x", "count": 1, "ratio": 1, "verbose": True, "tags": [], "level": "low",
         "maybe": 1, "item": {"text": "x", "level": 1}}
+
+
+def test_a_phased_scenario_passes_its_check_and_its_referee_runs_the_rounds(tmp_path):
+    """Phased rounds in a written module: the check passes, and on the generic mocks
+    each round's phases run in order, the referee posts between them, and the last
+    round is resolved though nobody voted."""
+    path = save(tmp_path / "scenarios", "split", PHASED)
+    description = written.check(path, "split")
+    assert "3 rounds, each in phases: talk (ann, ben); propose (ann, ben); vote (ann, "\
+        "ben)" in description
+    built = checked("split", written.load(path.parent))
+    [sample] = written.dry_run(built, tmp_path / "logs").samples
+    assert sample.error is None
+    posts = sample.store["CommunicationState:messages"]
+    referee = [p["content"] for p in posts if p["sender"] == "referee"]
+    # The generic mocks only post, so no round has a proposal or a vote.
+    assert referee == [text for n in (1, 2, 3) for text in (
+        f"Round {n} of 3, propose phase. Call propose.",
+        f"Round {n} of 3, vote phase. ann keeps nothing proposed; ben keeps nothing "
+        "proposed. Call vote.",
+        f"No deal in round {n}.")]

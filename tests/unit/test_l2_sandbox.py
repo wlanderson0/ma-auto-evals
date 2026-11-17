@@ -1,5 +1,5 @@
 """L2's sandbox, the pure parts (``experiments.l2.sandbox``; spec
-``docs/level2-interface.md`` §6, §12, contract test L2-26): the ``bwrap`` command line
+``docs/level2-interface.md`` §6, §12, contract test L2-27): the ``bwrap`` command line
 and the Seatbelt profile for given paths, the environment, the cleaning of the write
 directory and the check's verdict. They run on every platform; ``tests/e2e/test_l2_sandbox.py`` runs the
 real thing."""
@@ -357,7 +357,7 @@ def test_the_seatbelt_profile_lets_a_link_to_the_interpreter_be_followed_not_rea
 def test_the_seatbelt_profile_lists_the_root_and_the_working_directory_and_reads_no_file():
     """macOS 26's loader aborts before the program starts unless it may open ``/``, and
     ``getcwd`` fails unless it may open the working directory: their names, no file in
-    them (contract test L2-26)."""
+    them (contract test L2-27)."""
     profile, params = seatbelt(RUN, "/private/tmp/s")
     [listing] = [block for block in profile.split("\n(allow ") if block.startswith(
         "file-read-data")]

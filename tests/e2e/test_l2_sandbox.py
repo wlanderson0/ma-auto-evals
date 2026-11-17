@@ -1,5 +1,5 @@
 """L2's sandbox, for real (``experiments.l2.sandbox``; spec ``docs/level2-interface.md``
-§6, §12, contract test L2-26; Cosmos spec 20, R18): the check's properties,
+§6, §12, contract test L2-27; Cosmos spec 20, R18): the check's properties,
 ``run_python`` and the scenario check inside it, and the tool refused, never run outside,
 when it cannot start.
 

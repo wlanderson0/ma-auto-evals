@@ -174,7 +174,7 @@ def test_nothing_spends_money_without_live(tmp_path, monkeypatch, extra, what):
 
 def test_an_audit_whose_l2_is_a_model_runs_its_code_in_the_sandbox_by_default(
         tmp_path, monkeypatch, capsys):
-    """Contract test L2-26: L2's code is a model's, so it runs in the sandbox unless
+    """Contract test L2-27: L2's code is a model's, so it runs in the sandbox unless
     ``--no-sandbox`` says otherwise, and the audit does not start where the sandbox does
     not hold. A scripted audit is as before (``test_l2_fake``)."""
     seen = []

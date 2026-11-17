@@ -245,9 +245,10 @@ mistral-small-3.2 reached 16,384 output tokens in L2 audits (`grid-1`, `grid-3-m
 `grid-4-gpt41`, `null-1`) and `rebuild-check`, and llama-3.3-70b 9,984. The board
 calibrations (milestone 5) were not affected in practice: their longest reply was 221
 tokens. Since milestone 6 every agent, judge and probe model of an L2 run carries the
-cap and the reasoning effort (`experiments.l2.experiment.RUN_CONFIG`), except agents
-in a variant that puts them on several different models, which the experiment's
-`decisions.json` lists (`without_run_config`).
+cap and the reasoning effort (`experiments.l2.experiment.RUN_CONFIG`). Until the Orbit
+pin gained per-agent `generate_config`, agents in a variant that put them on several
+different models ran without them; those experiments' `decisions.json` lists them
+(`without_run_config`).
 
 ## Reading the auditor's run in the viewer
 

@@ -53,9 +53,8 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   (`PRICES`), or the audit refuses to start. The agents' models are L2's choice (the
   brief can fix them); written scenarios that name none get `openrouter/openai/gpt-4.1-mini`.
 - Every model of a run gets a 1500-token reply cap and reasoning effort "high"
-  (`RUN_CONFIG` in `experiments/l2/experiment.py`), except agents in a variant that
-  puts them on several different models, which run without them; each experiment's
-  `decisions.json` lists those variants (`without_run_config`).
+  (`RUN_CONFIG` in `experiments/l2/experiment.py`), including agents in a variant that
+  puts them on several different models (each agent's Orbit `generate_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
 - To stop it early with a report, press Ctrl-C once: the experiment running now
