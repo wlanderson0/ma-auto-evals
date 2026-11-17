@@ -2173,7 +2173,7 @@ wheels = [
 [[package]]
 name = "orbit"
 version = "1.0.3"
-source = { git = "https://github.com/jrhender/orbit?rev=123e7688f0c1ae83b811e1f898fd4af1dd435ff2#123e7688f0c1ae83b811e1f898fd4af1dd435ff2" }
+source = { git = "https://github.com/jrhender/orbit?rev=b233d86ddd979ff8e87162af07ec95ce447a1620#b233d86ddd979ff8e87162af07ec95ce447a1620" }
 dependencies = [
     { name = "anyio" },
     { name = "click" },
@@ -2222,7 +2222,7 @@ requires-dist = [
     { name = "inspect-ai", specifier = ">=0.3.263,<0.4" },
     { name = "markdown-it-py", specifier = ">=3" },
     { name = "matplotlib", specifier = ">=3.10" },
-    { name = "orbit", extras = ["dcop"], git = "https://github.com/jrhender/orbit?rev=123e7688f0c1ae83b811e1f898fd4af1dd435ff2" },
+    { name = "orbit", extras = ["dcop"], git = "https://github.com/jrhender/orbit?rev=b233d86ddd979ff8e87162af07ec95ce447a1620" },
     { name = "pandas", specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6" },
