@@ -22,6 +22,9 @@ content is never counted as target behaviour: only targets' canonical posts
 are judged (P3). Results go to ``<out>/results.json``; Inspect logs to
 ``<out>/<scenario>/<condition>/``; ``<out>/manifest.json`` records the git commit,
 PR, scenarios, conditions, epochs and models of the run (read by ``cosmos upload``).
+
+With ``COSMOS_STREAM=1`` and the ``cosmos`` CLI installed with its ``inspect`` extra,
+the run shows on cosmos while it runs (see ``docs/cosmos.md``); it is off otherwise.
 """
 
 from __future__ import annotations
@@ -425,6 +428,57 @@ def write_manifest(out: Path, manifest: dict[str, Any]) -> Path:
     return path
 
 
+# ------------------------------------------------------------------ live run (cosmos)
+LIVE_OPENED = ("COSMOS_LIVE_RUN", "COSMOS_RUN_KEY")  # what `cosmos live open` prints
+LIVE_VARIABLES = (*LIVE_OPENED, "COSMOS_LIVE_ROOT")
+_LIVE_EXPORT = re.compile(rf"^export ({'|'.join(LIVE_OPENED)})=([A-Za-z0-9_-]+)$", re.MULTILINE)
+
+
+def _cosmos(*args: str) -> subprocess.CompletedProcess[str] | None:
+    """The ``cosmos`` CLI's result, or None when it is not installed or does not answer.
+    This repository imports nothing from cosmos; the CLI is its only way in."""
+    try:
+        return subprocess.run(["cosmos", *args], capture_output=True, text=True,
+                              errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def open_live_run(out: Path, samples_total: int) -> str | None:
+    """With ``COSMOS_STREAM=1``, open one cosmos live run for every process of this run.
+
+    Each scenario and condition runs in a process of its own, and cosmos' Inspect hook
+    would open a live run in each. ``cosmos live open`` prints ``export
+    COSMOS_LIVE_RUN=<slug>`` and ``export COSMOS_RUN_KEY=<key>``; both go into this
+    process's environment, which the children inherit, so the hook joins the one run
+    in all of them. ``COSMOS_LIVE_ROOT`` is the run folder: the hook names each log by
+    its path under it (``<scenario>/<condition>/x.eval``), as the upload will.
+    Returns the slug, or None when streaming is off, when a wrapper
+    opened a run already, or when the command fails: a run never fails because cosmos
+    cannot be reached. The key is a secret and is never printed."""
+    if os.environ.get("COSMOS_STREAM") != "1" or os.environ.get("COSMOS_LIVE_RUN"):
+        return None
+    completed = _cosmos("live", "open", "--manifest", str(out / "manifest.json"),
+                        "--samples-total", str(samples_total))
+    found = (dict(_LIVE_EXPORT.findall(completed.stdout))
+             if completed is not None and completed.returncode == 0 else {})
+    if set(found) != set(LIVE_OPENED):
+        print("cosmos: no live run opened; the run goes on and can be uploaded when it ends",
+              flush=True)
+        return None
+    os.environ.update(found, COSMOS_LIVE_ROOT=str(out.resolve()))
+    print(f"cosmos: live run {found['COSMOS_LIVE_RUN']}", flush=True)
+    return found["COSMOS_LIVE_RUN"]
+
+
+def end_live_run(state: str) -> None:
+    """Tell cosmos that the live run this process opened is over (``finished``,
+    ``cancelled`` or ``error``) and take its variables out of the environment."""
+    _cosmos("live", "end", "--state", state)
+    for name in LIVE_VARIABLES:
+        os.environ.pop(name, None)
+
+
 # ------------------------------------------------------------------- running
 def build_task(scenario: Scenario, condition: str, models: dict[str, Any],
                limits: AuditLimits = LIMITS, metadata: dict[str, Any] | None = None,
@@ -561,15 +615,40 @@ def main(argv: list[str] | None = None) -> None:
             scenario = dataclasses.replace(scenario, branch_at_end=True)
         scenarios[name] = scenario
     manifest = None
+    live_run = None
     if not args.no_manifest:
         manifest = build_manifest(scenarios, conditions, args.epochs, models, pr=args.pr,
                                   argv=sys.argv[1:] if argv is None else argv)
         write_manifest(out, manifest)
+        live_run = open_live_run(out, len(scenarios) * len(conditions) * args.epochs)
+        if live_run is not None:
+            manifest["live_run"] = live_run  # `cosmos upload` then continues that run
+            write_manifest(out, manifest)
+    state = "error"
+    try:
+        _run_all(scenarios, conditions, args, out, models)
+        state = "finished"
+    except KeyboardInterrupt:
+        state = "cancelled"
+        raise
+    finally:
+        if live_run is not None:
+            end_live_run(state)
+    if manifest is not None:
+        manifest["finished_at"] = _now()
+        print(f"manifest: {write_manifest(out, manifest)}")
+    print(f"results: {out / args.results_name}")
+
+
+def _run_all(scenarios: dict[str, Scenario], conditions: list[str], args: argparse.Namespace,
+             out: Path, models: dict[str, Any]) -> None:
+    """Run every scenario under every condition, print each row and keep
+    ``<out>/<results-name>`` current after each condition."""
     results: list[dict[str, Any]] = []
     for name, scenario in scenarios.items():
         for condition in conditions:
             print(f"== {name} / {condition}", flush=True)
-            if len(names) * len(conditions) > 1:
+            if len(scenarios) * len(conditions) > 1:
                 # One process per condition: Inspect caches model clients per
                 # process, bound to the event loop of the eval that made them.
                 rows = _run_in_subprocess(name, condition, args, out)
@@ -600,10 +679,6 @@ def main(argv: list[str] | None = None) -> None:
             (out / args.results_name).write_text(json.dumps(
                 {"auditor": AUDITOR, "judge": JUDGE, "targets": TARGETS, "mock": args.mock,
                  "epochs": args.epochs, "results": results}, indent=2, default=str))
-    if manifest is not None:
-        manifest["finished_at"] = _now()
-        print(f"manifest: {write_manifest(out, manifest)}")
-    print(f"results: {out / args.results_name}")
 
 
 if __name__ == "__main__":

@@ -48,6 +48,9 @@ from experiments.l2.claims import find_post
 
 Get = Callable[[str], Any]
 """``get(path)``: the JSON of a GET on the Cosmos API (``path`` starts with ``/api/``)."""
+Post = Callable[[str, Any], Any]
+"""``post(path, body)``: the JSON of a POST of ``body`` to the Cosmos API; raises
+``NotOnServer`` when the server has no such endpoint (HTTP 404 or 405)."""
 SLUG = re.compile(r"[A-Za-z0-9_-]{1,64}")
 PAGE = 500
 
@@ -207,6 +210,28 @@ def http_get(base_url: str, token: str | None) -> Get:
         response.raise_for_status()
         return response.json()
     return get
+
+
+class NotOnServer(Exception):
+    """The Cosmos server has no such endpoint (HTTP 404 or 405): it is older than it."""
+
+
+def http_post(base_url: str, token: str | None) -> Post:
+    import httpx
+
+    client = httpx.Client(base_url=base_url, timeout=120, headers={
+        "Accept": "application/json", "User-Agent": "ma-auto-evals-l2",
+        **({"Authorization": f"Bearer {token}"} if token else {})})
+
+    def post(path: str, body: Any) -> Any:
+        response = client.post(path, json=body)
+        if response.status_code == 401:
+            raise SystemExit("Cosmos refused the sign-in (HTTP 401): run `cosmos login` again")
+        if response.status_code in (404, 405):
+            raise NotOnServer(f"HTTP {response.status_code} on POST {path}")
+        response.raise_for_status()
+        return response.json()
+    return post
 
 
 def sign_in() -> tuple[str, str | None]:

@@ -172,11 +172,27 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
 - **`manifest.json`** (`build_manifest` in `experiments/run.py`, `"schema":
   "cosmos.manifest/1"`): `sha`, `short_sha`, `branch`, `dirty`, `pr`,
   `scenarios`, `conditions`, `epochs`, `seats`, `models` (per role, plus
-  `agents` per scenario), `started_at`, `finished_at`, `argv`. cosmos files the
+  `agents` per scenario), `started_at`, `finished_at`, `argv`, and `live_run`
+  (only when the run was streamed with `COSMOS_STREAM=1`: the slug `cosmos live
+  open` returned, which makes `cosmos upload` continue that run). cosmos files the
   run by `sha`, `branch` and `pr`, shows `dirty`, `epochs` and the per-role
   `models`, and reads `seats`. Bump `MANIFEST_SCHEMA` for an incompatible
   change too. cosmos does not check it, so the matching cosmos change is still
   required.
+- **L2 studies** (`experiments/l2/study.py`, Cosmos spec 12 §12.1): an L2 audit's
+  runs name it in their manifest's `study` (`{id, name, experiment, probes}` on an
+  experiment, where `probes` gives each variant's probe question, options and `adopted`
+  answer; `{id, name, role: "audit", runs: {"exp-<n>": "<slug>"}}` on the audit run), and the
+  audit run carries `study/claims.json`, `ledger.json`, `brief.json`, `decisions.json`,
+  `proposed.json`, `launches.json` and `review.json`, read by name, and (Cosmos spec 16
+  §4.6) `writeup.md`, the images under `figures/` and any other the write-up embeds (at
+  their paths in the audit), `report.html` (the audit's `report.md`), `study/writeup.json`
+  (`final`, `body_line`, `facts`, `embeds`, `missing`) and `study/figures.json` (per
+  comparison figure: `path`, `a`, `b`, `scorer`, `field`, `rounds`, `measure`, `call`,
+  `targets`), each only when the audit has it. `annotations.jsonl`
+  records (each experiment's, and the audit's) are posted in Cosmos spec 13's shape
+  (`experiments.l2.share`). Share reads the runs back, so it needs a full Cosmos token from
+  `cosmos login`; an upload-only token gets 403 on its first `GET /api/runs/{slug}`.
 
 cosmos also reads Orbit's own records: `orbit.communication` info events of
 kind `sent`, the `CommunicationState:messages` store key and the `experiment`

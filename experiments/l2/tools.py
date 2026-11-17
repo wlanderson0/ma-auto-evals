@@ -571,7 +571,11 @@ class Tools:
             f" up to round {rounds}" if rounds is not None else "")
         try:
             compared = self.results().compare(a, b, scorer, rounds=rounds, field=field)
-            figures.compare_figure(compared, a, b, measure, self.audit.out / name)
+            path = figures.compare_figure(compared, a, b, measure, self.audit.out / name)
+            # what the image shows, as drawn (the Cosmos export reads it: figures.json)
+            path.with_suffix(".json").write_text(json.dumps(
+                {"compared": compared, "a": a, "b": b, "scorer": scorer, "field": field,
+                 "rounds": rounds, "measure": measure}, indent=2, sort_keys=True) + "\n")
         except Exception as error:  # a figure never fails the comparison
             return f"\n(No figure: {type(error).__name__}: {error})"
         return f"\nFigure: {name} (embed it in your write-up as ![caption]({name}))"
@@ -843,18 +847,7 @@ class Tools:
     def broken_embeds(self, writeup: str | None) -> list[str]:
         """Images the write-up embeds that are not a file in the audit directory, by a
         path relative to it (so the write-up still shows its figures once moved)."""
-        out = self.audit.out.resolve()
-        broken = []
-        for token in MarkdownIt().parse(writeup or ""):
-            for child in token.children or []:
-                if child.type != "image":
-                    continue
-                src = urllib.parse.unquote(str(child.attrGet("src") or ""))
-                path = (out / src).resolve()
-                if (Path(src).is_absolute() or "://" in src or not path.is_relative_to(out)
-                        or not path.is_file()):
-                    broken.append(src)
-        return broken
+        return [src for src in embeds(writeup) if embedded(self.audit.out, src) is None]
 
     def _embeds_note(self, writeup: str | None) -> str:
         broken = self.broken_embeds(writeup)
@@ -925,6 +918,27 @@ class Tools:
         return (f"The audit has ended; the report is in report.md. {verdicts}."
                 + (" The write-up is in writeup.md." if self.writeup else
                    " No write-up was given.") + self._embeds_note(self.writeup))
+
+
+def embeds(writeup: str | None) -> list[str]:
+    """The images a write-up embeds, as Markdown reads them, in order."""
+    found = []
+    for token in MarkdownIt().parse(writeup or ""):
+        for child in token.children or []:
+            if child.type == "image":
+                found.append(urllib.parse.unquote(str(child.attrGet("src") or "")))
+    return found
+
+
+def embedded(out: Path, src: str) -> Path | None:
+    """The file an embed ``src`` names in the audit directory ``out``, by a path relative
+    to it; ``None`` when it names none."""
+    out = Path(out).resolve()
+    path = (out / src).resolve()
+    if (Path(src).is_absolute() or "://" in src or not path.is_relative_to(out)
+            or not path.is_file()):
+        return None
+    return path
 
 
 def _failure(error: Exception) -> str:

@@ -43,7 +43,13 @@ One experiment is one Cosmos run; each of its samples is one L2 run. The folder 
   start and end times come from the experiment's ``decisions.json`` (the branch only
   when the checkout is at that commit, else null), as does ``run_config``, the settings
   the runs' models had (an extra field; Cosmos keeps the manifest as given).
-  ``--pr`` decides which PR Cosmos files the run under.
+  ``--pr`` decides which PR Cosmos files the run under. For an experiment of an L2 audit,
+  ``study: {id, name, experiment}`` names the audit's study and the experiment's
+  ``exp-<n>`` (``experiments.l2.study``), so Cosmos groups the audit's runs, and
+  ``study.probes`` gives each variant's probes as its built scenario has them:
+  ``{"<variant id>": {"<target agent>": {"question", "options", "adopted"}}}``, where
+  ``adopted`` is the answer that counts as adopting (Cosmos recounts probe claims with
+  it). A variant without probes is left out; with none at all, so is ``probes``.
 - For an experiment of an L2 audit (the directory two levels up has ``brief.md`` and
   ``report.md``): ``report.html`` (Cosmos's "Open report"), the audit's report followed
   by its brief, the experiment's variants (``variants.jsonl``, one record each) and the
@@ -61,6 +67,7 @@ import sys
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from inspect_ai.log import read_eval_log, write_eval_log
 from markdown_it import MarkdownIt
@@ -68,6 +75,7 @@ from markdown_it import MarkdownIt
 from experiments.l2 import experiment as m1
 from experiments.l2 import written as written_
 from experiments.l2.results import Results
+from experiments.l2.study import study_of
 from experiments.run import build_manifest, write_manifest
 from experiments.scenarios import Scenario
 
@@ -141,12 +149,25 @@ def export(experiment: Path, out: Path, *, pr: int | None = None,
                     dirty=run["dirty"], started_at=_iso(decisions["started"]),
                     finished_at=_iso(decisions.get("finished")),
                     run_config=decisions.get("run_config"))
+    if audit is not None:
+        manifest["study"] = {**study_of(audit), "experiment": experiment.resolve().name}
+        if probes := probes_of(built):
+            manifest["study"]["probes"] = probes
     write_manifest(out, manifest)
 
     if audit is not None:
         ran = sorted({s.base for s in built.values()} & set(written))
         (out / "report.html").write_text(report_html(audit, experiment, ran))
     return out
+
+
+def probes_of(built: dict[str, Scenario]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Each variant's probes, by target agent: the question, its options and the answer
+    that counts as adopting."""
+    return {vid: {agent: {"question": probe.question, "options": list(probe.options),
+                          "adopted": probe.adopted}
+                  for agent, probe in scenario.probes.items()}
+            for vid, scenario in built.items() if scenario.probes}
 
 
 def _iso(stamp: str | None) -> str | None:
@@ -157,7 +178,7 @@ def _iso(stamp: str | None) -> str | None:
 def report_html(audit: Path, experiment: Path, scenarios: Sequence[str]) -> str:
     """The audit's report, then its brief, the experiment's variants and the code of the
     written scenarios it ran (``scenarios``), as one page."""
-    markdown = MarkdownIt("commonmark", {"html": False}).enable("table")
+    markdown = _markdown()
     variants = [json.loads(line) for line in
                 (experiment / "variants.jsonl").read_text().splitlines() if line.strip()]
     parts = [markdown.render((audit / "report.md").read_text()),
@@ -171,9 +192,23 @@ def report_html(audit: Path, experiment: Path, scenarios: Sequence[str]) -> str:
         parts += [f"<h2>{html.escape(name)}</h2>",
                   f"<p>sha256: <code>{html.escape(sha)}</code></p>",
                   f"<pre>{html.escape(code)}</pre>"]
-    title = html.escape(f"{audit.name}: {experiment.name}")
+    return _page(f"{audit.name}: {experiment.name}", parts)
+
+
+def audit_report_html(audit: Path) -> str:
+    """The audit's report alone, as ``report_html`` renders it (the audit run's page)."""
+    return _page(audit.name, [_markdown().render((audit / "report.md").read_text())])
+
+
+def _markdown() -> MarkdownIt:
+    """CommonMark with tables; raw HTML in the source is shown as text."""
+    return MarkdownIt("commonmark", {"html": False}).enable("table")
+
+
+def _page(title: str, parts: Sequence[str]) -> str:
     return ("<!doctype html>\n<html><head><meta charset=\"utf-8\">"
-            f"<title>{title}</title></head><body>\n" + "\n".join(parts) + "\n</body></html>\n")
+            f"<title>{html.escape(title)}</title></head><body>\n" + "\n".join(parts)
+            + "\n</body></html>\n")
 
 
 def main(argv: Sequence[str] | None = None) -> None:
