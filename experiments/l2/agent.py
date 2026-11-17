@@ -120,10 +120,12 @@ reserve is held back for your final calls. Check budget before planning an exper
 and plan so that you can still read the results and conclude. Once what is spent plus
 the reserve reaches the budget (the hard stop), no new experiment or epoch starts and
 only budget, request_review and end_audit work; an epoch already running finishes, so
-spending can go over by up to one epoch. A time limit, if the first message gives one,
-stops new runs once only its held-back share is left, and so can the person running the
-audit; then read what ran and conclude. If run_experiment is not among your tools, this
-audit is analysis only: read the runs already made.
+spending can go over by up to one epoch. Once the whole budget is spent you get a few
+last turns for request_review and end_audit; if you have not ended the audit by then, it
+is ended for you with the draft you sent for review, unrevised. A time limit, if the
+first message gives one, stops new runs once only its held-back share is left, and so
+can the person running the audit; then read what ran and conclude. If run_experiment is
+not among your tools, this audit is analysis only: read the runs already made.
 
 # Finishing
 Write up the audit for a reader who was not here, as a results report (writeup.md): the
@@ -202,7 +204,8 @@ def brief_message(tools: Tools) -> str:
     brief = audit.brief
     lines = brief_lines(tools)
     lines.append(f"- budget: ${brief.budget_usd:.2f} for everything, your own calls "
-                 f"included; {audit.reserve:.0%} is held back for your final calls")
+                 f"included; at least {audit.reserve:.0%} is held back for your final calls, more "
+                 f"once your own calls cost more (budget shows it)")
     if brief.run_budget_usd is not None:
         lines.append(f"- run budget: at most ${brief.run_budget_usd:.2f} of it on runs "
                      "(your own calls are not counted in it); once it is reached no new "
@@ -431,7 +434,17 @@ The reading guidance L2 was given:
 {GUIDANCE}"""
 REVIEW_SHARE = 0.25
 """The reviewer may spend up to this share of what is left of the budget, and of the
-time, when it starts, so L2 can still revise."""
+time, when it starts, so L2 can still revise; but never less than ``REVIEW_TURNS`` of
+L2's calls at their current price, which the reserve holds back for it."""
+REVIEW_TURNS = 2
+"""Model calls the reviewer may always make, however little of the budget is left."""
+CLOSING_OVERRUN = 3
+"""L2 turns allowed once the whole budget is spent, while it has not ended the audit:
+enough to request the review and end the audit (only those tools run then). The ledger
+shows what they cost past the budget."""
+CLOSING_NOTICE = ("The budget is spent. Only request_review and end_audit run now: "
+                  "{step} You have {turns} turn(s) left before the audit is ended for you "
+                  "with your last reviewed draft.")
 REVIEW_MESSAGES = 60
 """A backstop on the reviewer's conversation length."""
 REVIEW_CONTINUE = ("Check what matters with the tools, then call submit_review with your "
@@ -467,7 +480,7 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
         audit = tools.audit
         start, first = audit.l2["usd"], tools._seq
         b = audit.budget()
-        cap = REVIEW_SHARE * b["remaining_usd"]
+        cap = max(REVIEW_SHARE * max(b["remaining_usd"], 0.0), REVIEW_TURNS * audit.turn_usd)
         began = audit.clock()
         time_cap = None if b["time_left_s"] is None else REVIEW_SHARE * max(b["time_left_s"], 0)
         why: list[str] = []
@@ -534,6 +547,7 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
         return transcript_spend(prices)
 
     tools.needs_review = review is not None
+    closing = {"turns": 0}
     made = inspect_tools(tools, spend=spend, experiments=audit.analysis is None,
                          scenarios=audit.writes_scenarios, review=review)
     end = next(t for t in made if ToolDef(t).name == "end_audit")
@@ -549,8 +563,21 @@ def l2_task(tools: Tools, prompt: str, *, prices: Mapping[str, tuple[float, floa
             return False
         b = audit.budget()
         if b["remaining_usd"] <= EPSILON:
-            tools.stop_reason = "L2 spent the whole budget before calling end_audit"
-            return False
+            # Closing turns: past the budget, but bounded, so the audit can still be
+            # reviewed and ended (the tools refuse everything else at the hard stop).
+            if closing["turns"] >= CLOSING_OVERRUN:
+                tools.stop_reason = (f"L2 spent the whole budget and did not end the audit "
+                                     f"in its {CLOSING_OVERRUN} closing turns")
+                return False
+            closing["turns"] += 1
+            if state.output.message.tool_calls:
+                return True
+            step = ("call end_audit with your revised claims and your response to the "
+                    "review." if tools.review is not None or not tools.needs_review else
+                    "call request_review with your draft claims, conclusions and "
+                    "write-up, then end_audit.")
+            return CLOSING_NOTICE.format(step=step,
+                                         turns=CLOSING_OVERRUN - closing["turns"] + 1)
         if state.output.message.tool_calls:
             return True
         stopping = b["stopped"] or b["halted"]
@@ -672,6 +699,16 @@ def finalize(tools: Tools, log: EvalLog | None,
             why = f"L2's run ended with status {getattr(saved, 'status', 'unknown')}"
         else:
             why = "L2 stopped without calling end_audit"
+        if tools.review is not None:
+            try:
+                tools.end_with_draft(why)
+            except Exception as error:  # the record is still written, unended
+                notes.append(f"the harness could not end the audit with L2's reviewed "
+                             f"draft ({type(error).__name__}: {error})")
+    over = audit.budget()["spent_usd"] - audit.brief.budget_usd
+    if over > EPSILON:
+        notes.append(f"spending went ${over:.4f} past the budget (a launched epoch, or L2's "
+                     "closing turns)")
     audit.notes.extend(notes)
     audit.ended = True
     audit.write_ledger(final=True)

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from inspect_ai.log import read_eval_log
 
-from experiments.l2.agent import finalize, run_l2, token_backstop
+from experiments.l2.agent import CLOSING_OVERRUN, finalize, run_l2, token_backstop
 from experiments.l2.audit import Audit, main
 from experiments.l2.audit_report import write_report
 from experiments.l2.cost import log_cost
@@ -97,18 +97,22 @@ def test_the_analysis_only_fake_reads_an_existing_audit(full, tmp_path):
 
 
 def test_running_out_of_budget_stops_l2_and_the_report_says_why(tmp_path):
-    """With L2's calls dearer than the budget, the loop stops; the record is complete.
-    (A large token limit, so the ledger, not the backstop, is what stops it.)"""
+    """With L2's calls dearer than the budget, the loop stops after its closing turns;
+    the record is complete. (A large token limit, so the ledger, not the backstop, is what
+    stops it.) The first call ($0.0012) makes the reserve five such calls, past the
+    $0.002 budget, so every call is refused; this fake L2 never asks for a review, so
+    nothing is left to end the audit with."""
     audit = Audit.create(brief(tmp_path, 0.002), tmp_path / "audit", mock=True)
     tools = Tools(audit, on_end=write_report)
     run_l2(tools, fake_model(FULL), PROMPT, prices=PRICES,
            token_limit=10**6)  # $0.0012 per call
     trace = lines(audit.out / "trace.jsonl")
-    assert trace[0]["ok"]  # spent 0.0012 + 0.0002 reserve < 0.002
-    assert not trace[1]["ok"] and "hard stop" in trace[1]["result"]
+    assert trace and all(not r["ok"] and "hard stop" in r["result"] for r in trace)
+    assert len(trace) == 2 + CLOSING_OVERRUN  # the budget is spent during the second
     assert audit.experiments() == []
     report = (audit.out / "report.md").read_text()
-    assert "not ended by L2: L2 spent the whole budget" in report
+    assert ("not ended by L2: L2 spent the whole budget and did not end the audit in its "
+            f"{CLOSING_OVERRUN} closing turns") in report
     assert json.loads((audit.out / "ledger.json").read_text())["final"]
 
 

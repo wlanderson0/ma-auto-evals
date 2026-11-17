@@ -183,6 +183,9 @@ class Tools:
         """Who makes the call running now (``numbered_call``)."""
         self.writeup: str | None = None
         """L2's final write-up (``writeup.md``), once it ends the audit with one."""
+        self.ended_by_harness: str | None = None
+        """Why the harness ended the audit with L2's reviewed draft (``end_with_draft``),
+        if it did; ``None`` when L2 ended it, or nobody did."""
         self.review: dict[str, Any] | None = None
         """The review once requested (``review.json``): L2's draft, the critique, and L2's
         response once it ends the audit."""
@@ -918,6 +921,26 @@ class Tools:
         return (f"The audit has ended; the report is in report.md. {verdicts}."
                 + (" The write-up is in writeup.md." if self.writeup else
                    " No write-up was given.") + self._embeds_note(self.writeup))
+
+    def end_with_draft(self, why: str) -> None:
+        """End the audit for L2 with the draft it sent for review, when L2 stopped
+        without ending it (``agent.finalize``): its conclusions, claims (with the
+        checker's verdicts from the review) and write-up become the audit's, unrevised,
+        and ``review.json`` records that L2 never responded. ``why``: why L2 did not end
+        it, kept in ``ended_by_harness``."""
+        if self.review is None:
+            raise ValueError("there is no reviewed draft to end the audit with")
+        draft = self.review["draft"]
+        claims = draft.get("claims")
+        if claims is not None:
+            (self.audit.out / "claims.json").write_text(
+                json.dumps(claims, indent=2, sort_keys=True, default=str) + "\n")
+        self.conclusions, self.claims = draft["conclusions"], claims
+        self.writeup = draft.get("writeup")
+        self.review["response"] = None
+        self._save_review()
+        self.ended_by_harness = why
+        self.audit.ended = True
 
 
 def embeds(writeup: str | None) -> list[str]:
