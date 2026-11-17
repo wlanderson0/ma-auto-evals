@@ -61,6 +61,9 @@ PRICES: dict[str, tuple[float, float]] = {
     # from OpenRouter's endpoint list on 2026-11-17; most providers list 3.00 / 15.00,
     # and prompts over 200k tokens cost more.
     "openrouter/anthropic/claude-sonnet-4.5": (3.00, 15.00),
+    # A cheaper L2 (listed rate on OpenRouter, 2026-11-17); a reasoning model, whose
+    # reasoning tokens bill as output.
+    "openrouter/openai/gpt-6.2-sol": (2.00, 10.00),
 }
 FREE_PREFIXES = ("mockllm/",)
 """Offline mock models: no provider, no cost."""
