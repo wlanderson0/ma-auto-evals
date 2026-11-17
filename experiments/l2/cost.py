@@ -44,6 +44,8 @@ PRICES: dict[str, tuple[float, float]] = {
     # OpenRouter routes them across many providers: these are the dearest seen.
     "openrouter/z-ai/glm-5.2": (2.31, 8.00),
     "openrouter/z-ai/glm-5.3": (2.80, 8.80),
+    # An L2 to compare providers' safeguards (issue #55): listed rate, read 2026-11-17.
+    "openrouter/openai/gpt-6.1-sol": (2.00, 10.00),
 }
 FREE_PREFIXES = ("mockllm/",)
 """Offline mock models: no provider, no cost."""
