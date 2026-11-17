@@ -63,7 +63,7 @@ the games). Capability is LMArena Elo (snapshot of March 31, 2026):
 | openrouter/openai/gpt-5.4 | 1484 |
 | openrouter/anthropic/claude-opus-4.6 | 1499 |
 
-Known departures you cannot change. Every agent has a 1500-token reply cap. Claude Opus 4.6 fails in this harness (its API rejects the assistant prefill),
+Known departures you cannot change. Every agent has a 1500-token reply cap (4000 for a reasoning model, whose reasoning counts against it). Claude Opus 4.6 fails in this harness (its API rejects the assistant prefill),
 so leave it out rather than spend budget on it.
 
 Protocol requirements. The paper's harness drives every phase, so a game can fail only by

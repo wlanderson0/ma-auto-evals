@@ -253,3 +253,19 @@ def test_a_long_game_runs_every_round_without_hitting_the_message_limit(tmp_path
     log = run(tmp_path, honest(accept_in=None), rounds=10)
     assert speakers(log) == list(PLAYERS) * 30
     assert referee_posts(log)[-1] == "Round 10: no deal (votes [False, False])."
+
+
+def test_a_vote_sent_as_a_string_is_read_as_its_value(tmp_path):
+    """Some models send every argument as a string (``"true"``); the tool reads it as
+    JSON, and a string that is no boolean is still refused."""
+    def script(agent: str, turn: int) -> ModelOutput:
+        if agent == "bob" and round_of(turn) == (1, "vote"):
+            return call("vote", accept="True")
+        if agent == "bob" and round_of(turn) == (2, "vote"):
+            return call("vote", accept="yes")
+        return honest(accept_in=None)(agent, turn)
+    log = run(tmp_path, script, rounds=2)
+    assert store_value(log, "votes")["1:bob"] is True
+    assert "2:bob" not in store_value(log, "votes")
+    [error] = tool_errors(log)
+    assert "'yes' is not of type 'boolean'" in error

@@ -102,3 +102,47 @@ def test_an_agents_own_generate_config_reaches_its_spec():
     specs = {spec.name: spec for spec in build_team("game", team)["setup"].agents}
     assert specs["alice"].generate_config == GenerateConfig(reasoning_effort="low")
     assert specs["bob"].generate_config is None
+
+
+def test_a_reasoning_model_gets_the_larger_reply_cap():
+    from experiments.l2.experiment import REASONING_MAX_TOKENS, RUN_CONFIG, run_config
+    assert run_config("openrouter/openai/gpt-5-nano").max_tokens == REASONING_MAX_TOKENS
+    assert run_config("openrouter/openai/gpt-5-nano").reasoning_effort == "high"
+    assert run_config("openrouter/openai/gpt-4o-mini") == RUN_CONFIG
+
+
+def test_a_teams_tools_take_their_arguments_as_strings_too():
+    import anyio
+    from inspect_ai.tool import ToolDef, tool
+
+    from experiments.scenarios import lenient
+
+    @tool
+    def split() -> object:
+        async def execute(items: list[str], accept: bool, count: int = 0) -> str:
+            """Split.
+
+            Args:
+                items: Items.
+                accept: Accept.
+                count: Count.
+            """
+            return f"{items} {accept} {count}"
+        return execute
+
+    made = lenient(split())
+    schema = ToolDef(made).parameters.model_dump(exclude_none=True)["properties"]
+    assert schema["accept"]["anyOf"] == [{"type": "boolean"}, {"type": "string"}]
+    assert schema["accept"]["description"] == "Accept."
+    result = anyio.run(lambda: made(items='["A", "B"]', accept="True", count="2"))
+    assert result == "['A', 'B'] True 2"
+    with pytest.raises(Exception, match="'yes' is not of type 'boolean'"):
+        anyio.run(lambda: made(items=["A"], accept="yes"))
+
+
+def test_only_a_phased_games_tools_are_lenient_by_default():
+    assert game().lenient
+    assert not dataclasses.replace(game(), lenient_tools=False).lenient
+    plain = team_setup({}, personas={a: a for a in ROSTER}, roster=ROSTER,
+                       round_order=("alice", "bob"), channels=TABLE, output_agent="bob")
+    assert not plain.lenient and dataclasses.replace(plain, lenient_tools=True).lenient
