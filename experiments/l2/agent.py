@@ -36,7 +36,7 @@ from inspect_ai import eval as inspect_eval
 from inspect_ai.agent import AgentState, AgentSubmit, react, run
 from inspect_ai.dataset import Sample
 from inspect_ai.log import EvalLog, read_eval_log
-from inspect_ai.model import Model, get_model
+from inspect_ai.model import GenerateConfig, Model, get_model
 from inspect_ai.tool import ToolDef
 from inspect_ai.util import message_limit as limit_messages
 
@@ -45,7 +45,7 @@ from experiments.l2 import experiment as m1
 from experiments.l2.apply import describe_ops, recorded_inner
 from experiments.l2.audit import EPSILON, REVIEW_SHARE, TIME_RESERVE
 from experiments.l2.audit_report import write_report
-from experiments.l2.cost import PRICES, UnknownPrice, log_cost, price
+from experiments.l2.cost import PRICES, UnknownPrice, cache_rates, log_cost, price
 from experiments.l2.describe import describe_scenario
 from experiments.l2.tools import Tools, inspect_tools, transcript_spend
 from experiments.scenarios import SCENARIOS
@@ -180,12 +180,14 @@ itself stops an agent after three withheld replies in a row."""
 
 def token_backstop(budget_usd: float, model: str,
                    prices: Mapping[str, tuple[float, float]] = PRICES) -> int | None:
-    """Tokens that cost the whole budget at the model's input rate (``None`` if free).
+    """Tokens that cost the whole budget at the model's cache-read rate (``None`` if
+    free).
 
-    Most of L2's tokens are input (each turn re-reads the conversation), so the output
-    rate would stop it well short of its budget. This is only a backstop: L2's spend
-    is checked at every turn and tool call, and stops it at the budget."""
-    per_input = price(model, prices)[0]
+    Most of L2's tokens are input (each turn re-reads the conversation), and most of
+    that is read from the cache, so a dearer rate would stop it short of its budget.
+    This is only a backstop: L2's spend is checked at every turn and tool call, and
+    stops it at the budget."""
+    per_input = price(model, prices)[0] * min(1.0, cache_rates(model)[0])
     return None if per_input <= 0 else int(budget_usd * 1_000_000 / per_input)
 
 
@@ -567,12 +569,26 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
     return review
 
 
+CACHE_TTL = "1h"
+"""How long L2's conversation stays cached on a Claude model (issue #54). L2 waits on an
+experiment for minutes at a time, longer than the default 5 minutes."""
+
+
 def _model(model: str | Model | None) -> str | Model | None:
     if isinstance(model, str) and model.startswith("openrouter/"):
         # Inspect sends OpenAI-compatible tool schemas in strict mode, where every
         # parameter must be required; L2's tools have optional ones (e.g. scores'
         # rounds), which OpenAI then rejects with a 400 before any call is made.
-        return get_model(model, strict_tools=False)
+        config = GenerateConfig()
+        if model.startswith("openrouter/anthropic/"):
+            # Inspect marks only the system prompt and the tools for caching through
+            # OpenRouter: its per-message marker needs list content, and L2's messages
+            # are strings. OpenRouter's automatic caching (a top-level cache_control)
+            # moves the breakpoint forward as the conversation grows. Other providers
+            # cache automatically.
+            config = GenerateConfig(extra_body={"cache_control": {
+                "type": "ephemeral", "ttl": CACHE_TTL}})
+        return get_model(model, strict_tools=False, config=config)
     return model
 
 

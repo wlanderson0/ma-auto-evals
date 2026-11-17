@@ -82,7 +82,8 @@ def test_mocks_are_free_and_unknown_models_raise(stored_log):
 
 
 def test_cached_input_is_charged_at_the_input_rate():
-    """Inspect's input_tokens excludes cached tokens; leaving them out under-counts."""
+    """Inspect's input_tokens excludes cached tokens; leaving them out under-counts. A
+    provider with no cache rates (here a mock) is charged the full input rate for them."""
     usage = ModelUsage(input_tokens=100, output_tokens=10, input_tokens_cache_read=900,
                        input_tokens_cache_write=50, total_tokens=1060)
     assert usage_cost("mockllm/model", usage, TEST_PRICES) == pytest.approx(
@@ -133,3 +134,19 @@ def test_events_cost_prices_a_running_samples_events_like_its_log(stored_log):
     assert len({e.event for e in sample.events}) > 1  # other kinds are skipped
     assert events_cost(sample.events, TEST_PRICES) == sample_cost(sample, TEST_PRICES)
     assert events_cost([], TEST_PRICES) == {"usd": 0, "by_model": {}}
+
+
+@pytest.mark.parametrize("model, read, write", [
+    ("openrouter/anthropic/claude-opus-5.5", 0.10, 2.00),
+    ("openrouter/openai/gpt-6.1-sol", 0.50, 1.25),
+    ("openrouter/z-ai/glm-5.3", 0.20, 1.00),
+    ("openrouter/meta-llama/llama-3.3-70b-instruct", 1.0, 1.0)])  # no rates: full price
+def test_cached_input_is_charged_at_the_provider_s_cache_rates(model, read, write):
+    from experiments.l2.cost import cache_rates
+
+    assert cache_rates(model) == (read, write)
+    usage = ModelUsage(input_tokens=100, output_tokens=10, input_tokens_cache_read=900,
+                       input_tokens_cache_write=50, total_tokens=1060)
+    per_input, per_output = price(model)
+    expected = ((100 + 900 * read + 50 * write) * per_input + 10 * per_output) / 1e6
+    assert usage_cost(model, usage) == pytest.approx(expected)
