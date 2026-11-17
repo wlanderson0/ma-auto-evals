@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from experiments.l2.brief import parse_brief
 from experiments.l2.cosmos import export
 from experiments.l2.cosmos_links import NotOnServer
 from experiments.l2.fake import DAVE_ON_TOWN, PROMPT, fake_model
-from experiments.l2.share import share
+from experiments.l2.share import cosmos_skipped, share
 from experiments.l2.study import AUDIT_RUN, export_audit, jsonl, study_of
 from experiments.l2.tools import Tools
 from tests.support.l2_audit import brief
@@ -223,6 +224,35 @@ def test_share_uploads_the_audit_run_beside_the_experiments_once(audit):
     assert not [p for p in (audit / "cosmos").iterdir() if p.name.startswith(".")]
     cosmos.share(audit)  # again: nothing is uploaded twice
     assert len(cosmos.uploads) == 3
+
+
+def test_share_stops_before_the_audit_run_when_the_cli_would_skip_its_documents(audit):
+    cosmos = FakeCosmos()
+    asked = []
+
+    def skipped(folder):
+        asked.append(folder)
+        return ["l2/notes.txt", "writeup.md", "figures/a.png", "figures/b.png", "figures/c.png"]
+    with pytest.raises(SystemExit, match=r"leave out writeup.md, figures/a.png, figures/b.png "
+                                         r"and 1 more: .*uv tool upgrade cosmos-evals"):
+        share(audit, upload=cosmos.upload, get=cosmos.get, post=cosmos.post, base_url=BASE,
+              sleep=lambda s: None, say=lambda s: None, skipped=skipped)
+    assert asked == [audit / "cosmos" / AUDIT_RUN]
+    assert [name for _, name in cosmos.uploads] == ["board-audit exp-1", "board-audit exp-2"]
+    assert AUDIT_RUN not in json.loads((audit / "cosmos-runs.json").read_text())
+    said = []  # a CLI that takes them: shared as before; one that cannot say: a note, then shared
+    share(audit, upload=cosmos.upload, get=cosmos.get, post=cosmos.post, base_url=BASE,
+          sleep=lambda s: None, say=said.append, skipped=lambda folder: None)
+    assert any(s.startswith("could not check which files cosmos uploads") for s in said)
+    assert [name for _, name in cosmos.uploads][-1] == "board-audit audit"
+
+
+def test_cosmos_skipped_reads_the_dry_run(tmp_path, monkeypatch):
+    out = "{}\n  abc  12  results.json\n  skipped     writeup.md\n  skipped     figures/a.png\n"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert cosmos_skipped(tmp_path) == ["writeup.md", "figures/a.png"]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 2, "", "no"))
+    assert cosmos_skipped(tmp_path) is None
 
 
 def test_an_export_made_before_studies_gains_the_study_before_upload(audit):

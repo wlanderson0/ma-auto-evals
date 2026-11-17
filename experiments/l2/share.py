@@ -19,9 +19,11 @@ experiment of the audit it
 Then it does the same for the audit run (``experiments.l2.study``: L2's own log, its
 claims, ledger, brief and records), in ``cosmos/audit``, uploaded as ``"<audit> audit"``
 and kept in ``cosmos-runs.json`` as ``audit``; the run Cosmos made must name the audit's
-study. Its manifest lists the slug of every experiment already on Cosmos
-(``study.runs``), so an audit whose experiments were shared before manifests named a
-study becomes one when shared again: only the audit run is uploaded.
+study. Before that upload it asks the CLI (``--dry-run``) which files it would skip, and
+stops if they include the write-up or an image: a CLI older than Cosmos's reports leaves
+``.md`` and image files out without a word. Its manifest lists the slug of every
+experiment already on Cosmos (``study.runs``), so an audit whose experiments were shared
+before manifests named a study becomes one when shared again: only the audit run is uploaded.
 
 It waits until Cosmos has parsed every run (status ``ready``), 15 minutes at most;
 resolves the links (``experiments.l2.cosmos_links``) and writes the claims section of
@@ -92,6 +94,42 @@ def cosmos_upload(folder: Path, name: str, pr: int | None) -> str:
     return found.group(1)
 
 
+DOCUMENTS = (".md", ".png", ".jpg", ".jpeg", ".webp")
+"""The audit run's documents (the write-up and its images): a ``cosmos`` CLI older than
+Cosmos's reports skips them without a word."""
+
+
+def cosmos_skipped(folder: Path) -> list[str] | None:
+    """The files ``cosmos upload <folder>`` would skip (``--dry-run``: nothing is sent and no
+    token is needed); ``None`` when the dry run cannot say."""
+    try:
+        done = subprocess.run(["cosmos", "upload", str(folder), "--dry-run"],
+                              capture_output=True, text=True, timeout=300)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if done.returncode != 0:
+        return None
+    return [line.split(None, 1)[1].strip() for line in done.stdout.splitlines()
+            if line.startswith("  skipped ") and len(line.split(None, 1)) == 2]
+
+
+def check_documents(folder: Path, skipped: Callable[[Path], list[str] | None],
+                    say: Callable[[str], None]) -> None:
+    """Stop before uploading the audit run when the CLI would leave out its write-up or
+    images, so Cosmos never shows a study without them."""
+    found = skipped(folder)
+    if found is None:
+        say(f"could not check which files cosmos uploads from {folder}; if the study shows no "
+            "write-up, upgrade the cosmos CLI (uv tool upgrade cosmos-evals) and share again")
+        return
+    left = [path for path in found if path.lower().endswith(DOCUMENTS)]
+    if left:
+        named = ", ".join(left[:3]) + (f" and {len(left) - 3} more" if len(left) > 3 else "")
+        raise SystemExit(f"your cosmos CLI would leave out {named}: it is older than Cosmos's "
+                         "reports. Upgrade it (uv tool upgrade cosmos-evals) and share again; "
+                         "the audit run was not uploaded")
+
+
 def wait_ready(get: Get, slugs: list[str], timeout: float = 900, every: float = 5,
                sleep: Callable[[float], None] = time.sleep) -> None:
     """Until Cosmos has parsed every run in ``slugs``; raises if one fails or the wait
@@ -116,9 +154,11 @@ def wait_ready(get: Get, slugs: list[str], timeout: float = 900, every: float = 
 def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upload,
           get: Get | None = None, base_url: str | None = None, post: Post | None = None,
           sleep: Callable[[float], None] = time.sleep, say: Callable[[str], None] = print,
+          skipped: Callable[[Path], list[str] | None] | None = None,
           ) -> dict[str, Any]:
     """Export, upload and link every experiment of the audit, and its audit run; the
-    links."""
+    links. ``skipped`` says which files of the audit run the upload would leave out
+    (``cosmos_skipped`` with the real upload, else no check)."""
     from experiments.l2.audit import Audit
     from experiments.l2.audit_report import relink
     from experiments.l2.brief import parse_brief
@@ -159,6 +199,10 @@ def share(audit_dir: Path, *, pr: int | None = None, upload: Upload = cosmos_upl
         if not (folder / "manifest.json").exists():
             _export(export_audit, audit_dir, folder, pr)
         _name_study(folder, audit_study(audit_dir, runs))
+        if skipped is None and upload is cosmos_upload:
+            skipped = cosmos_skipped
+        if skipped is not None:
+            check_documents(folder, skipped, say)
         slug = upload(folder, f"{audit_dir.name} {AUDIT_RUN}", pr)
         named = (get(f"/api/runs/{slug}").get("manifest") or {}).get("study") or {}
         if named.get("id") != study["id"] or named.get("role") != "audit":
