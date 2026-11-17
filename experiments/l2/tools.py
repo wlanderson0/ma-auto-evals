@@ -189,6 +189,9 @@ class Tools:
         """Who makes the call running now (``numbered_call``)."""
         self.writeup: str | None = None
         """L2's final write-up (``writeup.md``), once it ends the audit with one."""
+        self.ended_by_harness: str | None = None
+        """Why the harness ended the audit with L2's reviewed draft (``end_with_draft``),
+        if it did; ``None`` when L2 ended it, or nobody did."""
         self.review: dict[str, Any] | None = None
         """The review once requested (``review.json``): L2's draft, the critique, and L2's
         response once it ends the audit."""
@@ -953,6 +956,26 @@ class Tools:
                 + (" The write-up is in writeup.md." if self.writeup else
                    " No write-up was given.") + self._embeds_note(self.writeup))
 
+    def end_with_draft(self, why: str) -> None:
+        """End the audit for L2 with the draft it sent for review, when L2 stopped
+        without ending it (``agent.finalize``): its conclusions, claims (with the
+        checker's verdicts from the review) and write-up become the audit's, unrevised,
+        and ``review.json`` records that L2 never responded. ``why``: why L2 did not end
+        it, kept in ``ended_by_harness``."""
+        if self.review is None:
+            raise ValueError("there is no reviewed draft to end the audit with")
+        draft = self.review["draft"]
+        claims = draft.get("claims")
+        if claims is not None:
+            (self.audit.out / "claims.json").write_text(
+                json.dumps(claims, indent=2, sort_keys=True, default=str) + "\n")
+        self.conclusions, self.claims = draft["conclusions"], claims
+        self.writeup = draft.get("writeup")
+        self.review["response"] = None
+        self._save_review()
+        self.ended_by_harness = why
+        self.audit.ended = True
+
 
 def embeds(writeup: str | None) -> list[str]:
     """The images a write-up embeds, as Markdown reads them, in order."""
@@ -1228,7 +1251,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
             migration team, and its arguments set any other team (org, setting, personas,
             channels, roster, round_order, output_agent); a tool of the scenario may end
             the run before its schedule is done with end_run(reason), e.g. when a deal
-            passes. make ignores its argument: the
+            passes; a game in rounds of phases uses team_setup(phased=phased_rounds(...)),
+            whose tools check their phase with in_phase. make ignores its argument: the
             module sets its agents' models itself, each one in the price table. The
             Scenario's name (and base) must be the name given here, and its team the
             TeamSetup its task was built from. A name that already has runs cannot be

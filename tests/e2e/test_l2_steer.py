@@ -1,5 +1,5 @@
 """Steering a running audit through its mailbox (Cosmos spec 22 §6; ``experiments.l2.steer``;
-contract test L2-25 of ``docs/level2-interface.md``).
+contract test L2-26 of ``docs/level2-interface.md``).
 
 Scripted audits (the fake L2, mock experiments), steered with the local command
 (``steer.main`` with ``--dir``) or with lines written straight to the inbox where a test

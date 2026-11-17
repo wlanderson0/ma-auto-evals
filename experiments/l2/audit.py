@@ -13,16 +13,21 @@ One directory per audit::
 Spend is every experiment's ``cost.json`` (milestone 1: each model call in its
 logs, agents', helpers' and scorers' alike) plus L2's own calls, which the running
 agent reports through ``set_l2_spend`` (its model events, priced like the
-experiments'). A reserve (10% of the budget by default) is held back from
-experiments for L2's final calls.
+experiments'). A reserve is held back from experiments for L2's final calls: 10% of
+the budget by default, or ``CLOSING_TURNS`` of L2's calls at their current price if
+that is more (``turn_usd``), so a long audit on a dear model can still pay for its
+review and its end.
 
 **Hard stop.** Once spent plus the reserve reaches the budget, no new experiment
-or epoch starts (``stopped``), and the L2 tools refuse everything but ``budget``
-and ``end_audit``. An experiment's per-call brief is given what was available for
-experiments when it launched as its budget; L2 makes no calls while an experiment
-runs, so milestone 1's between-epoch check stops it exactly at the audit-wide
-limit. A launched epoch runs to completion, so spending can exceed the budget by
-up to one epoch (recorded in ``ledger.json``).
+or epoch starts (``stopped``), and the L2 tools refuse everything but ``budget``,
+``request_review`` and ``end_audit``. An experiment's per-call brief is given what was
+available for experiments when it launched as its budget; L2 makes no calls while an
+experiment runs, so milestone 1's between-epoch check stops it exactly at the
+audit-wide limit. A launched epoch runs to completion, so spending can exceed the budget by
+up to one epoch (recorded in ``ledger.json``). Once the budget is spent, L2 still gets
+``agent.CLOSING_OVERRUN`` turns to review and end the audit (only those tools run), so
+it can go over by those few calls too; if it still has not ended, the harness ends it
+with the draft L2 sent for review (``agent.finalize``).
 
 **Stopping early.** A stop asked for by hand (``interrupt``, Ctrl-C) or by the time
 limit (``start_clock``; ``TIME_RESERVE`` of it held back for L2's report) stops runs as
@@ -61,14 +66,21 @@ if TYPE_CHECKING:
     from experiments.l2.steer import Steering
 
 RESERVE = 0.10
-"""Share of the budget held back from experiments for L2's final calls (spec §7)."""
+"""Share of the budget held back from experiments for L2's final calls, at least (spec §7;
+``CLOSING_TURNS`` can make the reserve larger)."""
+CLOSING_TURNS = 5
+"""Model calls the reserve must pay for once experiments stop: L2's request_review turn,
+two of the reviewer's, L2's end_audit turn and one spare. Each is priced at the dearest
+of L2's latest calls (``turn_usd``), since L2's context, and so its cost per call, grows
+through the audit."""
 TIME_RESERVE = 0.10
 """Share of the time limit held back for L2's report: once only this is left, no new
 experiment or epoch starts (spec §7)."""
 CONDITIONS = ("baseline", "scripted")
 """Inner conditions milestone 2 runs (no inner L0/L1 auditor yet)."""
 OVERRUN = ("a launched epoch runs to completion, so spending can exceed the budget by up "
-           "to one epoch")
+           "to one epoch; and once the budget is spent, L2 still gets a few closing turns "
+           "(only request_review and end_audit run) so the audit ends with a report")
 EPSILON = 1e-9
 """Dollars: spend within this of the limit counts as reaching it, so float rounding
 never leaves a sliver of budget that would let one more epoch start."""
@@ -96,6 +108,9 @@ class Audit:
         self.cost_of = cost_of
         self.estimator = estimator
         self.l2: dict[str, Any] = {"usd": 0.0, "by_model": {}}
+        self.recent_calls: list[float] = []
+        """What L2's latest model calls cost (the reviewer's included), newest last; the
+        reserve is sized from them (``turn_usd``)."""
         self.ended = False
         self.clock = clock
         self.time_limit: float | None = None
@@ -215,6 +230,8 @@ class Audit:
             raise ValueError(f"L2's spend cannot go down (${self.l2['usd']:.6f} -> ${usd:.6f})")
         before = self.l2["usd"]
         self.l2 = {"usd": float(max(usd, self.l2["usd"])), "by_model": spend.get("by_model", {})}
+        if self.l2["usd"] > before + EPSILON:
+            self.recent_calls = [*self.recent_calls, self.l2["usd"] - before][-3:]
         self.write_ledger()
         if self.l2["usd"] > before:
             self.say("spend")
@@ -318,7 +335,7 @@ class Audit:
         runs = sum(experiments.values())
         spent = runs + self.l2["usd"]
         total = self.budget_usd
-        reserve = self.reserve * total
+        reserve = max(self.reserve * total, CLOSING_TURNS * self.turn_usd)
         remaining = total - spent
         available = remaining - reserve
         cap = self.brief.run_budget_usd
@@ -326,7 +343,7 @@ class Audit:
             available = min(available, cap - runs)
         return {
             "budget_usd": total, "spent_usd": spent, "remaining_usd": remaining,
-            "reserve_usd": reserve,
+            "reserve_usd": reserve, "l2_turn_usd": self.turn_usd,
             "available_for_experiments_usd": 0.0 if available <= EPSILON else available,
             "run_budget_usd": cap, "run_budget_left_usd": None if cap is None else cap - runs,
             "by_kind": {"experiments": sum(experiments.values()), "l2": self.l2["usd"]},
@@ -334,6 +351,13 @@ class Audit:
             **self.clock_state(), "halted": self.halted,
             "stopped": self.stop_reason(spent, reserve, total),
             **({"raised": list(self.raises)} if self.raises else {})}
+
+    @property
+    def turn_usd(self) -> float:
+        """What one of L2's model calls costs now: the dearest of its latest three (a
+        figure L2 reports per tool call can cover more than one model call, so this errs
+        high)."""
+        return max(self.recent_calls, default=0.0)
 
     @staticmethod
     def stop_reason(spent: float, reserve: float, total: float) -> str | None:
