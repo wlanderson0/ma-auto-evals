@@ -24,6 +24,7 @@ dev = [
     "pytest-timeout>=2.3,<3",
     "hypothesis>=6",
     "ruff>=0.12,<1",
+    "pytest-xdist>=3.5,<4",
 ]
 
 [tool.uv]

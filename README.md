@@ -22,7 +22,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
 
 ```bash
 uv sync
-uv run pytest -q          # offline: mockllm only, sockets disabled
+uv run pytest -q -n auto  # offline: mockllm only, sockets disabled; -n auto uses every core
 uv run ruff check src tests experiments
 ```
 
