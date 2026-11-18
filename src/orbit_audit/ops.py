@@ -77,8 +77,10 @@ class ControlOp(BaseModel):
         agent = getattr(self, "agent", None)
         return (agent,) if agent else ()
 
-    def affected(self, world: CommunicationWorld | None) -> tuple[str, ...]:
-        """``agents()``, resolved against ``world`` where the op leaves recipients implicit."""
+    def affected(self, world: CommunicationWorld | None,
+                 pending: Sequence[Sequence[str]] | None = None) -> tuple[str, ...]:
+        """``agents()``, resolved against ``world`` where the op leaves recipients implicit
+        and against ``pending`` (the schedule's pending steps) where it replaces them."""
         return self.agents()
 
     def payload(self) -> dict[str, Any]:
@@ -92,7 +94,8 @@ Proceed = Callable[..., Awaitable[ModelOutput]]
 class GenerationOp(ControlOp):
     boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.GENERATION})
 
-    agent: str
+    agent: str = Field(min_length=1)
+    """The agent whose boundary this is; checked against it (controller._problem)."""
 
     async def produce(
         self, request: GenerationRequest, proceed: Proceed
@@ -185,7 +188,8 @@ class ForceToolCall(GenerationOp):
 class ActivationOp(ControlOp):
     boundaries: ClassVar[frozenset[Boundary]] = frozenset({Boundary.BEFORE_ACTIVATION})
 
-    agent: str
+    agent: str = Field(min_length=1)
+    """The agent whose boundary this is; checked against it (controller._problem)."""
 
     def apply(self, activation: ActivationContext) -> Any:
         """Mutate the activation's conversation; return what was added."""
@@ -216,7 +220,8 @@ class StageInput(ActivationOp):
 
 # ---------------------------------------------------------------------- tools
 class ToolOp(ControlOp):
-    agent: str
+    agent: str = Field(min_length=1)
+    """The agent whose boundary this is; checked against it (controller._problem)."""
     tool_call_id: str | None = None
     """If set, the operation applies only to this exact tool call."""
 
@@ -267,7 +272,8 @@ class _ExistingMessageOp(MessageOp):
     def agents(self) -> tuple[str, ...]:
         return tuple(sorted(self.recipients or ()))
 
-    def affected(self, world: CommunicationWorld | None) -> tuple[str, ...]:
+    def affected(self, world: CommunicationWorld | None,
+                 pending: Sequence[Sequence[str]] | None = None) -> tuple[str, ...]:
         """With ``recipients=None``, every intended recipient of the message.
 
         Unresolvable here (no world, or no such message yet) falls back to
@@ -308,7 +314,7 @@ class RewriteMessage(_ExistingMessageOp):
 
     content: str = Field(min_length=1)
 
-    def affected(self, world):
+    def affected(self, world, pending=None):
         """The recipients, and the sender the new content is attributed to."""
         message = world.messages.get(self.message_id) if world else None
         sender = {message.sender} if message else set()
@@ -410,15 +416,26 @@ class AmendPending(TurnOp):
     def agents(self) -> tuple[str, ...]:
         return tuple(sorted({agent for step in self.steps for agent in step}))
 
+    def affected(self, world, pending=None):
+        """The agents in the new steps, and every agent in the ``pending`` steps they replace,
+        whose turns the amendment can remove or move."""
+        replaced = {agent for step in (pending or ()) for agent in step}
+        return tuple(sorted({*self.agents(), *replaced}))
+
     def apply(self, runtime, *, actor):
         schedule = runtime.schedule
         if schedule is None:
             raise OpError("amend_pending requires an explicit activation plan")
         before = [step.model_dump(mode="json") for step in schedule.pending_steps]
-        schedule.amend_pending(
-            [list(step) for step in self.steps], actor=actor,
-            reason=self.reason or "auditor amendment", expected_revision=self.schedule_revision,
-        )
+        try:
+            schedule.amend_pending(
+                [list(step) for step in self.steps], actor=actor,
+                reason=self.reason or "auditor amendment", expected_revision=self.schedule_revision,
+            )
+        except RuntimeError as error:
+            # Orbit refuses an amendment at a non-quiescent boundary or on a terminated
+            # schedule before changing anything; that is a rejection, not a failed branch.
+            raise OpError(f"amend_pending refused by the schedule: {error}") from None
         return {"before": before}
 
 

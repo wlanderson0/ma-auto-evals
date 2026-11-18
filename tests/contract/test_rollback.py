@@ -12,8 +12,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from inspect_ai import eval as inspect_eval
+from inspect_ai.model import get_model
 from inspect_ai.tool import Tool, tool
 from orbit import ToolFactory
+from orbit.ids import id_scope, sequential_ids
 
 from orbit_audit.boundaries import Boundary
 from orbit_audit.branches import AuditLimits, BranchStatus
@@ -26,7 +29,9 @@ from orbit_audit.ops import (
 )
 from orbit_audit.policy import AuditPolicy, BoundaryView
 from orbit_audit.runner import BRANCHES_KEY, BUDGET_KEY
+from orbit_audit.task import audit_task
 from tests.support.runs import info, model_events, run_branches, sample, verdict
+from tests.support.scenarios import release_models, release_team
 
 SHIP_IT = ReplaceGeneration(agent="pm", tool_calls=(ToolCallSpec(
     function="channel_post",
@@ -244,6 +249,35 @@ def test_replay_desync_is_a_distinct_status_not_a_finding(tmp_path):
     assert [b["status"] for b in tree] == ["rolled_back", "replay_desync"]
     assert "tool_result:coder:run_tests" in tree[1]["reason"]
     assert len(controllers) == 2
+
+
+def test_a_child_that_ends_before_its_fork_is_a_desync_not_a_completed_run(tmp_path):
+    """Fault injection: the child's run halts before it reaches its fork."""
+    policy = RollbackBeforeVerdict()
+    controllers = []
+
+    def halt_the_child(controller):
+        controllers.append(controller)
+        if controller.branch == "branch-0":
+            return
+        before_turn = controller.before_turn
+
+        async def halting(turn):
+            await before_turn(turn)
+            controller.runtime.halt("injected fault")
+
+        controller.before_turn = halting
+
+    task = audit_task(policy=lambda: policy, on_controller=halt_the_child, tool_replay=PURE,
+                      **release_team())
+    model = get_model("mockllm/model", custom_outputs=release_models, memoize=False)
+    with id_scope(sequential_ids()):
+        log = inspect_eval(task, model=model, log_dir=str(tmp_path), display="none")[0]
+    tree = branches(log)
+    child = controllers[1]
+    assert child.revision < child.replay.fork_revision
+    assert [b["status"] for b in tree] == ["rolled_back", "replay_desync"]
+    assert "before its fork" in tree[1]["reason"]
 
 
 # --------------------------------------------------------------- budget

@@ -1,0 +1,10 @@
+name = "scope"
+defaultTargets = ["Scope", "scope-driver"]
+
+[[lean_lib]]
+name = "Scope"
+
+# The differential-test driver (tests/lean); built so CI notices if it stops compiling.
+[[lean_exe]]
+name = "scope-driver"
+root = "Driver.Main"

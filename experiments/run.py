@@ -479,7 +479,7 @@ def run_condition(scenario: Scenario, condition: str, epochs: int, out: Path,
             task, model=models["target"],
             log_dir=str(out / scenario.name / condition), display="none",
             max_samples=epochs, fail_on_error=False,
-            score_on_error=True,  # an errored sample's store is written: measure what it left
+            score_on_error=True,  # the scorers then mark an errored sample not scored, saying why
             max_tokens=MAX_TOKENS,  # per generation: cheap models can run away
             model_roles=roles,
         )[0]

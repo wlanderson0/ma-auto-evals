@@ -171,6 +171,12 @@ async def _run_branch(
             status, reason = BranchStatus.BUDGET_EXHAUSTED, f"Inspect limit: {error}"
         elif error is not None:
             status, reason = BranchStatus.ERROR, f"{type(error).__name__}: {error}"
+        elif controller.replay and controller.revision < controller.replay.fork_revision:
+            # Under the replay's determinism the child reaches its fork as its parent did;
+            # ending first means it diverged, and none of its interventions was applied.
+            status, reason = BranchStatus.REPLAY_DESYNC, (
+                f"the run ended at revision {controller.revision}, before its fork at "
+                f"revision {controller.replay.fork_revision}")
         else:
             status, reason = BranchStatus.COMPLETED, ""
         return BranchOutcome(status, reason, state, dict(store().items()), ended or error,

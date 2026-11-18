@@ -7,6 +7,7 @@ import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import read_eval_log
 from inspect_ai.model import ModelOutput, get_model
@@ -23,7 +24,12 @@ from experiments.run import (
     run_condition,
 )
 from experiments.scenarios import SCENARIOS
-from experiments.scorers import counts_scorer, measurement_scorers, read_sample
+from experiments.scorers import (
+    counts_scorer,
+    expected_scores,
+    measurement_scorers,
+    read_sample,
+)
 from orbit_audit.measurements import MEASUREMENTS_KEY, MEASUREMENTS_VERSION
 from orbit_audit.task import audit_task
 
@@ -358,6 +364,20 @@ def test_a_branch_whose_record_failed_has_an_unknown_plan_too():
     assert score.metadata["branches"]["branch-0"]["plan"] is None
 
 
+@pytest.mark.parametrize("status", ["replay_desync", "budget_exhausted", "error"])
+def test_a_final_branch_that_did_not_complete_is_not_scored(status):
+    scenario = SCENARIOS["kestrel_naming"]({})
+    recorded = {"version": MEASUREMENTS_VERSION, "branches": {"branch-0": {}, "branch-1": {}}}
+    state = _stored(recorded, nodes=("branch-0", "branch-1"))
+    state.store["orbit_audit:branches"][0]["status"] = "rolled_back"
+    state.store["orbit_audit:branches"][1].update(status=status, reason="why it ended")
+    for made in measurement_scorers(scenario, "l1"):
+        score = asyncio.run(made(state, None))
+        assert score.value == "incomplete"
+        assert f"branch-1 ended {status}: why it ended" in score.metadata["incomplete"]
+    assert not isinstance(read_sample(state), str)  # the branches stay readable as evidence
+
+
 def test_a_record_without_branches_is_incomplete_not_an_error():
     reason = read_sample(_stored({"version": MEASUREMENTS_VERSION}))
     assert isinstance(reason, str) and "no branches" in reason
@@ -370,7 +390,7 @@ def test_a_record_of_another_version_is_incomplete_not_misread():
         assert isinstance(reason, str) and "unsupported" in reason and "version" in reason
 
 
-def test_a_sample_whose_target_failed_is_still_measured_from_what_it_left(tmp_path):
+def test_a_sample_whose_target_failed_is_not_scored_but_keeps_its_posts(tmp_path):
     calls = []
 
     def dies_on_the_fourth_call(messages, tools, tool_choice, config):
@@ -387,8 +407,11 @@ def test_a_sample_whose_target_failed_is_still_measured_from_what_it_left(tmp_pa
     [row] = run_condition(SCENARIOS["mfa_rumor"]({}), "baseline", 1, tmp_path, models)
     assert "target is down" in row["error"]
     assert [b["status"] for b in row["branches"]] == ["error"]
-    assert "incomplete" not in row  # every score was made, from the store the runner left
-    assert any(a["probe"] is not None for a in row["agents"].values())
+    # A cut-off run is not a result: every score says why it was not made.
+    assert set(row["incomplete"]) == set(expected_scores(SCENARIOS["mfa_rumor"]({})))
+    assert all("branch-0 ended error" in why for why in row["incomplete"].values())
+    assert all(a["probe"] is None for a in row["agents"].values())
+    assert "target is down" in row["branches"][0]["reason"]  # the evidence stays
 
 
 def test_the_printed_plan_status_tells_an_unknown_plan_from_no_plan_check():
