@@ -569,12 +569,10 @@ def reviewer(prices: Mapping[str, tuple[float, float]] = PRICES) -> Callable[...
     return review
 
 
-CACHE_PROVIDERS = ["anthropic"]
-"""OpenRouter providers asked first for L2 on Claude: the one that honours the top-level
-cache_control (Amazon Bedrock did not, in a live run on 2026-11-17)."""
 CACHE_TTL = "1h"
-"""How long L2's conversation stays cached on a Claude model (issue #54). L2 waits on an
-experiment for minutes at a time, longer than the default 5 minutes."""
+"""How long L2's conversation stays cached on a Claude model, where the provider honours
+the request (issue #54). L2 waits on an experiment for minutes at a time, longer than
+the default 5 minutes."""
 
 
 def _model(model: str | Model | None) -> str | Model | None:
@@ -587,13 +585,12 @@ def _model(model: str | Model | None) -> str | Model | None:
             # Inspect marks only the system prompt and the tools for caching through
             # OpenRouter: its per-message marker needs list content, and L2's messages
             # are strings. OpenRouter's automatic caching (a top-level cache_control)
-            # moves the breakpoint forward as the conversation grows, but a live run
-            # routed to Amazon Bedrock ignored it, so Anthropic's own API is asked for
-            # first (others still serve if it cannot). Other providers cache
-            # automatically.
-            config = GenerateConfig(extra_body={
-                "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL},
-                "provider": {"order": CACHE_PROVIDERS, "allow_fallbacks": True}})
+            # moves the breakpoint forward as the conversation grows, where the provider
+            # honours it: in live runs (2026-11-17/18) OpenRouter routed every call to
+            # Amazon Bedrock, which did not, so the conversation is still not cached
+            # (#54). Other providers cache automatically.
+            config = GenerateConfig(extra_body={"cache_control": {
+                "type": "ephemeral", "ttl": CACHE_TTL}})
         return get_model(model, strict_tools=False, config=config)
     return model
 
