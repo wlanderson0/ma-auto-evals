@@ -1,5 +1,6 @@
 import Scope.Spec.Run
 import Scope.Spec.View
+import Scope.Spec.Branch
 
 /-!
 # Differential-test driver
@@ -16,6 +17,10 @@ Commands:
 * `decide`: one boundary's batch through `decide` (the controller's `_decide`, its
   rollback path and the boundary method): whether it rolls back, the message ops applied,
   and the family ops handed on to the boundary.
+* `branch`: a child branch's replay and fork decisions (`Branch.lean`), from its parent's
+  recorded steps and what the child saw: at each boundary, whether the fingerprint check
+  ends it (`desynced`) and the batch it decides on (`batchAt`); and how a run that ends on
+  its own after `reached` boundaries is classified (`finished`, the RB2 rule).
 -/
 
 namespace Driver
@@ -257,8 +262,60 @@ def runDecide (j : J) (w : World) : D String := do
     return "{\"rollback\": false, \"messages\": " ++ encStrs messages ++ ", \"family\": " ++
       encStrs family ++ ", \"applied\": []}"
 
+/-- A recorded step: the fields `batchAt` and `desynced` read. Fingerprints are numbered
+by the caller (equal strings, equal numbers). -/
+def step (j : J) : D Branch.Step := do
+  return { boundary := ← boundary (← str j "boundary"),
+           fingerprint := ← asNat (← field j "fingerprint"),
+           decisions := ← asList op (← field j "decisions"),
+           overBudget := ← asBool (← field j "over_budget"), output := 0 }
+
+def statusName : Branch.Status → String
+  | .completed => "completed" | .rolledBack => "rolled_back" | .replayDesync => "replay_desync"
+  | .budgetExhausted => "budget_exhausted" | .error => "error"
+
+def emptyWorld : World := { agents := [], channels := [], routes := none, messages := [] }
+
+/-- An `Env` whose fingerprint is `fp`; nothing else is read by `desynced`. -/
+def fpEnv (fp : Nat) : Branch.Env where
+  ctx := fun _ => ⟨.generation, 0, none, none⟩
+  fingerprint := fun _ => fp
+  gen := fun _ _ _ => 0
+  step := fun _ _ _ st => st
+  done := fun _ _ _ => false
+  cut := fun _ _ _ _ => none
+  stale := fun _ _ _ => none
+  applyOk := fun _ _ _ _ => true
+  overBudget := fun _ _ _ => false
+  veto := fun _ _ _ _ => false
+  rollbackExtra := fun _ _ _ _ _ => none
+  notice := fun sh _ _ _ _ => sh
+  begin := fun sh _ => sh
+
+def runBranch (j : J) : D String := do
+  let r : Branch.Replay := { steps := ← asList step (← field j "parent"),
+                             fork := ← asNat (← field j "fork"),
+                             interventions := ← asList op (← field j "interventions") }
+  let child ← asArr (← field j "child")
+  let st : Branch.State := { world := emptyWorld }
+  let mut desync : List String := []
+  let mut batches : List String := []
+  let mut rev := 1
+  for c in child do
+    let fp ← asNat (← field c "fingerprint")
+    let policy ← asList op (← field c "policy")
+    desync := desync ++ [if Branch.desynced (fpEnv fp) (some r) rev st then "true" else "false"]
+    let ops := Branch.batchAt (fun _ _ _ _ => policy) 1 (some r) rev 0 st
+    batches := batches ++ [encStrs (ops.map (·.name))]
+    rev := rev + 1
+  let reached ← asNat (← field j "reached")
+  return "{\"desync\": [" ++ ", ".intercalate desync ++ "], \"batches\": [" ++
+    ", ".intercalate batches ++ "], \"finished\": " ++
+    esc (statusName (Branch.finished (some r) (reached + 1))) ++ "}"
+
 def run (line : String) : D String := do
   let j ← parse line
+  if (← str j "cmd") == "branch" then return ← runBranch j
   let w ← world (← field j "world")
   if (← str j "cmd") == "decide" then return ← runDecide j w
   let o ← op (← field j "op")

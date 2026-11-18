@@ -102,3 +102,19 @@ def python_overlay(world: dict[str, Any]) -> DeliveryOverlay:
     overlay.injections.extend(message(m, offset + i) for i, m in enumerate(ov["injections"]))
     overlay.delivered.update((agent, mid) for agent, mid in ov["delivered"])
     return overlay
+
+
+# ------------------------------------------------------------------ ops
+def lean_op(op: Any) -> dict[str, Any]:
+    """A real ``ControlOp`` as the driver's JSON (the inverse of ``python_op`` in
+    ``test_differential.py``): tool calls as function names, replacements as pairs."""
+    data = {"op": op.name, **op.model_dump(mode="json", exclude={"expected_revision", "reason"})}
+    if "tool_calls" in data:
+        data["tool_calls"] = [c["function"] for c in data["tool_calls"]]
+    if "calls" in data:
+        data["calls"] = [c["function"] for c in data["calls"]]
+    if "replacements" in data:
+        data["replacements"] = [[r["old"], r["new"]] for r in data["replacements"]]
+    if "interventions" in data:
+        data["interventions"] = [lean_op(iv) for iv in op.interventions]
+    return data
