@@ -195,7 +195,7 @@ This is property 2.
 - a provider-budget stop on served calls (`controller.py:391-403`);
 - a replayed `halt` or `amend_pending`, which is the parent's own and identical under T8.
 
-**Fix:** record "fork not reached" on any ending with `replay` set and `controller.revision < fork_revision` (`ReplayDesync` when the ending is otherwise `completed`). State property 2 so that it covers run length.
+**Fixed** (`runner.py`, `_run_branch`): a child that would end `completed` before its fork ends `replay_desync`, naming both revisions; `test_a_child_that_ends_before_its_fork_is_a_desync_not_a_completed_run` injects the fault (it failed with `completed` before the fix). Other endings before the fork keep their own status, and D5 leaves them unscored.
 
 ### RB3 (N4). A nested rollback above the parent's fork uses the wrong ids
 
