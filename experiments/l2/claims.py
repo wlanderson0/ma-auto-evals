@@ -40,8 +40,15 @@ otherwise the best verdict.
   come from different epochs of one variant (recurrence, spec §6.3); else *checked*.
   The quote shows that the words recur in the target's own posts; whether those words are
   the behaviour claimed is for the reader (the report shows them).
-- ``other``: anything else, e.g. a result from L2's own code (``run_python``). Recorded
-  with its evidence, *unchecked*.
+- ``other`` (``why_unchecked``): anything that cannot be recounted, e.g. a qualitative
+  finding or something L2 noticed that no measure was declared for. It must say in
+  ``why_unchecked`` why it cannot be a comparison, rate or existence claim (at least
+  ``WHY_WORDS`` words). Recorded with its evidence and that reason, *unchecked*. A claim
+  whose words carry figures (a count, a percentage or a decimal) is *quantitative*: the
+  report flags it, because a figure computed in ``run_python`` can be a declared measure
+  instead (expose it as the scenario's ``outcome`` field, record it with
+  ``note_decision(field="measure", value="outcome.<field>")`` before launching, and claim
+  it as a ``difference``, ``no_difference`` or ``rate``), and then it is recounted.
 
 An accepted measure, for comparisons (spec §1, §6.3): the brief's, if it fixes one and a
 scorer is known to read it on the scenario (``report.SCORER``); if none is known, a
@@ -85,13 +92,16 @@ FIELDS: dict[str, tuple[str, ...]] = {
     "existence": ("target",),
     "other": (),
 }
-OPTIONAL = ("text", "kind", "evidence")
+WHY_WORDS = 5
+"""An ``other`` claim's ``why_unchecked`` has at least this many words."""
+OPTIONAL = ("text", "kind", "evidence", "why_unchecked")
 DIRECTIONS = ("higher", "lower")
 CITABLE = ("scores", "transcript", "find", "run_python", "list_runs")
 """Tools whose results a claim may cite."""
 VERDICTS = ("checked", "lead", "contradicted", "invalid", "unchecked")
 FIGURE = re.compile(r"(?<![\d/.])(\d+)\s*/\s*(\d+)(?![\d/]|\.\d)")
 OF = re.compile(r"(?<![\d.])(\d+)\s+(?:of|out of|in)\s+(\d+)(?!\d|\.\d)", re.I)
+DECIMAL = re.compile(r"(?<![\w.])\d+\.\d+(?![\w.])")
 PERCENT = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:%|percent\b|per cent\b)", re.I)
 NOT_A_COUNT = re.compile(r"(?:round|epoch|turn|step|post|call)s?\s*$", re.I)
 """Words before ``k of n`` that make it a position, not a count (e.g. "round 3 of 5")."""
@@ -100,6 +110,15 @@ NOT_A_RATE = re.compile(r"(?:\bp\s*[<=>≤]\s*$)|(?:^\s*(?:CI\b|confidence))", r
 ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 QUOTE_WORDS = 3
 """An existence claim's quote has at least this many words."""
+
+
+def quantitative(text: str) -> bool:
+    """Whether a claim's words carry figures: a ``k/n``, ``k of n``, a percentage or a
+    decimal (positions such as "round 3 of 5" and significance levels do not count)."""
+    figures = [m for m in (*FIGURE.finditer(text), *OF.finditer(text))
+               if not NOT_A_COUNT.search(text[:m.start()])]
+    rates = [m for m in PERCENT.finditer(text) if not NOT_A_RATE.search(text[:m.start()])]
+    return bool(figures or rates or DECIMAL.search(text))
 
 
 class ClaimError(ValueError):
@@ -171,6 +190,18 @@ def parse_claims(raw: Any, tools: Tools) -> list[dict[str, Any]]:
             else:
                 value = value.strip()
             claim[name] = value
+        if kind == "other":
+            why = item.get("why_unchecked")
+            if not isinstance(why, str) or len(why.split()) < WHY_WORDS:
+                problems.append(
+                    f"{where}: an other claim needs why_unchecked: at least {WHY_WORDS} words "
+                    "on why it cannot be a difference, no_difference, rate or existence claim "
+                    "(a figure from your own code can be: expose it as the scenario's outcome "
+                    "field, record it with note_decision(field='measure', "
+                    "value='outcome.<field>') before launching, and compare it with scores)")
+            else:
+                claim["why_unchecked"] = " ".join(why.split())
+            claim["quantitative"] = quantitative(str(text or ""))
         if kind == "rate" and claim.get("k") is not None and claim.get("n") is not None \
                 and claim["k"] > claim["n"]:
             problems.append(f"{where}: k is more than n")
@@ -415,8 +446,12 @@ def _check(tools: Tools, claim: Mapping[str, Any]) -> tuple[str, list[str], Any,
     verdict was read from (``_used``; ``None`` for kinds not read from a call)."""
     kind = claim["kind"]
     if kind == "other":
-        return ("unchecked", ["kind other: not checked mechanically; read its evidence"],
-                None, None)
+        reasons = ["kind other: not checked mechanically; read its evidence",
+                   f"why it cannot be recounted (L2's words): {claim.get('why_unchecked', '')}"]
+        if claim.get("quantitative"):
+            reasons.append("quantitative claim that was not recounted: its figures are L2's "
+                           "own, not a declared measure on the logs")
+        return "unchecked", reasons, None, None
     if kind == "existence":
         return (*_check_existence(tools, claim), None)
     rows = _scores_rows(tools, claim)

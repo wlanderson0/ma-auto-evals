@@ -1500,8 +1500,12 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     "rate": "variant", "target", "k", "n" (k of n runs showing the
                     behaviour), citing a scores call that read the variant; "existence":
                     "target", citing that target's own posts, each with a quote (two
-                    epochs of one variant show it recurs); "other": anything else (e.g.
-                    a result from run_python), recorded but not checked. Figures in a
+                    epochs of one variant show it recurs); "other": anything that
+                    cannot be recounted (a qualitative finding), recorded but not checked,
+                    with "why_unchecked": why it cannot be one of the kinds above. A
+                    figure from run_python belongs in an outcome field, read by scores,
+                    and a difference or rate claim; an other claim with figures is
+                    flagged in the report as not recounted. Figures in a
                     claim's text must be its own counts (e.g. the two sides of its
                     comparison for its target).
             """

@@ -392,6 +392,11 @@ def _claims(tools: Tools) -> list[str]:
             "read again, bear it out (a comparison also needs an accepted measure and no "
             "departure from the reading guidance); a *lead* falls short; the rules are in "
             "spec §6.4. Anything L2 wrote outside its claims is not checked.", ""]
+    loose = [c for c in tools.claims if c.get("quantitative")]
+    if loose:
+        out += [f"**⚠ {len(loose)} claim(s) give figures that the checker could not recount** "
+                "(kind other, marked below): the numbers are L2's own, from code or reading, "
+                "not a declared measure on the logs. Treat them as leads, not findings.", ""]
     links = _cosmos(tools)
     if links:
         out += ["Each claim links to its evidence on Cosmos: the messages it quotes, and every "
@@ -419,7 +424,8 @@ def claim_lines(i: int, claim: dict[str, Any]) -> list[str]:
     """Claim ``i`` with its verdict, fields, evidence and the checker's reasons."""
     fields = ", ".join(f"{name}={_inline(claim[name])}"
                        for name in claims_.FIELDS[claim["kind"]])
-    return [f"{i}. **{claim['verdict']}** ({claim['kind']}{': ' + fields if fields else ''})"
+    flag = " ⚠ QUANTITATIVE, NOT RECOUNTED" if claim.get("quantitative") else ""
+    return [f"{i}. **{claim['verdict']}**{flag} ({claim['kind']}{': ' + fields if fields else ''})"
             f": {_inline(claim['text'])}",
             f"   - Evidence: {', '.join(_ref(r) for r in claim['evidence']) or 'none'}",
             *[f"   - {_inline(reason)}" for reason in claim["reasons"]]]

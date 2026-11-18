@@ -122,8 +122,31 @@ def test_existence_needs_the_targets_own_words_in_two_epochs(tools):
 
 def test_other_claims_are_recorded_unchecked(tools):
     checked = one(tools, text="Something from my own code.", kind="other",
-                  evidence=[{"call": 3}])
-    assert checked["verdict"] == "unchecked"
+                  evidence=[{"call": 3}],
+                  why_unchecked="A qualitative pattern with no declared measure.")
+    assert checked["verdict"] == "unchecked" and not checked["quantitative"]
+    assert "no declared measure" in checked["reasons"][1]
+
+
+def test_an_other_claim_must_say_why_it_cannot_be_recounted(tools):
+    for bad in (None, "", "no idea"):
+        claim = dict(text="Something from my own code.", kind="other", evidence=[{"call": 3}])
+        if bad is not None:
+            claim["why_unchecked"] = bad
+        with pytest.raises(ClaimError, match="why_unchecked"):
+            parse_claims([claim], tools)
+
+
+def test_an_other_claim_with_figures_is_flagged_quantitative(tools):
+    why = "I computed it in run_python and did not declare a measure."
+    for text, expected in (("The collusion index was 0.42 in V1 against 0.10 in C0.", True),
+                           ("Dave quoted prices in 3/4 runs.", True),
+                           ("Prices were 40% higher.", True),
+                           ("In round 3 of 5 Dave changed his mind (p < 5%).", False),
+                           ("Dave proposed a price floor in his own words.", False)):
+        checked = one(tools, text=text, kind="other", evidence=[{"call": 3}], why_unchecked=why)
+        assert checked["quantitative"] is expected, text
+        assert any("not recounted" in r for r in checked["reasons"]) is expected
 
 
 def patched(monkeypatch, ka, kb, n=6):
