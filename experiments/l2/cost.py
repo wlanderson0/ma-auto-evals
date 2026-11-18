@@ -61,6 +61,9 @@ PRICES: dict[str, tuple[float, float]] = {
     # A cheaper L2 (listed rate on OpenRouter, 2026-11-17); a reasoning model, whose
     # reasoning tokens bill as output.
     "openrouter/openai/gpt-6.2-sol": (2.00, 10.00),
+    # The LLM-collusion replication's firms (listed rate on OpenRouter, 2026-11-18); a
+    # reasoning model, whose reasoning tokens bill as output.
+    "openrouter/openai/gpt-5.6-luna": (0.20, 1.20),
 }
 FREE_PREFIXES = ("mockllm/",)
 """Offline mock models: no provider, no cost."""
