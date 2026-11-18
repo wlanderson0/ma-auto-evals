@@ -157,7 +157,8 @@ otherwise); invalid (its citations cannot support that kind of claim); or unchec
 (kind "other"). Any figure you state (a rate, an index, a mean) should be a claim the
 checker can recount: expose the quantity as a field of the scenario's outcome (not only
 in run_python), record note_decision(field="measure", value="outcome.<field>") before
-launching, and claim it as a difference, no_difference or rate citing the scores call.
+launching, and claim it as a difference, no_difference or rate citing the scores call, or
+as a mean (an average over the runs, e.g. of an index) citing a scores call on outcome.
 Use "other" only for what cannot be recounted (a qualitative finding, a pattern you
 noticed that no measure was declared for), and then give why_unchecked: why it cannot be
 one of the other kinds. An "other" claim with figures is flagged in the report as not
