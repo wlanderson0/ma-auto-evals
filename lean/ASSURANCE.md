@@ -33,7 +33,7 @@ Two parts: **audit scope** (below, plan `docs/superpowers/plans/2026-11-09-lean-
 | 2 | An op that passes the controller's other checks and applies leaves every agent outside `affected` unchanged | `Frame` | `frame` | `ops.py`, `controller.py:198-298`, `delivery.py:37-58` | `test_message_op_effects`, `test_turn_op_effects`, `test_frame_on_python_affected` | `FrameWitness`, `SeatWitness`, `HaltWitness` |
 | 2′ | G1 fixed: `amend_pending` counts every agent whose pending turns it replaces | (part of `Frame`) | `frame` | `ops.py:419-423`, `controller.py` `_pending` | `test_g1_*` in `tests/contract/test_scope_gaps.py`; differential tests with the schedule passed | `G1Witness` |
 | 2″ | G2 fixed: an op naming no agent is refused, and one accepted at an agent's boundary names exactly that agent | `G2Fixed` | `g2Fixed` | `ops.py:95-96, 189-190, 221-222`, `controller.py:536-541` | `test_g2_*` in `tests/contract/test_scope_gaps.py` and `tests/lean/test_differential.py` | — |
-| 3 | Every op an audit applies, live, replayed or at a fork, passed the scope check in the world it changed | `Enforced` | `enforced` | `controller.py:412-541`, `runner.py:99-147` | live batches: `test_controller_problem`, `test_decide`; replay and fork paths: `tests/lean/test_rollback_agreement.py` (batches, desyncs, ends; see "Rollback"); AST inventory (T1) | `RunWitness`, `ReplayMutantWitness` |
+| 3 | Every op an audit applies, live, replayed or at a fork, passed the scope check in the world it changed | `Enforced` | `enforced` | `controller.py:412-541`, `runner.py:99-147` | live batches: `test_controller_problem`, `test_decide`; replay and fork paths: the batch each boundary decides on is compared with the model (`tests/lean/test_rollback_agreement.py`), but those runs set no scope, so no scope verdict on them is compared; AST inventory (T1) | `RunWitness`, `ReplayMutantWitness` |
 | 4a | Widening a scope never rejects more | `Monotone` | `monotone` | `scope.py:49-71` | — | `MonotoneWitness` |
 | 4b | The meet of two scopes allows exactly what both allow (no Python counterpart yet) | `Meet` | `meet` | — | — | `MeetWitness` |
 | 4c | At a boundary that does not roll back, the world changes only through the ops applied there | `OnlyApplied` | `onlyApplied` | `controller.py:412-458` | `test_decide` | `OnlyAppliedWitness` |
@@ -152,7 +152,7 @@ Rollback (`lean/rollback-map.md`, "Findings"):
 | 6 | A child's id tag is 0 before its fork and its index after | `IdsOwnAfterFork` | `TagKept` | — | `bug_NestedSilent` (failure past the parent's fork) |
 | S | The scope results hold for every branch, live, replayed or at a fork | `ScopeRespectedB` | `World.WF` for the view part | as the scope model | `ScopedForkWitness` |
 | 7 | Branches form a chain; each child replays its parent; the scored branch is the last and only if it completed, past its fork if it is a child | `ChainShape`, `AuditLink`, `ScoredIffCompleted`, `ScoredReachedFork` | none | `tests/e2e/test_scorers.py` (D5) | `bug_NestedDesync` (scored = none) |
-| 3 | An accepted rollback's interventions pass at the fork | not true: `bug_ForkRejected` (RB1) | — | drawn audits (a quarter reject at the fork) | `bug_ForkRejected` |
+| 3 | An accepted rollback's interventions pass at the fork | not true: `bug_ForkRejected` (RB1) | — | drawn audits assert the outcome at the fork: applied when aimed at the fork's agent, rejected as "targets …" when aimed at another, as "at most one …" for two producers, and as "only operation" when the woken policy rolls back again | `bug_ForkRejected` |
 
 The plan's property 5 (a no-op rollback is the identity up to ids) is not claimed in Lean; the R7 test covers it by renumbering ids.
 
@@ -165,9 +165,31 @@ The plan's property 5 (a no-op rollback is the identity up to ids) is not claime
 - **A7.** Policies return ops and do not raise `RollbackRequested` (RB6).
 
 **How the rollback model is tied to the Python** (`tests/lean/test_rollback_agreement.py`, with the Lean driver's `branch` command):
-- 40 Hypothesis-drawn release-team audits on a PR (300 nightly): where rollbacks land; interventions aimed at the fork's agent, at another (RB1) or two at once; an applied or a vetoed op below the fork; a second rollback within or past the child's fork (RB3). For each child the model's `batchAt`, `desynced` and `finished` must match what the Python did, and, unless nested past its parent's fork, the child must keep its parent's fingerprints and applied ops below the fork and never desync (property 1 on real Orbit runs with scripted models).
-- Fault injection: a tool declared pure that is not (desync), and a child halted before its fork (RB2).
-- Not compared: the worlds themselves (only fingerprints and ledgers), live models (scripted only, so T8 failing on real models is not tested), and the shared state's own rules (B1, tested in `tests/contract/test_rollback.py`).
+- 40 Hypothesis-drawn release-team audits on a PR (120 weekly). They vary:
+  - where rollbacks land;
+  - interventions aimed at the fork's agent, at another (RB1) or two at once;
+  - an applied or a vetoed op below the fork;
+  - the woken policy adding an op at the fork;
+  - an intervention budget of 1;
+  - an approver that would veto a replayed op if asked during replay;
+  - a second rollback within or past the child's fork (RB3).
+- For each child:
+  - its replay is the rollback its parent applied (fork and interventions);
+  - the model's `batchAt`, `desynced` and `finished`, fed what the policy *returned* (recorded by the policy, not taken from the controller's decisions), match what the Python decided and how it ended;
+  - below the fork (and up to the parent's own fork when nested past it) it keeps its parent's fingerprints and applied ops, and unless nested past it never desyncs (property 1 on real Orbit runs with scripted models);
+  - the policy is first asked at the fork;
+  - the outcome at the fork is asserted (row 3).
+- Across the audit: the budget counts live counted ops only, and a message id shared by two branches names the same message.
+- A fixed test pins M1: a vetoed batch is recorded as nothing and replayed as nothing.
+- Fault injection:
+  - a tool declared pure that is not, desyncing below the fork and exactly at it;
+  - a child halted before its fork (RB2).
+- Python mutants that must be caught: the over-budget verdict recomputed during replay, and the approver asked during replay.
+- Not compared:
+  - the worlds themselves (only fingerprints and ledgers);
+  - the model's step-by-step `tick` (the driver evaluates `batchAt`, `desynced` and `finished`, not exported worlds: the plan's export of worlds and verdicts per boundary is not done);
+  - live models (scripted only, so T8 failing on real models is not tested);
+  - fewer model calls than recorded (RB5).
 
 **Not covered.** Effectful tools (a fork past one is refused, R5); defences and model filters (refused); concurrent steps (refused); the policy's own memory beyond "arbitrary shared state"; the number of model calls within a boundary (RB5).
 
