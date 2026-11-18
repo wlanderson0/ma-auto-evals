@@ -17,6 +17,7 @@ from __future__ import annotations
 import glob
 import json
 import re
+import urllib.parse
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -477,6 +478,11 @@ def _example_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -
         url = links["samples"].get(f"{vid}/{sample.epoch}")
         if did and url:
             out.append(f"[{_inline(vid)} epoch {sample.epoch} ✓]({url})")
+            if used["scorer"] == "outcome" and (names := scenario_tools(tools, vid)):
+                calls = tools.tool_calls(sample, claim["target"], names)
+                if calls:
+                    out.append(f"[its first {_inline(calls[0]['function'])} call]"
+                               f"({call_url(url, claim['target'], calls[0])})")
             break
     return out
 
@@ -597,6 +603,71 @@ def _claim_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> 
                        + " ".join(cells))
         if used["scorer"] == "counts":
             out += _counted(tools, claim["target"], vid, used, links)
+        if used["scorer"] == "outcome":
+            out += _called(tools, claim["target"], vid, used, links)
+    return out
+
+
+CALLS_PER_RUN = 8
+"""Tool calls linked per run (``_called``); the rest are counted."""
+
+
+def scenario_tools(tools: Tools, vid: str) -> tuple[str, ...]:
+    """The tools the variant's scenario gives its agents (``outcome`` reads their record),
+    by the names agents call them; none for a scenario without a team setup."""
+    results = tools.results()
+    team = getattr(results.scenario(results.base(vid)), "team", None)
+    return tuple(team.tools) if team is not None else ()
+
+
+def call_url(sample_url: str, agent: str, call: dict[str, Any]) -> str:
+    """A Cosmos link that opens at a tool call, in the agent's own conversation."""
+    query = urllib.parse.urlencode({"branch": call["branch"], "kind": "agent",
+                                    "agent": agent})
+    return f"{sample_url}?{query}#call-{urllib.parse.quote(str(call['id']), safe='')}"
+
+
+def _call_label(call: dict[str, Any]) -> str:
+    """The call's name and its first short text argument (e.g. a username)."""
+    first = next((v for v in call["arguments"].values()
+                  if isinstance(v, str) and v and not v.startswith("attachment:")), None)
+    return call["function"] + (f" {_short(first, 24)}" if first else "")
+
+
+def _called(tools: Tools, target: str, vid: str, used: dict[str, Any],
+            links: dict[str, Any]) -> list[str]:
+    """For a claim on a scenario's ``outcome``, each run where the target showed the
+    behaviour, with the target's calls to the scenario's own tools linked on Cosmos (the
+    calls whose record the outcome reads)."""
+    names = scenario_tools(tools, vid)
+    if not names:
+        return []
+    results, runs, off = tools.results(), [], []
+    for sample in sorted(results.of(vid), key=lambda s: s.epoch):
+        try:
+            did = results.adopted(sample, target, used["scorer"], used["rounds"],
+                                  used["field"])
+        except ValueError:
+            continue
+        url = links["samples"].get(f"{vid}/{sample.epoch}")
+        if not did or not url:
+            continue
+        try:
+            calls = tools.tool_calls(sample, target, names)
+        except Exception:  # an unreadable log: this run only
+            off.append(f"epoch {sample.epoch} (its log could not be read)")
+            continue
+        cells = [f"[{_inline(_call_label(c))}]({call_url(url, target, c)})"
+                 for c in calls[:CALLS_PER_RUN]]
+        more = len(calls) - CALLS_PER_RUN
+        runs.append(f"epoch {sample.epoch}: " + (", ".join(cells) or "no calls")
+                    + (f" (+{more} more)" if more > 0 else ""))
+    out = []
+    if runs:
+        out.append(f"{EACH_RUN}{_inline(target)}'s calls to the scenario's tools in each run "
+                   f"of {_inline(vid)} where it showed the behaviour: " + "; ".join(runs))
+    if off:
+        out.append(f"Tool calls not linked in {_inline(vid)}: " + "; ".join(off))
     return out
 
 

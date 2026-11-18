@@ -173,6 +173,7 @@ class Tools:
         self._where: dict[str, str] = {}
         self._key: Any = None
         self._posts: dict[str, Any] = {}
+        self._calls: dict[str, list[dict[str, Any]]] = {}
         self._unlabelled: dict[str, str] = {}
         self.stop_reason: str | None = None
         """Why L2 stopped without ending the audit, when the agent knows (``agent.py``)."""
@@ -381,6 +382,34 @@ class Tools:
                 {**p, "label": (authors or {}).get(p["id"], "unlabelled")}
                 for p in sorted(posts, key=lambda p: p.get("sequence", 0))]
         return self._posts[sample.log]
+
+    def tool_calls(self, sample: SampleResult, agent: str,
+                   names: Sequence[str]) -> list[dict[str, Any]]:
+        """``agent``'s calls to the tools ``names`` in the sample, in order: each call's
+        ``id`` (the one a Cosmos ``#call-<id>`` link opens at), ``function``, ``arguments``
+        and ``branch`` (the branch span it ran in, ``branch-0`` if none)."""
+        if sample.log not in self._calls:
+            logged = (read_eval_log(sample.log).samples or [])[0]  # one sample per log
+            spans = {e.id: e for e in logged.events if e.event == "span_begin"}
+            found = []
+            for event in logged.events:
+                if event.event != "tool":
+                    continue
+                who, branch, sid = None, None, event.span_id
+                while sid in spans:
+                    span = spans[sid]
+                    if span.type == "agent" and who is None:
+                        who = span.name
+                    if span.type == "branch" and branch is None:
+                        branch = span.name
+                    sid = span.parent_id
+                found.append({"id": event.id, "function": event.function, "agent": who,
+                              "arguments": dict(event.arguments or {}),
+                              "branch": branch or "branch-0"})
+            self._calls[sample.log] = found
+        wanted = set(names)
+        return [c for c in self._calls[sample.log]
+                if c["agent"] == agent and c["function"] in wanted]
 
     # ---------------------------------------------------------------- tools
     def run_experiment(self, variants: str | list[Any], epochs: int,

@@ -195,7 +195,10 @@ Step by step, the annotations are not posted.
   every run its counts come from (✓ or ✗ for what the target did there, read as the
   claim's checked call read it) and to each message it quotes. A claim on a count of
   posts (`counts`: a target's uses of a name in its own words) also links, run by run,
-  every message that was counted. A claim on probe answers links to the runs only: the
+  every message that was counted, and a claim on a scenario's `outcome` (what a target
+  did with the scenario's tools) links, run by run, every call the target made to those
+  tools (`#call-<id>`, opening at the call in the agent's own conversation). A claim on
+  probe answers links to the runs only: the
   answer is given in a private interview after the run, not in a message. A slug that is not its
   experiment's run (another commit, start time or set of samples) is refused.
   `--share` (and `experiments.l2.share`) resolves the links before it uploads the audit

@@ -378,3 +378,35 @@ def test_an_outcome_comparison_is_read_again_with_its_field(tmp_path):
     assert "- Comparisons tried: 2 distinct (3 successful calls)" in text
     assert ("- compare S1 vs S0 (outcome.skips): Note: for no target can the difference be "
             "told apart from chance") in text
+
+
+def test_a_claim_on_a_scenario_s_outcome_links_the_tool_calls_behind_it(tmp_path, monkeypatch):
+    """For each run where the target showed the behaviour, its calls to the scenario's
+    own tools, each linked on Cosmos at the call (``#call-<id>``, in its own view)."""
+    from experiments.l2 import audit_report as report
+
+    path = tmp_path / "brief.md"
+    path.write_text("---\nbudget_usd: 1\nbase_scenarios: [skipped_tests]\n---\nWho skips?\n")
+    tools = Tools(Audit.create(path, tmp_path / "audit", mock=True, launch=InProcess()),
+                  on_end=write_report)
+    assert tools.call("run_experiment", variants=[SKIPPED, NEUTRAL], epochs=2,
+                      rationale="a test launch")[0]
+    assert tools.call("scores", variant_ids=["S1"], scorer="outcome", field="skips")[0]
+    assert report.scenario_tools(tools, "S1") == ("run_tests", "skip_test")
+    [first, *_] = tools.results().of("S1")
+    [call] = tools.tool_calls(first, "bob", ("run_tests", "skip_test"))
+    assert call["function"] == "run_tests" and call["branch"] == "branch-0"
+    assert call["id"] and not tools.tool_calls(first, "bob", ("skip_test",))
+    url = report.call_url("https://cosmos.example/samples/7", "bob", call)
+    assert url == ("https://cosmos.example/samples/7?branch=branch-0&kind=agent&agent=bob"
+                   f"#call-{call['id']}")
+    # as if bob had shown the behaviour in epoch 1 (the mocks never skip)
+    results = tools.results()
+    monkeypatch.setattr(type(results), "adopted",
+                        lambda self, sample, *a: sample.epoch == first.epoch)
+    links = {"samples": {f"S1/{s.epoch}": f"https://cosmos.example/samples/{s.epoch}"
+                         for s in results.of("S1")}, "posts": {}, "runs": {}}
+    used = {"scorer": "outcome", "field": "skips", "rounds": None, "call": 2}
+    [line] = report._called(tools, "bob", "S1", used, links)
+    assert line.startswith(report.EACH_RUN) and f"epoch {first.epoch}: [run\\_tests](" in line
+    assert f"#call-{call['id']})" in line and "epoch 2:" not in line  # ✓ runs only
