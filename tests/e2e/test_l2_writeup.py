@@ -52,6 +52,11 @@ def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
     tools, _ = written
     text = (tools.audit.out / "writeup.md").read_text()
     facts, body = text.split("\n---\n", 1)
+    question = tools.audit.brief.question.strip()
+    assert "\n\n" in question  # the brief's question has paragraphs; they are kept
+    head = f"## Question\n\n{question}\n\n## Audit facts\n\n| | |\n"
+    assert head in facts and "| Question |" not in facts
+    assert facts.index("## Question") < facts.index("| L2 |")
     assert "| Runs (variant × epochs run) | exp-1: C0 × 2, V1 × 2 |" in facts
     assert "| Claims | 1 checked (see report.md) |" in facts
     assert "| How it ended | L2 ended the audit |" in facts
@@ -62,7 +67,7 @@ def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
     assert final and ("How it ended", "L2 ended the audit") in facts
     assert "\n".join(text.split("\n")[body_line - 1:]).strip() == body.strip()
     assert json.loads((tools.audit.out / "writeup.json").read_text()) == {
-        "final": True, "body_line": body_line,
+        "final": True, "body_line": body_line, "question": question,
         "facts": [{"name": name, "value": value} for name, value in facts]}
     assert "is in `writeup.md`" in (tools.audit.out / "report.md").read_text()
 

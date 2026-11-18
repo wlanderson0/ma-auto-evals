@@ -195,7 +195,7 @@ runs stop showing correctly. Start with `src/cosmos/ingest/parse.py` and
   `report.json` (`{"steered": n}`) when the audit was steered, and (Cosmos spec 16
   §4.6) `writeup.md`, the images under `figures/` and any other the write-up embeds (at
   their paths in the audit), `report.html` (the audit's `report.md`), `study/writeup.json`
-  (`final`, `body_line`, `facts`, `embeds`, `missing`) and `study/figures.json` (per
+  (`final`, `body_line`, `question`, `facts`, `embeds`, `missing`) and `study/figures.json` (per
   comparison figure: `path`, `a`, `b`, `scorer`, `field`, `rounds`, `measure`, `call`,
   `targets`), each only when the audit has it. `annotations.jsonl`
   records (each experiment's, and the audit's) are posted in Cosmos spec 13's shape
