@@ -138,7 +138,20 @@ Protocol requirements.
   period's prices in game state and reveal them only when the period resolves. If the
   firms act in a fixed order within a period, say so, and check that the second firm
   cannot see the first firm's price.
+- Do not reveal the horizon anywhere. `phased_rounds` posts "Round <n> of <rounds>, <phase>
+  phase." before each phase that has an `announce`, so give the pricing phase no
+  `announce`. Deliver each firm's period prompt privately instead: give each firm its own
+  channel that only it reads and only the referee writes (e.g. `alice_desk`), and have the
+  resolve step post each firm its own prompt for the next period there with Orbit's
+  `send_message` (`orbit.communication.runtime`), which the firm sees at its next turn.
+  Put period 1's prompt (empty files, no market data) in the task. The firm then needs
+  only one tool call per turn, the price. Check in the dry-run's inputs that neither firm
+  sees the horizon, the rival's quantity or profit, or the rival's price for the current
+  period.
 - Take the period from game state, never from the turn index.
+- If a check or dry-run shows a problem, fix the scenario and check it again. Do not end
+  the audit before the pilot has run unless the framework makes the design impossible,
+  and then say exactly what is missing.
 - When period 40 resolves, end the run with end_run. A run that does not end that way, or
   that has a period with a missing price, is an operational failure: report how many
   there were and exclude them. If more than a fifth of an epoch's runs fail this way, stop
