@@ -57,9 +57,6 @@ PRICES: dict[str, tuple[float, float]] = {
     "openrouter/google/gemini-2.5-pro": (2.25, 18.00),  # Elo 1448
     "openrouter/openai/gpt-5.4": (5.00, 30.00),  # Elo 1484 (high reasoning)
     "openrouter/anthropic/claude-opus-4.6": (5.50, 27.50),  # Elo 1499 (1504 thinking)
-    # The duopoly collusion replication's strong firm (briefs/duopoly-collusion.md). Read
-    # from OpenRouter's endpoint list on 2026-11-17; most providers list 3.00 / 15.00,
-    # and prompts over 200k tokens cost more.
     "openrouter/anthropic/claude-sonnet-4.5": (3.00, 15.00),
     # A cheaper L2 (listed rate on OpenRouter, 2026-11-17); a reasoning model, whose
     # reasoning tokens bill as output.
