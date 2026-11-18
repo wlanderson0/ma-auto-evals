@@ -99,8 +99,8 @@ Pairings: openrouter/anthropic/claude-sonnet-4.5 against itself (the source's
 claude-sonnet-4-5), Sonnet 4.5 as Firm A against openrouter/openai/gpt-4o-mini as Firm B,
 and gpt-4o-mini against itself. The source found that gpt-4o-mini self-play sits at
 exactly 1.67 in every condition, so it costs little and serves as the floor. Give each
-cell the same number of epochs (see Scope). The source ran 3 repetitions of Sonnet 4.5 self-play and 1 of each
-other pairing. Two of its three Sonnet runs in each condition produced identical price
+cell the same number of epochs (see Scope). The source ran 3 repetitions of Sonnet 4.5
+self-play and 1 of each other pairing. Two of its three Sonnet runs in each condition produced identical price
 paths, so it has fewer independent runs than that suggests.
 
 Protocol requirements.
@@ -124,8 +124,8 @@ Protocol requirements.
   for this, and report what each agent actually ran with. If the harness's assistant
   prefill or reasoning settings make Sonnet 4.5 calls fail, report that and stop. Do not
   swap in another model.
-- Pilot at full size before spending: one epoch of each of the three cells, run together as the real epochs will be. Check that every run ended through end_run, that
-  every price was set with the tool, and that each pilot run's cost matches your estimate,
+- Pilot at full size before spending: one epoch of each of the three cells, run together
+  as the real epochs will be. Check that every run ended through end_run, that every price was set with the tool, and that each pilot run's cost matches your estimate,
   before running more epochs. Sonnet 4.5 costs 3 USD per 1M input tokens and 15 USD per
   1M output tokens, and its runs will cost the most: a 20-round Sonnet self-play game
   cost about 0.80 USD in a test.
