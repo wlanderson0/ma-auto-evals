@@ -129,12 +129,14 @@ The plan's "ledger" in the shared-state list means the `BudgetLedger`.
   - The model records a vetoed batch in `decisions` (`Run.lean:216`, `decs ++ [ops]`), so its replay re-applies it; the Python clears it (`controller.py:453`).
   - This does not make the frozen scope proofs unsound: the old model is more general, and `env.hooks b` can veto again in any branch.
   - The new spec file mirrors the Python.
-- **M2. Nothing shared across branches.** The model takes `env.hooks b` and `env.step b` per branch, so anything may differ between branches, and replay fidelity cannot be stated. The new model makes the shared state explicit and keeps the nondeterminism as an argument.
+- **M2. Nothing shared across branches.** The model takes `env.hooks b` and `env.step b` per branch, so anything may differ between branches, and replay fidelity cannot be stated. The new model (`Branch.lean`) makes the shared state explicit and keeps the nondeterminism as an argument; fidelity is `Fidelity` there.
 - **M3. Queue vs chain.** `auditLoop` keeps a queue (`Run.lean:222-230`); the Python's branches form a chain. The queue is more general, so the scope theorems still hold, but the new model can use a chain.
 - **M4. Policies cannot raise.** `Policy` returns a list of ops (`Run.lean:177`), so a policy that raises is outside the model (see RB6).
 - **M5. Stale line numbers.** `Run.lean`'s mirror headers cite controller lines from before the G1–G3 fixes. The new file cites current lines, and the old headers are noted in step 6.
 
-## Findings so far (to reproduce and classify in step 6)
+## Findings
+
+In Lean (`lean/ASSURANCE.md`, "Findings"): RB1 is `bug_ForkRejected`; RB2's fix is `CompletedReachedFork` and `ScoredReachedFork`; RB3 is `bug_NestedDesync` and `bug_NestedSilent`, and the `NotNestedAbove` hypothesis; RB4 is `ChainShape` and `ScoredIffCompleted` (D5); RB6 is assumption A7. Reproduced on real runs in `tests/lean/test_rollback_agreement.py` (RB1, RB2, RB3).
 
 ### RB1. An accepted rollback can produce a child that rejects its interventions
 
@@ -245,4 +247,5 @@ See `controller.py:391-403`. Under T8 this cannot happen. Without T8, the finger
   - B1: `:250-300`;
   - replayed ops keep their verdict: `:300`.
 - **`tests/contract/test_noop_rollback.py:112`:** R7, after renumbering ids (`:60-71`).
-- **Not tested:** RB1, RB2, RB3 above the parent's fork, RB6.
+- **`tests/lean/test_rollback_agreement.py`:** the model against drawn rollbacks; RB1, RB2 (fault injection), RB3.
+- **Not tested:** RB6.

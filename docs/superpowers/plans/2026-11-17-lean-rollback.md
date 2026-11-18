@@ -1,5 +1,7 @@
 # Lean verification of rollback: plan
 
+**Status:** steps 1–5 done; step 6 (findings) open on RB1, RB3 and RB6. Results: `lean/ASSURANCE.md`, "Rollback".
+
 **Goal:** prove in Lean that a rollback is faithful. A child branch reproduces its parent up to the fork, and differs after it only through the rollback's interventions and what happens live afterwards. Every L1 comparison between branches rests on this. The scope proofs (`lean/`, PR #41) left it out: there, each branch starts from `w0` and the run between boundaries (`Env.step`) is arbitrary per branch.
 
 **Approach:** the same as the scope plan (`2026-11-09-lean-scope.md`): small statements, frozen, gated proofs, tied to the Python by tests. The new model goes in a **new spec file**; the frozen `Run.lean` is not edited. A simulation lemma carries the scope theorems over (step 4).
@@ -44,8 +46,8 @@ Dropped from the first draft: "no leakage" (R6). In the model it holds by constr
 
 1. **Map:** `branches.py`, the replay paths in `controller.py` (`_view`, `_proceed`, `_decide`, `_over_budget`, `_rollback_problem`, `tool_call`), `runner.py`. Write a file:line map, the list of shared state, and T8's excluded fields.
 2. **Model:** `Branch.lean` as above, with mirror headers; fix the vetoed-batch mirror.
-3. **Statements:** properties 1–4, 6–7, frozen (`BranchStatements.lean`), with witnesses (`BranchWitnesses.lean`): a real fork; an accepted rollback whose intervention is rejected (RB1); a nested rollback that desyncs, and one that diverges silently (RB3).
-4. **Proofs:** under the same gate. Every boundary of the new model goes through the unchanged `decide` of `Run.lean`, so the scope results carry over through the existing lemma `decide_good` (`ScopeRespectedB`); no simulation lemma is needed.
+3. **Statements:** properties 1–4, 6–7 (`BranchStatements.lean`), with witnesses (`BranchWitnesses.lean`). After two reviews: `Fidelity`, `ThroughFork`, `FailSafe`, `FailSafeRun`, `CompletedReachedFork`, `ForkEffect`, `IdsOwnAfterFork` (the positive half of property 6), `ScopeRespectedB`, `ChainShape`, `AuditLink`, `ScoredIffCompleted`, `ScoredReachedFork`; hypotheses `T8`, `NotNestedAbove`, `TagKept`. Property 3 exists only as the witness `bug_ForkRejected` (RB1); property 6's failure as `bug_NestedDesync` and `bug_NestedSilent` (RB3). They were revised during step 4 and checksummed with the proofs.
+4. **Proofs:** under the same gate. Every boundary of the new model goes through the unchanged `decide` of `Run.lean`, so the scope results carry over through the existing lemma `decide_good'` (`ScopeRespectedB`); no simulation lemma is needed. Done: the gate passes with every statement pinned.
 5. **Tie to the Python, model agreement (T4) on the replay and fork paths:**
    - Run the scripted release-team audits with rollbacks, through the contract fixtures and Hypothesis-generated policies.
    - Export, per boundary: the Lean `World`, `ctx`, batch, recorded `over_budget`, and the Python's verdicts and effects. Check them with Lean `decide`.
