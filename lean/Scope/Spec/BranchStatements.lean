@@ -13,9 +13,12 @@ proved in `Scope/Proofs/Branch*.lean`. Assumptions are hypotheses, named after
   Live model outputs (`Env.gen`), limits (`Env.cut`) and everything shared may differ.
 * `NotNestedAbove` — the child's fork is not past its parent's own fork (RB3 is the case
   this excludes).
-* `IdBlind` (T10) — what Orbit does, and what the fingerprint and view read, ignores the
-  id tag. False in the Python (ids are fingerprinted); the R7 test assumes it by renumbering.
 * A7 — policies only return ops (RB6): built into `Policy`.
+
+Not stated: the plan's property 5 (a no-op rollback is the identity up to ids). It would
+need every `Env` reader and the policy to ignore the id tag after the fork, which the Python
+does not do (ids are fingerprinted and shown to agents); the R7 test covers it by
+renumbering ids. Property 6 (ids) and RB1 are witnesses (`BranchWitnesses.lean`).
 
 Decisions: D1 (`halt` exempt, `carvedOut`), D4 (a rollback may rewind agents outside the
 scope: `ForkEffect` states what they see), D5 (`scored`).
@@ -57,8 +60,8 @@ def Fidelity : Prop :=
     T8 env → NotNestedAbove rp R →
     childReplay (branch scope env policy p rp fuel sh s0) = some R →
     ∀ i, i < R.fork →
-      let cc := run scope env policy c (some R) i { shared := sh', st := s0 }
-      let pc := run scope env policy p rp i { shared := sh, st := s0 }
+      let cc := run scope env policy c (some R) i (start env sh' c s0)
+      let pc := run scope env policy p rp i (start env sh p s0)
       CutOrRunning cc ∧
       (cc.ended = none → cc.st = pc.st ∧ cc.rev = pc.rev ∧
         cc.entries.map Entry.erase = pc.entries.map Entry.erase)
@@ -89,8 +92,8 @@ def ForkEffect : Prop :=
     (fuel : Nat) (sh sh' : Shared) (s0 : State) (R : Replay),
     T8 env → NotNestedAbove rp R →
     childReplay (branch (some s) env policy p rp fuel sh s0) = some R →
-    let cc := run (some s) env policy c (some R) (R.fork - 1) { shared := sh', st := s0 }
-    let pc := run (some s) env policy p rp (R.fork - 1) { shared := sh, st := s0 }
+    let cc := run (some s) env policy c (some R) (R.fork - 1) (start env sh' c s0)
+    let pc := run (some s) env policy p rp (R.fork - 1) (start env sh p s0)
     let forkOps := (tick (some s) env policy c (some R) cc).entries.drop cc.entries.length
     cc.ended = none →
       cc.st.world = pc.st.world ∧

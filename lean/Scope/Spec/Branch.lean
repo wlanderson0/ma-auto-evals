@@ -22,8 +22,14 @@ index, so two branches may differ anywhere. T8 (Orbit is deterministic given the
 served) is a hypothesis of the statements that need it, never part of the types.
 
 Not modelled: the number of model calls within one boundary (RB5); effectful tools (a fork
-past one is refused, R5); ids minted by ops (`ForceToolCall`); a policy that raises instead
-of returning ops (RB6: assumption A7 is a precondition of every statement).
+past one is refused, R5); ids minted by ops (`ReplaceGeneration`, `ForceToolCall`,
+`StageInput`, `InjectMessage`; an injected message's id here comes from the world,
+`injectedId`); a policy that raises instead of returning ops (RB6: assumption A7 is a
+precondition of every statement).
+
+Every `Env` reader takes the whole `State`, ids included, though in the Python only ids
+already minted reach a view or the fingerprint. Statements that depend on this say so; the
+witnesses mint ids through `step` and fingerprint only what was minted.
 -/
 
 namespace Scope.Branch
@@ -49,7 +55,7 @@ structure State where
   ids : Ids := {}
   hidden : Nat := 0
 
--- mirrors: BranchStatus, branches.py:50-60
+-- mirrors: BranchStatus, branches.py:53-60
 inductive Status where
   | completed | rolledBack | replayDesync | budgetExhausted | error
   deriving DecidableEq, Repr
@@ -65,7 +71,7 @@ def Cut.status : Cut → Status
   | .error => .error
 
 -- mirrors: Step, branches.py:141-157, with the boundary the controller records next to it
--- (`controller.steps`, read by `_rollback_problem`, controller.py:494).
+-- (`controller.steps`, read by `_rollback_problem`, controller.py:491-493).
 structure Step where
   boundary : Boundary
   fingerprint : Nat
@@ -99,18 +105,23 @@ structure Env where
   cut : Nat → Nat → Shared → State → Option Cut
   /-- The stale `expected_revision` check (controller.py:534-535). -/
   stale : Ctx → List Op → World → Option String
-  /-- Apply-time checks on data the model does not hold (`Hooks.applyOk`). -/
-  applyOk : Ctx → Op → World → Bool
-  /-- `budget.intervention_problem` (controller.py:517). -/
+  /-- Apply-time checks on data the model does not hold (`Hooks.applyOk`), given the
+  boundary's model output: whether an edit's text occurs in it (ops.py:153-184). -/
+  applyOk : Output → Ctx → Op → World → Bool
+  /-- `budget.intervention_problem` (controller.py:517). In the Python a batch with no
+  counted op always fits; here `overBudget` is arbitrary, which only adds runs. -/
   overBudget : Shared → Ctx → List Op → Bool
   /-- The approver's veto (controller.py:551-562). -/
   veto : Shared → Ctx → List Op → State → Bool
-  /-- A rollback's checks on shared state: branch and intervention budgets, defences and
-  `fork_problem` (controller.py:490-504). -/
-  rollbackExtra : Shared → Ctx → List Op → World → Option String
+  /-- A rollback's checks beyond `rollbackProblem`: its stale revision (controller.py:487-488),
+  the branch and intervention budgets, defences and `fork_problem` (496-504). -/
+  rollbackExtra : Nat → Shared → Ctx → List Op → World → Option String
   /-- Everything the shared state records after a boundary: the policy's `notice`, the
   budget's counts (controller.py:577-594). -/
   notice : Shared → Nat → Nat → List Op → List Entry → Shared
+  /-- What the shared state records when branch `b` starts: `budget.branches`, the policy's
+  `bind` and `start` (runner.py:117, controller.py:169, 196). -/
+  begin : Shared → Nat → Shared
 
 /-- What the policy returns at a boundary of branch `b`: it may read the shared state. -/
 abbrev Policy := Nat → Nat → Shared → State → List Op
@@ -183,10 +194,12 @@ def tick (scope : Option AuditScope) (env : Env) (policy : Policy) (b : Nat)
   | none =>
     let rev := c.rev
     let st0 := c.st
-    if env.done b rev st0 then { c with ended := some (finished replay rev) }
-    else match env.cut b rev c.shared st0 with
+    -- a limit or an error is classified before a normal end (runner.py:167-182)
+    match env.cut b rev c.shared st0 with
     | some x => { c with ended := some x.status }
     | none =>
+    if env.done b rev st0 then { c with ended := some (finished replay rev) }
+    else
       if desynced env replay rev st0 then { c with ended := some .replayDesync }
       else
         let st := if forkAt replay rev then { st0 with ids := st0.ids.diverge b } else st0
@@ -203,13 +216,17 @@ def tick (scope : Option AuditScope) (env : Env) (policy : Policy) (b : Nat)
         -- mirrors: controller.py:448-453; the approver is not asked during replay (557)
         let vetoed := !ops.any Op.isRollback && !replaying && !problems && !over
           && env.veto c.shared ctx ops st0
+        -- mirrors: _proceed, controller.py:388-414: the recorded output while replaying.
+        -- The model's input is fixed before the boundary's ops, so it reads `st`.
+        let out := if replaying then ((recordedAt replay rev).map (·.output)).getD 0
+          else env.gen b rev st
         let hooks : Hooks :=
           { extra := fun ctx' ops' w' =>
-              if ops'.any Op.isRollback then env.rollbackExtra c.shared ctx' ops' w'
+              if ops'.any Op.isRollback then env.rollbackExtra b c.shared ctx' ops' w'
               else match env.stale ctx' ops' w' with
                 | some r => some r
                 | none => if over || vetoed then some "rejected" else none,
-            applyOk := env.applyOk }
+            applyOk := env.applyOk out }
         let mk := fun op pre post =>
           ({ branch := b, revision := rev, source := sourceOf replay rev, scope := scope,
              ctx := ctx, op := op, pre := pre, post := post } : Entry)
@@ -218,14 +235,12 @@ def tick (scope : Option AuditScope) (env : Env) (policy : Policy) (b : Nat)
         let fp := env.fingerprint st0
         match decide scope hooks mk ctx replaying bAt ops st.world with
         | .rollback es t ivs =>
-          { c with st := st, steps := c.steps ++ [⟨ctx.boundary, fp, recorded, over, 0⟩],
+          { c with st := st, shared := env.notice c.shared b rev ops es,
+                   steps := c.steps ++ [⟨ctx.boundary, fp, recorded, over, 0⟩],
                    entries := c.entries ++ es, ended := some .rolledBack,
                    rollback := some (t, ivs) }
         | .next w es =>
           let st1 := { st with world := w }
-          -- mirrors: _proceed, controller.py:388-414: the recorded output while replaying
-          let out := if replaying then ((recordedAt replay rev).map (·.output)).getD 0
-            else env.gen b rev st1
           { rev := rev + 1, shared := env.notice c.shared b rev ops es,
             st := env.step b rev out st1,
             steps := c.steps ++ [⟨ctx.boundary, fp, recorded, over, out⟩],
@@ -236,15 +251,23 @@ def run (scope : Option AuditScope) (env : Env) (policy : Policy) (b : Nat)
   | 0, c => c
   | n + 1, c => run scope env policy b replay n (tick scope env policy b replay c)
 
-/-- Branch `b` from the sample's initial state `s0` (runner.py:152-182), with at most `fuel`
-boundaries. Running out of fuel is the model's stand-in for a limit. -/
+/-- How branch `b` starts: the shared state records the start, and the branch state is the
+sample's initial state with fresh ids. -/
+def start (env : Env) (sh : Shared) (b : Nat) (s0 : State) : Cfg :=
+  { shared := env.begin sh b, st := { s0 with ids := {} } }
+
+/-- Branch `b` from the sample's initial state `s0`, with fresh ids (`BranchIds()`,
+runner.py:118) and at most `fuel` boundaries (runner.py:152-182). Running out of fuel is
+the model's stand-in for a limit. -/
 def branch (scope : Option AuditScope) (env : Env) (policy : Policy) (b : Nat)
     (replay : Option Replay) (fuel : Nat) (sh : Shared) (s0 : State) : Cfg :=
-  let c := run scope env policy b replay fuel { shared := sh, st := s0 }
+  let c := run scope env policy b replay fuel (start env sh b s0)
   if c.ended.isNone then { c with ended := some .budgetExhausted } else c
 
 -- mirrors: the branch loop of `solve`, runner.py:99-147: one branch at a time; a rollback
--- queues its one child, which replays the parent's steps up to the fork.
+-- queues its one child, which replays the parent's steps up to the fork. The first
+-- argument is fuel: the Python bounds branches through `max_branches`, which
+-- `rollbackExtra` checks, so the model can also stop on a branch that rolled back.
 def auditLoop (scope : Option AuditScope) (env : Env) (policy : Policy) (s0 : State)
     (fuel : Nat) : Nat → Nat → Option Replay → Shared → List Cfg → List Cfg
   | 0, _, _, _, acc => acc
@@ -257,8 +280,7 @@ def auditLoop (scope : Option AuditScope) (env : Env) (policy : Policy) (s0 : St
         (acc ++ [out])
     | none => acc ++ [out]
 
-/-- Every branch of an audit, in order. Each starts from `s0` with fresh ids
-(`BranchIds()`, runner.py:118). -/
+/-- Every branch of an audit, in order. -/
 def runAudit (scope : Option AuditScope) (env : Env) (policy : Policy) (s0 : State)
     (sh : Shared) (maxBranches fuel : Nat) : List Cfg :=
   auditLoop scope env policy s0 fuel maxBranches 0 none sh []
