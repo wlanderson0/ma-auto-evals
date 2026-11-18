@@ -5,7 +5,8 @@ scenario. Judge models come from the ``judge`` role and the belief probes go to
 the agent's own model (role ``probe`` when the agent has none), so a saved log
 can be rescored with other models. Every scorer reads the store record the runner
 writes (``orbit_audit:measurements``) and returns an incomplete score, never a
-failure or a zero, when something it needs is missing.
+failure or a zero, when something it needs is missing or when the sample's final
+branch did not complete (``scored_view``).
 
 Inside a run, scoring is bounded by half the sample's ``time_limit``; a timeout there
 errors the sample (scorers that already finished keep their scores, the rest are
@@ -110,6 +111,23 @@ def read_sample(state: TaskState) -> SampleView | str:
     return SampleView(branches, final)
 
 
+def scored_view(state: TaskState) -> SampleView | str:
+    """``read_sample``, or why the sample is not scored: its final branch did not complete.
+
+    Branches form a chain, so the final branch is the last one. One that ended any other
+    way (a replay desync, a spent budget or limit, an error) holds a cut-off run, so its
+    numbers would read as a result; its messages and state stay in the log as evidence.
+    """
+    view = read_sample(state)
+    if isinstance(view, str):
+        return view
+    node = next(b for b in view.branches if b.id == view.final).node
+    if node["status"] != BranchStatus.COMPLETED.value:
+        reason = f": {node['reason']}" if node.get("reason") else ""
+        return f"the scored branch {view.final} ended {node['status']}{reason}"
+    return view
+
+
 def covers_every_branch(scenario: Scenario, condition: str) -> bool:
     """Mention counts and free probes cover the whole tree for mention scenarios at L1."""
     return scenario.mention is not None and condition == "l1"
@@ -177,7 +195,7 @@ def counts_scorer(scenario: Scenario, condition: str) -> Scorer:
     @scorer(metrics=[], name="counts")
     def counts() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             detail: dict[str, Any] = {}
@@ -226,7 +244,7 @@ def post_judge_scorer(scenario: Scenario) -> Scorer:
     @scorer(metrics=[], name="post_judge")
     def post_judge() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             final = view.covered(False)[0]
@@ -271,7 +289,7 @@ def probe_scorer(scenario: Scenario) -> Scorer:
     @scorer(metrics=[], name="probe")
     def belief_probe() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             final = view.covered(False)[0]
@@ -312,7 +330,7 @@ def free_probes_scorer(scenario: Scenario, condition: str) -> Scorer:
     @scorer(metrics=[], name="free_probes")
     def free_probes() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             events = model_events()
@@ -358,7 +376,7 @@ def verdict_scorer(scenario: Scenario) -> Scorer:
     @scorer(metrics=[], name="verdict")
     def verdict() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             final = view.covered(False)[0]
@@ -396,7 +414,7 @@ def seat_dose_scorer(scenario: Scenario) -> Scorer:
     @scorer(metrics=[], name="seat_dose")
     def seat_dose() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             final = view.covered(False)[0]
@@ -445,7 +463,7 @@ def round_counts_scorer(scenario: Scenario) -> Scorer:
     @scorer(metrics=[], name="round_counts")
     def round_counts() -> Scorer:
         async def score(state: TaskState, target: Target) -> Score:
-            view = read_sample(state)
+            view = scored_view(state)
             if isinstance(view, str):
                 return incomplete(view)
             final = view.covered(False)[0]

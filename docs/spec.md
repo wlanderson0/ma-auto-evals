@@ -249,6 +249,8 @@ Use [Inspect's native limits](https://inspect.aisi.org.uk/setting-limits.html) f
 
 In `orbit_audit`, `AuditLimits` bounds a whole audited sample across its branches: `max_branches` (default 8), `max_provider_calls` and `max_tokens` (live target-model calls), `max_auditor_calls` (the policy's own model calls, kept apart so target spend stays comparable across conditions) and `max_interventions` (applied, non-replayed operations; halts and rollbacks do not count). The `BudgetLedger` is monotone: rollback never refunds, and replayed generations are not calls (B1). A spent call budget ends the branch as `budget_exhausted`; an intervention batch that does not fit is rejected and recorded, and the run continues (B2). Judge and realism-check calls are not charged.
 
+The sample adopts its last branch (branches form a chain: a branch has at most one child) and is scored on it. If that branch did not complete (`replay_desync`, `budget_exhausted`, `error`), every score is incomplete and names the branch and how it ended: a cut-off run is not a result. Its messages and state stay in the log as evidence. This covers a single-branch run that hits a limit or a provider error too.
+
 ## 6. Judging and scoring
 
 How a judge scores multi-agent transcripts, including how much the auditor had to "put its thumb on the scale" of the sample.

@@ -209,7 +209,7 @@ This is property 2.
 
 ### RB4. The adopted branch is always the last one
 
-Because branches form a chain, `completed or outcome` (`runner.py:144`) is the last branch, even when it ended `replay_desync` or `budget_exhausted`, or never reached its fork (RB2). Orbit's scorers score it. This is decision **D5**.
+Because branches form a chain, `completed or outcome` (`runner.py:144`) is the last branch, even when it ended `replay_desync` or `budget_exhausted`, or never reached its fork (RB2). Orbit's scorers score it. **D5, decided:** such a branch is not scored; every score is incomplete and names how the branch ended (`experiments/scorers.py`, `scored_view`).
 
 ### RB5. Fewer model calls than recorded go undetected
 

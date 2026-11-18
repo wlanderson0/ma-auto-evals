@@ -126,6 +126,8 @@ All three are fixed on `sarah/scope-gap-fixes`.
 
 - **D4, decided: a rollback may rewind agents outside the scope.** Under an agent scope, a rollback replays every agent up to the fork, and the agents outside the scope then act live again. What they do after the fork may differ, but only through what they receive, which the scope already limits. The rollback's own effect on them is stated as "they see at the fork exactly what they saw at that revision of the parent" (rollback plan, property 4).
 
+- **D5, decided: a final branch that did not complete is not scored.** The adopted branch is always the last one (RB4). If it ended `replay_desync`, `budget_exhausted` or `error`, every score is incomplete and says why; the branch stays in the log as evidence (`experiments/scorers.py`, `scored_view`).
+
 ## Open decisions
 
 - **D3.** Turns are in the view. Keep that.
