@@ -234,6 +234,14 @@ class Results:
             return value > 0 if isinstance(value, int | float) else None
         raise ValueError(f"compare reads 'probe', 'counts' or 'outcome', not {scorer!r}")
 
+    def outcome_value(self, sample: SampleResult, agent: str, field: str) -> float | None:
+        """The number ``agent``'s outcome ``field`` holds in ``sample`` (``None``: missing or
+        not a number; a bool is not one)."""
+        value = (VALUES["outcome"](sample, agent) or {}).get(field)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return float(value)
+
     def compare(self, a: str, b: str, scorer: str, rounds: int | None = None,
                 field: str | None = None) -> dict[str, dict[str, Any]]:
         """Per target: k of n for ``a`` and ``b``, the difference of their rates."""

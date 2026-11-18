@@ -333,3 +333,56 @@ def test_a_launch_of_a_single_variant_object_counts_for_the_measure(
     tools = new(tmp_path)
     assert tools.call("run_experiment", variants=json.dumps(C0), epochs=1, rationale="a test launch")[0]
     assert _launch_seqs(tools) == {"C0": 1}
+
+
+class _Results:
+    """Two samples of V1 holding an index; a third with none recorded."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def targets(self, vid):
+        return ("dave",)
+
+    def of(self, vid):
+        return list(self.values)
+
+    def outcome_value(self, sample, agent, field):
+        return sample if field == "index" else None
+
+
+def _mean_tools(values, scorer="outcome", field="index"):
+    from types import SimpleNamespace
+
+    row = {"seq": 1, "tool": "scores", "ok": True,
+           "args": {"variant_ids": ["V1"], "scorer": scorer, "field": field}}
+    return SimpleNamespace(trace=lambda: [row], results=lambda: _Results(values))
+
+
+MEAN = {"text": "Dave's index averages 0.75 over 2 runs of V1.", "kind": "mean",
+        "variant": "V1", "target": "dave", "mean": 0.75, "n": 2, "evidence": [{"call": 1}]}
+
+
+def test_means_are_recounted_at_the_precision_stated():
+    tools = _mean_tools([0.5, 1.0, None])
+    assert check_claims(tools, [{**MEAN, "decimals": 2, "text": "x"}])[0]["verdict"] == "checked"
+    parsed = parse_claims([MEAN], tools)
+    assert parsed[0]["decimals"] == 2
+    assert check_claims(tools, parsed)[0]["verdict"] == "checked"
+    # rounding: 0.75 stated to one decimal is 0.8 (0.7 is as near, so it passes too); 0.6 is off
+    assert check_claims(tools, parse_claims([{**MEAN, "mean": 0.8}], tools))[0][
+        "verdict"] == "checked"
+    wrong = check_claims(tools, parse_claims([{**MEAN, "mean": 0.6}], tools))[0]
+    assert wrong["verdict"] == "contradicted" and "0.75" in wrong["reasons"][0]
+    count = check_claims(tools, parse_claims([{**MEAN, "n": 3}], tools))[0]
+    assert count["verdict"] == "contradicted"
+
+
+def test_a_mean_must_cite_an_outcome_field_and_a_number():
+    tools = _mean_tools([0.5, 1.0], scorer="probe", field=None)
+    assert check_claims(tools, parse_claims([MEAN], tools))[0]["verdict"] == "invalid"
+    tools = _mean_tools([0.5, 1.0])
+    with pytest.raises(ClaimError, match="mean must be a number"):
+        parse_claims([{**MEAN, "mean": True}], tools)
+    with pytest.raises(ClaimError, match="mean must be a number"):
+        parse_claims([{**MEAN, "mean": "high"}], tools)

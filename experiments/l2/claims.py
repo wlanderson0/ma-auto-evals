@@ -84,11 +84,12 @@ from experiments.l2.report import SCORER as MEASURE_SCORER
 if TYPE_CHECKING:
     from experiments.l2.tools import Tools
 
-KINDS = ("difference", "no_difference", "rate", "existence", "other")
+KINDS = ("difference", "no_difference", "rate", "mean", "existence", "other")
 FIELDS: dict[str, tuple[str, ...]] = {
     "difference": ("a", "b", "target", "direction"),
     "no_difference": ("a", "b", "target"),
     "rate": ("variant", "target", "k", "n"),
+    "mean": ("variant", "target", "mean", "n"),
     "existence": ("target",),
     "other": (),
 }
@@ -133,6 +134,25 @@ def _int(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value) if value == value and abs(value) != float("inf") else None
+    try:
+        return _number(float(value.strip())) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _decimals(shown: str) -> int:
+    """How many decimals a stated number has (``0.84`` is 2)."""
+    text = shown.strip().lower()
+    if "e" in text:
+        return max(0, -int(text.split("e")[1]) + len(text.split("e")[0].partition(".")[2]))
+    return len(text.partition(".")[2])
 
 
 def _post_key(value: Any) -> int | str | None:
@@ -180,6 +200,14 @@ def parse_claims(raw: Any, tools: Tools) -> list[dict[str, Any]]:
                 value = _int(value)
                 if value is None or value < 0:
                     problems.append(f"{where}: {name} must be a whole number")
+            elif name == "mean":
+                shown = value if isinstance(value, str) else repr(value)
+                value = _number(value)
+                if value is None:
+                    problems.append(f"{where}: mean must be a number (the average, at the "
+                                    "precision you state it)")
+                else:
+                    claim["decimals"] = _decimals(shown)
             elif name == "direction":
                 if value not in DIRECTIONS:
                     problems.append(f"{where}: direction must be 'higher' or 'lower' (a's "
@@ -195,7 +223,8 @@ def parse_claims(raw: Any, tools: Tools) -> list[dict[str, Any]]:
             if not isinstance(why, str) or len(why.split()) < WHY_WORDS:
                 problems.append(
                     f"{where}: an other claim needs why_unchecked: at least {WHY_WORDS} words "
-                    "on why it cannot be a difference, no_difference, rate or existence claim "
+                    "on why it cannot be a difference, no_difference, rate, mean or "
+                    "existence claim "
                     "(a figure from your own code can be: expose it as the scenario's outcome "
                     "field, record it with note_decision(field='measure', "
                     "value='outcome.<field>') before launching, and compare it with scores)")
@@ -455,6 +484,14 @@ def _check(tools: Tools, claim: Mapping[str, Any]) -> tuple[str, list[str], Any,
     if kind == "existence":
         return (*_check_existence(tools, claim), None)
     rows = _scores_rows(tools, claim)
+    if kind == "mean":
+        vid = claim["variant"]
+        usable = [r for r in rows if vid in r["args"]["variant_ids"]
+                  or r["args"].get("against") == vid]
+        if not usable:
+            return "invalid", [f"no cited scores call read {vid}"], None, None
+        return _best([(*_mean(tools, claim, r["seq"], r["args"]), _used(r["seq"], r["args"]))
+                      for r in usable])
     if kind == "rate":
         vid = claim["variant"]
         usable = [r for r in rows if vid in r["args"]["variant_ids"]
@@ -495,6 +532,31 @@ def _rate(tools: Tools, claim: Mapping[str, Any], seq: int,
                                 + (f"; {unknown} unknown" if unknown else "")], None
     return "checked", [f"{k}/{n} ({what})" + (f"; {unknown} more unknown" if unknown
                                               else "")], [(k, n)]
+
+
+def _mean(tools: Tools, claim: Mapping[str, Any], seq: int,
+          args: Mapping[str, Any]) -> tuple[str, list[str], Any]:
+    vid, target = claim["variant"], claim["target"]
+    scorer, field = args.get("scorer"), args.get("field")
+    if scorer != "outcome" or field is None:
+        return "invalid", [f"call {seq} read {scorer}, which holds no number to average "
+                           "(outcome with field)"], None
+    results = tools.results()
+    if target not in results.targets(vid):
+        return "invalid", [f"{target} is not a target of {vid}"], None
+    values = [results.outcome_value(s, target, field) for s in results.of(vid)]
+    known = [v for v in values if v is not None]
+    unknown = len(values) - len(known)
+    what = f"{vid}, {target}, outcome.{field}, call {seq}"
+    if not known:
+        return "invalid", [f"no number in {what}"], None
+    mean, d = sum(known) / len(known), claim["decimals"]
+    note = f"; {unknown} unknown" if unknown else ""
+    if len(known) != claim["n"] or abs(mean - claim["mean"]) > 0.5 * 10 ** -d + 1e-9:
+        return "contradicted", [f"the logs give mean {mean:.{max(d, 2)}f} over {len(known)} "
+                                f"({what}), not {claim['mean']:.{d}f} over {claim['n']}"
+                                + note], None
+    return "checked", [f"mean {mean:.{max(d, 2)}f} over {len(known)} ({what})" + note], []
 
 
 def _comparison(tools: Tools, claim: Mapping[str, Any], seq: int,
