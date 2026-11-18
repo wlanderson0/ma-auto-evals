@@ -11,5 +11,8 @@ theorem bug_nestedSilent : bug_NestedSilent := by unfold bug_NestedSilent; decid
 theorem scopedForkWitness : ScopedForkWitness := by unfold ScopedForkWitness; decide
 theorem vetoWitness : VetoWitness := by unfold VetoWitness; decide
 theorem sameForkWitness : SameForkWitness := by unfold SameForkWitness; decide
+theorem t8Witness : T8Witness :=
+  ⟨⟨fun _ _ _ _ _ => rfl, fun _ _ _ _ => rfl⟩, ⟨fun _ _ _ _ _ => rfl, fun _ _ _ _ => rfl⟩,
+   ⟨fun _ _ _ _ _ => rfl, fun _ _ _ _ => rfl⟩, by decide⟩
 
 end Scope.Branch.Witness

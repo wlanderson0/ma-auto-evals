@@ -15,7 +15,8 @@ file adds, and `Run.lean` leaves out (rollback-map M1, M2):
 * a child replays its parent's recorded steps: the recorded batch (emptied when the
   approver vetoed it, M1), the recorded `over_budget` verdict and the recorded model output;
 * the fingerprint check comes before any op, and `diverge` at the fork comes after it;
-* branches form a chain (M3), and a child whose run ends before its fork is a desync (RB2).
+* branches form a chain (M3), and a child whose run ends on its own before its fork is a
+  desync (RB2); a run cut short by a limit or an error keeps that status.
 
 Nondeterminism stays an argument: `Env.gen`, `Env.step` and `Env.done` take the branch
 index, so two branches may differ anywhere. T8 (Orbit is deterministic given the outputs
@@ -28,8 +29,8 @@ past one is refused, R5); ids minted by ops (`ReplaceGeneration`, `ForceToolCall
 precondition of every statement).
 
 Every `Env` reader takes the whole `State`, ids included, though in the Python only ids
-already minted reach a view or the fingerprint. Statements that depend on this say so; the
-witnesses mint ids through `step` and fingerprint only what was minted.
+already minted reach a view or the fingerprint. No statement relies on readers ignoring
+ids; the witnesses mint ids through `step` and fingerprint only what was minted.
 -/
 
 namespace Scope.Branch

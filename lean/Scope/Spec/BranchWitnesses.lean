@@ -22,6 +22,8 @@ Concrete audits, checked by evaluation in `Proofs/BranchSanity.lean`:
   shared state, applies nothing there either; it applies its intervention at the fork.
 * `SameForkWitness` — a parent that is itself a child forks its own child at the same
   revision (`NotNestedAbove` with equality): no desync.
+* `T8Witness` — the witnesses' envs satisfy T8, and branch 0 of the real fork queues a
+  child forking at 2, so `Fidelity`'s and `ForkEffect`'s hypotheses hold together there.
 
 Orbit here mints one id per step and keeps the last one in `hidden`; only that minted id,
 never the id provider itself, reaches the fingerprint.
@@ -93,6 +95,9 @@ def nestedPolicy : Policy := fun b rev _ _ =>
 def bug_NestedDesync : Prop :=
   (runAudit none env nestedPolicy s0 0 3 10).map (·.ended) =
     [some .rolledBack, some .rolledBack, some .replayDesync] ∧
+  -- the grandchild forks at 4 but desyncs at boundary 3, before its fork
+  ((runAudit none env nestedPolicy s0 0 3 10)[1]?.bind childReplay).map (·.fork) = some 4 ∧
+  (runAudit none env nestedPolicy s0 0 3 10).map (·.rev) = [4, 5, 3] ∧
   scored (runAudit none env nestedPolicy s0 0 3 10) = none
 
 /-- The branches of the nested audit under `blindEnv`: branch 0, its child, its grandchild's
@@ -142,5 +147,9 @@ def sameForkPolicy : Policy := fun b rev _ _ =>
 def SameForkWitness : Prop :=
   (runAudit none env sameForkPolicy s0 0 3 10).map (·.ended) =
     [some .rolledBack, some .rolledBack, some .completed]
+
+def T8Witness : Prop :=
+  T8 env ∧ T8 blindEnv ∧ T8 vetoEnv ∧
+  (childReplay (branch none env forkPolicy 0 none 10 0 s0)).map (·.fork) = some 2
 
 end Scope.Branch.Witness

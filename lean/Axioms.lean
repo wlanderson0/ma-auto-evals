@@ -44,6 +44,7 @@ example : Branch.Witness.bug_NestedSilent := Branch.Witness.bug_nestedSilent
 example : Branch.Witness.ScopedForkWitness := Branch.Witness.scopedForkWitness
 example : Branch.Witness.VetoWitness := Branch.Witness.vetoWitness
 example : Branch.Witness.SameForkWitness := Branch.Witness.sameForkWitness
+example : Branch.Witness.T8Witness := Branch.Witness.t8Witness
 
 #print axioms scopeSound
 #print axioms frame
@@ -84,3 +85,4 @@ example : Branch.Witness.SameForkWitness := Branch.Witness.sameForkWitness
 #print axioms Branch.Witness.scopedForkWitness
 #print axioms Branch.Witness.vetoWitness
 #print axioms Branch.Witness.sameForkWitness
+#print axioms Branch.Witness.t8Witness

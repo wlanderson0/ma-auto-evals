@@ -162,22 +162,20 @@ theorem throughFork : ThroughFork := by
   obtain ⟨ht0, _, _⟩ := running_before_rollback hF
   obtain ⟨hpe, hprev, hpcut, hpdone, out, hrec⟩ := parent_at_target hF
   obtain ⟨hcr, heqs⟩ := hfid (t - 1) (by omega)
-  show (run scope env policy c (some R) R.fork (start env sh' c s0)).ended ≠ some .replayDesync ∧
-    (run scope env policy c (some R) R.fork (start env sh' c s0)).ended ≠ some .completed
+  show CutOrRunning (run scope env policy c (some R) R.fork (start env sh' c s0)) ∨
+    (run scope env policy c (some R) R.fork (start env sh' c s0)).ended = some .rolledBack
   rw [hRf, show t = (t - 1) + 1 by omega, run_succ]
   cases hx : (run scope env policy c (some R) (t - 1) (start env sh' c s0)).ended with
   | some y =>
-    rw [tick_ended hx, hx]
-    rcases hcr with h | ⟨z, hz⟩
-    · rw [hx] at h; cases h
-    · rw [hx] at hz; cases hz; cases z <;> simp [Cut.status]
+    rw [tick_ended hx]
+    exact Or.inl hcr
   | none =>
     obtain ⟨hst, hrv, _⟩ := heqs hx
     have hb := tick_body scope env policy c (some R) _ hx
     cases hcut : env.cut c (run scope env policy c (some R) (t - 1) (start env sh' c s0)).rev
         (run scope env policy c (some R) (t - 1) (start env sh' c s0)).shared
         (run scope env policy c (some R) (t - 1) (start env sh' c s0)).st with
-    | some z => rw [hb, hcut]; cases z <;> simp [Cut.status]
+    | some z => rw [hb, hcut]; exact Or.inl (Or.inr ⟨z, rfl⟩)
     | none =>
       have hdone : env.done c (run scope env policy c (some R) (t - 1) (start env sh' c s0)).rev
           (run scope env policy c (some R) (t - 1) (start env sh' c s0)).st = false := by
@@ -187,8 +185,9 @@ theorem throughFork : ThroughFork := by
         rw [hrv, hprev, hst]
         simp only [desynced, hRf, Nat.le_refl, ↓reduceIte, hRs, hrec, tStep]
         simp
-      rcases tick_after_checks (scope := scope) (policy := policy) hx hcut hdone hdes with h | h <;>
-        rw [h] <;> simp
+      rcases tick_after_checks (scope := scope) (policy := policy) hx hcut hdone hdes with h | h
+      · exact Or.inl (Or.inl h)
+      · exact Or.inr h
 
 theorem decide_rollback_chain {scope : Option AuditScope} {hooks : Hooks}
     {mk : Op → World → World → Entry} (hmk : MkOk mk) {ctx : Ctx} {replaying : Bool}
@@ -286,9 +285,10 @@ theorem forkEffect : ForkEffect := by
   have hRf : R.fork = t := by rw [← hR]
   obtain ⟨ht0, _, _⟩ := running_before_rollback hF
   dsimp only
-  intro hce hwf hcarve
+  intro hce
   obtain ⟨_, heqs⟩ := hfid (R.fork - 1) (by omega)
   have hst := (heqs hce).1
+  refine ⟨by rw [hst], fun hwf hcarve => ?_⟩
   obtain ⟨es, w', hent, hgood, hch⟩ := tick_new (scope := some s) (env := env) (policy := policy)
     (b := c) (replay := some R) hce
   have hdrop : (tick (some s) env policy c (some R)
@@ -296,7 +296,7 @@ theorem forkEffect : ForkEffect := by
       (run (some s) env policy c (some R) (R.fork - 1) (start env sh' c s0)).entries.length = es := by
     rw [hent]; simp
   rw [hdrop] at hcarve ⊢
-  refine ⟨by rw [hst], w', hch, fun a ha => ?_⟩
+  refine ⟨w', hch, fun a ha => ?_⟩
   rw [chain_view es _ w' hch (by rw [hst]; exact hwf)
     (fun e he => ⟨hgood e he, hcarve e he⟩) a ha, hst]
 

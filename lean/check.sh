@@ -18,6 +18,10 @@ export PATH="$BIN:$PATH"
 
 sha256sum --quiet -c Scope/Spec/SHA256SUMS || {
   echo "specification changed: re-review it, then update Scope/Spec/SHA256SUMS"; exit 1; }
+# Every specification file is listed, so none escapes the checksum or the scan below.
+if [ "$(find Scope/Spec -name '*.lean' | sort)" != "$(awk '{print $2}' Scope/Spec/SHA256SUMS | sort)" ]; then
+  echo "a specification file is not listed in Scope/Spec/SHA256SUMS"; exit 1
+fi
 sha256sum --quiet -c GATE.SHA256SUMS || {
   echo "the gate changed: re-review it, then update GATE.SHA256SUMS"; exit 1; }
 
@@ -26,10 +30,16 @@ mapfile -t checked < <(find Scope -name '*.lean' -not -path 'Scope/Spec/*' | sor
 if grep -nE '^\s*import' "${checked[@]}" | grep -vE ':\s*import +Scope(\.[A-Za-z]+)*\s*$'; then
   echo "a proof file imports something other than Scope.*"; exit 1
 fi
-forbidden='set_option|«|\b(notation|infix|infixl|infixr|prefix|postfix|instance|macro|macro_rules|syntax|elab|elab_rules|implemented_by|extern|partial|unsafe|opaque|sorry|admit|native_decide|axiom|attribute|initialize|builtin_initialize|run_cmd|run_elab|run_meta|open private)\b|_elab\b|#eval|#exit|@\[ *(tactic|command_elab|term_elab|csimp|simp_proc)'
+forbidden='set_option|«|\b(notation|infix|infixl|infixr|prefix|postfix|instance|macro|macro_rules|syntax|elab|elab_rules|implemented_by|extern|partial|unsafe|opaque|sorry|admit|native_decide|axiom|attribute|initialize|builtin_initialize|run_cmd|run_elab|run_meta|run_tac|export|open private)\b|_elab\b|#eval|#exit|@\[ *(tactic|command_elab|term_elab|csimp|simp_proc)'
 if grep -nE "$forbidden" "${checked[@]}"; then
   echo "forbidden construct in a proof file"; exit 1
 fi
+
+# Every statement and witness (an argument-free `def X : Prop`) is pinned in Axioms.lean.
+for name in $(grep -hoE '^def [A-Za-z_0-9]+ : Prop :=' Scope/Spec/*.lean | awk '{print $2}'); do
+  grep -qE "^example : ([A-Za-z]+\.)*$name := " Axioms.lean || {
+    echo "statement $name is not pinned in Axioms.lean"; exit 1; }
+done
 
 if command -v lake >/dev/null; then lake build --wfail; else LEAN="$LEAN" ./build.sh; fi
 

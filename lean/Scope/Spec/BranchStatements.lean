@@ -13,14 +13,18 @@ proved in `Scope/Proofs/Branch*.lean`. Assumptions are hypotheses, named after
   Live model outputs (`Env.gen`), limits (`Env.cut`) and everything shared may differ.
 * `NotNestedAbove` — the child's fork is not past its parent's own fork (RB3 is the case
   this excludes).
+* `TagKept` — only `diverge` changes the id tag (`IdsOwnAfterFork`).
+* `World.WF` — unique message ids, as in the scope statements (`ForkEffect`,
+  `ScopeRespectedB`).
 * A7 — policies only return ops (RB6): built into `Policy`.
 
 Not stated: the plan's property 5 (a no-op rollback is the identity up to ids). It would
 need every `Env` reader and the policy to ignore the id tag after the fork, which the Python
 does not do (ids are fingerprinted and shown to agents), and `Env.gen` to ignore the
 branch; it would restate determinism. The R7 test covers it by renumbering ids; it is not
-claimed in Lean. RB1 and RB3 (property 6's failure) are witnesses (`BranchWitnesses.lean`);
-`bug_NestedDesync` also shows `NotNestedAbove` is needed: its env satisfies T8.
+claimed in Lean. RB1 and RB3 (property 6's failure) are witnesses (`BranchWitnesses.lean`):
+`bug_NestedDesync` runs in an env that satisfies T8 (`T8Witness`) and desyncs before its
+fork, which is why the statements need `NotNestedAbove`.
 
 Decisions: D1 (`halt` exempt, `carvedOut`), D4 (a rollback may rewind agents outside the
 scope: `ForkEffect` states what they see), D5 (`scored`).
@@ -68,8 +72,9 @@ def Fidelity : Prop :=
       (cc.ended = none → cc.st = pc.st ∧ cc.rev = pc.rev ∧
         cc.entries.map Entry.erase = pc.entries.map Entry.erase)
 
-/-- Property 2a, fail-safe, for every `Env`: at a boundary up to the fork whose fingerprint
-differs from the recording, the branch ends as a desync with nothing applied there. -/
+/-- Property 2a, fail-safe, for every `Env`: at a boundary up to the fork that the run
+reaches (neither done nor cut there) and whose fingerprint differs from the recording, the
+branch ends as a desync with nothing applied there. -/
 def FailSafe : Prop :=
   ∀ (scope : Option AuditScope) (env : Env) (policy : Policy) (b : Nat) (R : Replay) (c : Cfg),
     c.ended = none → c.rev ≤ R.fork →
@@ -85,15 +90,16 @@ def CompletedReachedFork : Prop :=
     let o := branch scope env policy b (some R) fuel sh s0
     o.ended = some .completed → R.fork ≤ o.rev - 1
 
-/-- Property 1, at the fork: under the same assumptions the child gets through its fork
-boundary without desyncing or completing (a fork that the parent reached is reached). -/
+/-- Property 1, at the fork: under the same assumptions, after its fork boundary the child
+is still running, has rolled back again, or was cut short by a limit or an error; it never
+desyncs or completes there. -/
 def ThroughFork : Prop :=
   ∀ (scope : Option AuditScope) (env : Env) (policy : Policy) (p c : Nat)
     (rp : Option Replay) (fuel : Nat) (sh sh' : Shared) (s0 : State) (R : Replay),
     T8 env → NotNestedAbove rp R →
     childReplay (branch scope env policy p rp fuel sh s0) = some R →
     let cc := run scope env policy c (some R) R.fork (start env sh' c s0)
-    cc.ended ≠ some .replayDesync ∧ cc.ended ≠ some .completed
+    CutOrRunning cc ∨ cc.ended = some .rolledBack
 
 /-- Property 2c, for every `Env`: every boundary up to the fork that a child got past
 matched the parent's recording. -/
@@ -105,10 +111,11 @@ def FailSafeRun : Prop :=
     (R.steps[k - 1]?).map (·.fingerprint) =
       some (env.fingerprint (run scope env policy c (some R) (k - 1) (start env sh c s0)).st)
 
-/-- Property 4, the rollback's own effect (D4). Under property 1's assumptions an agent
-outside the scope is, at the fork, where it was at that revision of the parent, and after
-the fork's ops (the interventions and the woken policy's) it still sees what it saw there,
-unless one of them is `halt` or `rollback` (D1). -/
+/-- Property 4, the rollback's own effect (D4). Under property 1's assumptions, a child not
+cut short before its fork is, at the fork, in its parent's world at that revision; and if
+that world has unique message ids and none of the fork's ops (the interventions and the
+woken policy's) is `halt` or `rollback` (D1), every agent outside the scope still sees,
+after them, what it saw at that revision of the parent. -/
 def ForkEffect : Prop :=
   ∀ (s : AuditScope) (env : Env) (policy : Policy) (p c : Nat) (rp : Option Replay)
     (fuel : Nat) (sh sh' : Shared) (s0 : State) (R : Replay),
@@ -117,17 +124,19 @@ def ForkEffect : Prop :=
     let cc := run (some s) env policy c (some R) (R.fork - 1) (start env sh' c s0)
     let pc := run (some s) env policy p rp (R.fork - 1) (start env sh p s0)
     let forkOps := (tick (some s) env policy c (some R) cc).entries.drop cc.entries.length
-    cc.ended = none → pc.st.world.WF → (∀ e ∈ forkOps, carvedOut e.op = false) →
+    cc.ended = none →
       cc.st.world = pc.st.world ∧
-      ∃ w', Chain cc.st.world forkOps w' ∧
-        ∀ a, s.allowsAgent a = false → view w' a = view pc.st.world a
+      (pc.st.world.WF → (∀ e ∈ forkOps, carvedOut e.op = false) →
+        ∃ w', Chain cc.st.world forkOps w' ∧
+          ∀ a, s.allowsAgent a = false → view w' a = view pc.st.world a)
 
 /-- Only `diverge` changes the id tag: Orbit's step keeps it. -/
 def TagKept (env : Env) : Prop :=
   ∀ b rev o st, (env.step b rev o st).ids.tag = st.ids.tag
 
-/-- Property 6, the positive half: a child mints ids with tag 0 (its parent's, when the
-parent's own fork is not earlier) before its fork, and with its own index after it. -/
+/-- Property 6, the positive half: a child's id tag is 0 before its fork and its own index
+after it. That ids are then unique across branches is informal: branches have distinct
+indices, and branch 0, which never forks, keeps tag 0. -/
 def IdsOwnAfterFork : Prop :=
   ∀ (scope : Option AuditScope) (env : Env) (policy : Policy) (c : Nat) (R : Replay)
     (n : Nat) (sh : Shared) (s0 : State), TagKept env → 1 ≤ R.fork →
@@ -136,7 +145,8 @@ def IdsOwnAfterFork : Prop :=
 
 /-- Scope results in this model (rollback plan step 4): every op applied in any branch,
 live, replayed or at a fork, was checked against the audit's scope in the world it changed,
-and unless it is `halt` or `rollback` left every agent outside the scope seeing what it saw. -/
+and, in a world with unique message ids and unless it is `halt` or `rollback`, left every
+agent outside the scope seeing what it saw. -/
 def ScopeRespectedB : Prop :=
   ∀ (s : AuditScope) (env : Env) (policy : Policy) (s0 : State) (sh : Shared)
     (maxBranches fuel : Nat),

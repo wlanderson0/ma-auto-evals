@@ -1,6 +1,6 @@
 import Scope.Proofs.BranchTick
 
-/-! Replay fidelity (property 1) and the rollback's own effect (property 4). -/
+/-! Replay fidelity (property 1). -/
 
 namespace Scope.Branch
 
