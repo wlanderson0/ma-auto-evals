@@ -25,6 +25,25 @@ example : Witness.AgentsMutantWitness := Witness.agentsMutantWitness
 example : Witness.RepresentationWitness := Witness.representationWitness
 example : Witness.G1Witness := Witness.g1Witness
 example : Witness.HaltWitness := Witness.haltWitness
+example : Branch.Fidelity := Branch.fidelity
+example : Branch.ThroughFork := Branch.throughFork
+example : Branch.FailSafe := Branch.failSafe
+example : Branch.FailSafeRun := Branch.failSafeRun
+example : Branch.CompletedReachedFork := Branch.completedReachedFork
+example : Branch.ForkEffect := Branch.forkEffect
+example : Branch.IdsOwnAfterFork := Branch.idsOwnAfterFork
+example : Branch.ScopeRespectedB := Branch.scopeRespectedB
+example : Branch.ChainShape := Branch.chainShape
+example : Branch.AuditLink := Branch.auditLink
+example : Branch.ScoredIffCompleted := Branch.scoredIffCompleted
+example : Branch.ScoredReachedFork := Branch.scoredReachedFork
+example : Branch.Witness.RealForkWitness := Branch.Witness.realForkWitness
+example : Branch.Witness.bug_ForkRejected := Branch.Witness.bug_forkRejected
+example : Branch.Witness.bug_NestedDesync := Branch.Witness.bug_nestedDesync
+example : Branch.Witness.bug_NestedSilent := Branch.Witness.bug_nestedSilent
+example : Branch.Witness.ScopedForkWitness := Branch.Witness.scopedForkWitness
+example : Branch.Witness.VetoWitness := Branch.Witness.vetoWitness
+example : Branch.Witness.SameForkWitness := Branch.Witness.sameForkWitness
 
 #print axioms scopeSound
 #print axioms frame
@@ -46,3 +65,22 @@ example : Witness.HaltWitness := Witness.haltWitness
 #print axioms Witness.representationWitness
 #print axioms Witness.g1Witness
 #print axioms Witness.haltWitness
+#print axioms Branch.fidelity
+#print axioms Branch.throughFork
+#print axioms Branch.failSafe
+#print axioms Branch.failSafeRun
+#print axioms Branch.completedReachedFork
+#print axioms Branch.forkEffect
+#print axioms Branch.idsOwnAfterFork
+#print axioms Branch.scopeRespectedB
+#print axioms Branch.chainShape
+#print axioms Branch.auditLink
+#print axioms Branch.scoredIffCompleted
+#print axioms Branch.scoredReachedFork
+#print axioms Branch.Witness.realForkWitness
+#print axioms Branch.Witness.bug_forkRejected
+#print axioms Branch.Witness.bug_nestedDesync
+#print axioms Branch.Witness.bug_nestedSilent
+#print axioms Branch.Witness.scopedForkWitness
+#print axioms Branch.Witness.vetoWitness
+#print axioms Branch.Witness.sameForkWitness

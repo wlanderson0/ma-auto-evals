@@ -24,7 +24,7 @@ NOT_NAMES = {"and", "at", "of", "mirrors", "see", "in", "then", "also", "with", 
 
 def resolve(name: str) -> Path | None:
     for base in (ROOT / "src" / "orbit_audit", ROOT / "src" / "orbit_audit" / "auditor",
-                 ORBIT, ROOT / "experiments"):
+                 ORBIT, ROOT / "experiments", ROOT):
         if (base / name).exists():
             return base / name
     return None

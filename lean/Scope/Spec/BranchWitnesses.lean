@@ -13,7 +13,15 @@ Concrete audits, checked by evaluation in `Proofs/BranchSanity.lean`:
 * `bug_NestedDesync` (RB3) — a rollback nested past its parent's fork: an id minted between
   the two forks is fingerprinted, so the grandchild desyncs and is not scored.
 * `bug_NestedSilent` (RB3) — the same with a fingerprint that does not show the id: the
-  grandchild passes its parent's boundary with different state.
+  grandchild passes its parent's boundary with different state, and mints the same id as
+  branch 0 (property 6 fails).
+* `ScopedForkWitness` — the real fork under a scope of Alice alone (`ForkEffect`'s setting):
+  Bob's own view is untouched.
+* `VetoWitness` — the approver, reading the shared state, vetoes the parent's first batch:
+  the parent records no decisions there (M1), and the child, starting from a different
+  shared state, applies nothing there either; it applies its intervention at the fork.
+* `SameForkWitness` — a parent that is itself a child forks its own child at the same
+  revision (`NotNestedAbove` with equality): no desync.
 
 Orbit here mints one id per step and keeps the last one in `hidden`; only that minted id,
 never the id provider itself, reaches the fingerprint.
@@ -101,6 +109,38 @@ def bug_NestedSilent : Prop :=
   (run none blindEnv nestedPolicy 2 (childReplay blind1) 3 (start blindEnv 0 2 s0)).ended
     = none ∧
   (run none blindEnv nestedPolicy 2 (childReplay blind1) 3 (start blindEnv 0 2 s0)).st.hidden ≠
-    (run none blindEnv nestedPolicy 1 (childReplay blind0) 3 (start blindEnv 0 1 s0)).st.hidden
+    (run none blindEnv nestedPolicy 1 (childReplay blind0) 3 (start blindEnv 0 1 s0)).st.hidden ∧
+  (run none blindEnv nestedPolicy 2 (childReplay blind1) 3 (start blindEnv 0 2 s0)).st.hidden =
+    (run none blindEnv nestedPolicy 0 none 3 (start blindEnv 0 0 s0)).st.hidden
+
+def ScopedForkWitness : Prop :=
+  (runAudit (some Scope.Witness.seat) env forkPolicy s0 0 3 10).map summary =
+    [(some .rolledBack, [(1, "replace_generation", .live), (3, "rollback", .live)]),
+     (some .completed, [(1, "replace_generation", .replay), (2, "replace_generation", .fork)])] ∧
+  (runAudit (some Scope.Witness.seat) env forkPolicy s0 0 3 10).map (·.st.world.own "bob") =
+    [[], []]
+
+/-- The approver vetoes any non-empty batch while the shared count is 0; every boundary adds
+one to it. -/
+def vetoEnv : Env :=
+  { env with veto := fun sh _ ops _ => sh == 0 && !ops.isEmpty,
+             notice := fun sh _ _ _ _ => sh + 1 }
+
+def VetoWitness : Prop :=
+  (runAudit none vetoEnv forkPolicy s0 0 3 10).map summary =
+    [(some .rolledBack, [(3, "rollback", .live)]),
+     (some .completed, [(2, "replace_generation", .fork)])] ∧
+  (runAudit none vetoEnv forkPolicy s0 0 3 10).map (fun c => c.steps.map (·.decisions.length)) =
+    [[0, 0, 1], [0, 1, 0, 0, 0]]
+
+/-- Branch 0 rolls back at 3 to 2; branch 1 (fork 2) rolls back at 4 to 2 again. -/
+def sameForkPolicy : Policy := fun b rev _ _ =>
+  if b == 0 && rev == 3 then [.rollback 2 []]
+  else if b == 1 && rev == 4 then [.rollback 2 []]
+  else []
+
+def SameForkWitness : Prop :=
+  (runAudit none env sameForkPolicy s0 0 3 10).map (·.ended) =
+    [some .rolledBack, some .rolledBack, some .completed]
 
 end Scope.Branch.Witness

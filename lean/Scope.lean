@@ -3,8 +3,17 @@ import Scope.Spec.View
 import Scope.Spec.Run
 import Scope.Spec.Statements
 import Scope.Spec.Witnesses
+import Scope.Spec.Branch
+import Scope.Spec.BranchStatements
+import Scope.Spec.BranchWitnesses
 import Scope.Proofs.Check
 import Scope.Proofs.Run
 import Scope.Proofs.Frame
 import Scope.Proofs.Main
 import Scope.Proofs.Sanity
+import Scope.Proofs.Branch
+import Scope.Proofs.BranchTick
+import Scope.Proofs.BranchFidelity
+import Scope.Proofs.BranchFork
+import Scope.Proofs.BranchAudit
+import Scope.Proofs.BranchSanity
