@@ -291,7 +291,7 @@ def test_the_inspect_tools_refresh_l2s_spend_and_raise_on_refusal(tmp_path):
     spent = {"usd": 0.0}
     made = {ToolDef(t).name: t for t in inspect_tools(tools, spend=lambda: dict(spent))}
     assert "compare" not in made  # folded into scores (against)
-    assert list(made)[0] == "run_experiment"
+    assert list(made)[:2] == ["plan_dosage", "run_experiment"]
     assert "run_experiment" not in {ToolDef(t).name for t in inspect_tools(
         tools, experiments=False)}
 

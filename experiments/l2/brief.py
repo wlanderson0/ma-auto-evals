@@ -26,6 +26,7 @@ from typing import Any
 import yaml  # PyYAML
 
 from experiments.l2 import written as written_
+from experiments.l2.dosage import MODES as DOSAGE_MODES
 from experiments.l2.model import (
     AXES,
     CONDITIONS,
@@ -45,7 +46,7 @@ from orbit_audit.scope import AuditScope
 HEADER = re.compile(r"\A---[ \t]*\n(.*?)^---[ \t]*(?:\n|\Z)", re.S | re.M)
 BRIEF_KEYS = {"budget_usd", "run_budget_usd", "time_limit", "mode", "base_scenarios",
               "base_logs", "measure", "allowed_changes", "variants", "controls", "hypotheses",
-              "inner"}
+              "inner", "dosage"}
 VARIANT_KEYS = {"id", "base", "mutations", "inner", "rationale"}
 MUTATION_KEYS = {"axis", "op", "args", "at"}
 INNER_KEYS = {"condition", "brief", "opening", "scope", "limits"}
@@ -134,6 +135,12 @@ def parse_brief(path: str | Path,
     measure = header.get("measure")
     if measure is not None and not isinstance(measure, str):
         raise BriefError(f"{path}: measure must be text")
+    dosage = header.get("dosage")
+    if dosage is False:  # YAML reads a bare off as false
+        dosage = "off"
+    if dosage is not None and dosage not in DOSAGE_MODES:
+        raise BriefError(f"{path}: dosage must be one of {list(DOSAGE_MODES)}, got "
+                         f"{dosage!r}")
     default = header.get("inner")
     inner = _inner(default, None, "inner") if default is not None else None
     variants = None
@@ -153,7 +160,7 @@ def parse_brief(path: str | Path,
         base_scenarios=bases,
         base_logs=_strings(header, "base_logs"), measure=measure, allowed_changes=allowed,
         variants=variants, controls=controls, hypotheses=_strings(header, "hypotheses"),
-        inner=inner)
+        inner=inner, dosage=dosage)
 
 
 def _known(data: Mapping[str, Any], keys: set[str], where: str) -> None:

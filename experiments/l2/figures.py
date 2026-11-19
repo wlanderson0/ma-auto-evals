@@ -89,3 +89,82 @@ def compare_figure(compared: Mapping[str, Mapping[str, Any]], a: str, b: str, me
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, facecolor=SURFACE)
     return path
+
+
+SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6",
+          "#e34948")
+"""The validated categorical order (light surface), one slot per setting, never cycled."""
+MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
+"""A marker per setting too, so identity never rests on colour alone."""
+
+
+def dose_figure_name(scorer: str, field: str | None = None) -> str:
+    """The dose-response figure's path in the audit, e.g. ``figures/dose-probe.png``."""
+    stem = "dose-" + scorer + (f".{field}" if field else "")
+    return f"{FIGURES}/{re.sub(r'[^A-Za-z0-9._-]+', '_', stem)}.png"
+
+
+def dose_figure(found: Mapping[str, Any], levels: list[int], measure: str,
+                path: Path) -> Path:
+    """Draw ``dosage.response``: one panel per target, the share of runs showing the
+    behaviour at each push level, one line per setting (k/n beside each point; settings
+    are nudged apart along the level axis so equal values stay visible). More
+    than eight settings are not drawn (the table holds them all)."""
+    from matplotlib.figure import Figure
+
+    settings = list(found["settings"])[:len(SERIES)]
+    targets = list(dict.fromkeys(t for sid in settings
+                                 for t in found["settings"][sid]["targets"]))
+    if not targets:
+        raise ValueError("no labelled runs to draw")
+    fig = Figure(figsize=(max(4.2, 3.2 * len(targets)), 3.6), dpi=150)
+    axes = fig.subplots(1, len(targets), squeeze=False)[0]
+    fig.patch.set_facecolor(SURFACE)
+    for ax, target in zip(axes, targets, strict=True):
+        ax.set_facecolor(SURFACE)
+        for i, sid in enumerate(settings):
+            cells = found["settings"][sid]["cells"]
+            xs, ys, labels = [], [], []
+            for level in levels:
+                row = cells.get(level, {}).get("targets", {}).get(target)
+                if row and row["n"]:  # nudged sideways, so equal values never hide
+                    xs.append(level + (i - (len(settings) - 1) / 2) * 0.09)
+                    ys.append(row["k"] / row["n"])
+                    labels.append(f"{row['k']}/{row['n']}")
+            if not xs:
+                continue
+            ax.plot(xs, ys, color=SERIES[i], linewidth=2, marker=MARKERS[i], markersize=6,
+                    markeredgecolor=SURFACE, markeredgewidth=1.5, label=sid, zorder=3)
+            for x, y, text in zip(xs, ys, labels, strict=True):
+                # alternate sides, then tiers, so labels of nearby points never overlap
+                ax.annotate(text, (x, y), textcoords="offset points",
+                            xytext=(-4 if i % 2 == 0 else 4, 6 + 10 * (i // 2)),
+                            ha="right" if i % 2 == 0 else "left", fontsize=7, color=INK)
+        ax.set_xticks(levels, [f"L{n}" for n in levels], color=INK)
+        ax.set_xlim(min(levels) - 0.3, max(levels) + 0.3)
+        ax.set_ylim(-0.04, 1.15)
+        ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0], ["0", "25%", "50%", "75%", "100%"],
+                      color=MUTED, fontsize=8)
+        ax.yaxis.grid(True, color=GRID, linewidth=0.8, zorder=0)
+        for spine in ("top", "right", "left"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["bottom"].set_color(GRID)
+        ax.tick_params(length=0)
+        ax.set_title(target, loc="left", fontsize=9, color=INK)
+        ax.set_xlabel("push level (0 = least)", color=MUTED, fontsize=8)
+    axes[0].set_ylabel("runs showing the behaviour", color=MUTED, fontsize=8)
+    handles, names = axes[0].get_legend_handles_labels()
+    for ax in axes[1:]:  # a setting may have runs only for later targets
+        for h, n in zip(*ax.get_legend_handles_labels(), strict=True):
+            if n not in names:
+                handles.append(h)
+                names.append(n)
+    fig.legend(handles, names, frameon=False, fontsize=8, loc="upper right", ncols=min(
+        4, len(names)))
+    fig.suptitle(f"Dose-response: {measure}", x=0.01, ha="left", fontsize=10, color=INK)
+    fig.text(0.01, 0.01, "points: share of runs (k/n) at each level, per setting",
+             fontsize=7, color=MUTED)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.92))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, facecolor=SURFACE)
+    return path

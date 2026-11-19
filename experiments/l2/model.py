@@ -93,6 +93,10 @@ class L2Brief:
     hypotheses: tuple[str, ...] | None = None
     inner: InnerSpec | None = None
     """The default inner spec; each variant's own ``inner`` fields override it."""
+    dosage: Literal["required", "optional", "off"] | None = None
+    """Whether L2 plans a ladder of push levels and the settings to try before its first
+    experiment (``experiments.l2.dosage``); ``None``: as the harness running the audit
+    decides (required for an LLM L2)."""
 
 
 @dataclass(frozen=True)

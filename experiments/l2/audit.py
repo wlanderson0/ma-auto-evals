@@ -78,7 +78,8 @@ REVIEW_SHARE = 0.25
 time, when it starts, so L2 can still revise (``agent.reviewer``)."""
 CARRIED = "carried.json"
 """What a continued audit took over from the earlier one (``Audit.create(carry=...)``)."""
-CARRIED_FILES = ("trace.jsonl", "launches.jsonl", "proposed.jsonl", "decisions.jsonl")
+CARRIED_FILES = ("trace.jsonl", "launches.jsonl", "proposed.jsonl", "decisions.jsonl",
+                 "dosage-plan.jsonl", "dosage.jsonl")
 """The earlier audit's record a continued audit copies, beside its experiments,
 scenarios and figures."""
 TIME_RESERVE = 0.10
@@ -708,8 +709,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                                  history=args.history, carry=args.carry)
         except (FileNotFoundError, FileExistsError, ValueError) as error:
             raise SystemExit(str(error)) from error
-    tools = Tools(audit, on_end=write_report)
     model = None if args.fake else args.model or agent.MODEL
+    # An LLM L2 plans its dosage ladder first (unless the brief says otherwise); the fake
+    # L2's fixed script does not.
+    tools = Tools(audit, on_end=write_report,
+                  dosage="required" if model is not None else "optional")
     if model is not None:
         print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
               f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "

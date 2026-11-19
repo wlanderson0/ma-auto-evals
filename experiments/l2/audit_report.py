@@ -23,12 +23,15 @@ from pathlib import Path
 from typing import Any
 
 from experiments.l2 import claims as claims_
+from experiments.l2 import dosage as dosage_
 from experiments.l2.report import SCORER
 from experiments.l2.tools import Tools, _ids, _jsonl, post_ref
 
 RECORD = {
     "brief.md": "the brief as given",
     "decisions.jsonl": "L2's choices on what the brief left open, with reasons",
+    "dosage-plan.jsonl": "every version of L2's dosage plan: the push ladder and the settings",
+    "dosage.jsonl": "the push level and setting of every labelled variant",
     "proposed.jsonl": "every variant L2 proposed, rejected ones too (with the trace seq)",
     "launches.jsonl": "every launch L2 asked for, with its rationale, and what came of it",
     "trace.jsonl": "every tool call and its (shortened) result, in order",
@@ -195,6 +198,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
         out.append(f"None: {why_no_conclusions or 'L2 never called end_audit'}.")
     out.append("")
     out += _review(tools)
+    out += dosage_section(tools, trace)
 
     decisions = _jsonl(audit.out / "decisions.jsonl")
     out += ["## Decisions on what the brief left open", ""]
@@ -281,6 +285,7 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             + (f", and {by_reviewer} by the reviewer (not counted above)" if by_reviewer
                else ""), "",
             "These count L2's own calls; the reviewer's are listed under Review.", ""]
+    out += run_statistics(tools, trace)
 
     out += ["## Departures from the reading guidance (automatic checks)", ""]
     notes = []
@@ -347,6 +352,139 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     out += [f"- `{name}`: {what}" for name, what in RECORD.items()
             if (audit.out / name.rstrip("/")).exists() or name in ("trace.jsonl", "report.md")]
     return "\n".join(out) + "\n"
+
+
+def dose_calls(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Distinct successful ``dose_response`` calls (scorer, field, settings), in order."""
+    seen: dict[str, dict[str, Any]] = {}
+    for row in trace:
+        if row.get("tool") != "dose_response" or not row.get("ok"):
+            continue
+        args = row.get("args") or {}
+        settings = args.get("settings")
+        found = {"scorer": args.get("scorer"), "field": args.get("field"),
+                 "settings": None if settings is None else sorted(_ids(settings))}
+        seen.setdefault(json.dumps(found, sort_keys=True), found)
+    return list(seen.values())
+
+
+def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
+    """The dosage plan and the runs along it, read again from the logs: per setting, the
+    lowest push that elicits the behaviour, and the settings that need least (spec:
+    ``experiments.l2.dosage``). Empty when the audit has no plan."""
+    out_dir = tools.audit.out
+    versions = dosage_.plans(out_dir)
+    if not versions:
+        if tools.dosage == "required" and tools.audit.analysis is None:
+            return ["## Dosage", "", "L2 made no dosage plan (it was required), so no "
+                    "experiment ran under one.", ""]
+        return []
+    plan = versions[-1]
+    out = ["## Dosage: how hard the setups pushed (read from the logs)", ""]
+    calls = dose_calls(trace) or [{"scorer": None, "field": None, "settings": None}]
+    first = calls[0]
+    try:
+        found, _, measure = tools.dose_data(first["scorer"], first["field"])
+        out += [f"**Dosage: {dosage_.summary(plan, found)}** (on {measure}).", ""]
+    except Exception as error:
+        out += [f"No dose-response could be read: {error}", ""]
+    out += [f"The plan (version {plan.revision}"
+            + (f", revised {plan.revision - 1} time(s); every version is in "
+               "dosage-plan.jsonl" if plan.revision > 1 else "") + "). L2's rationale: "
+            + _inline(plan.rationale), "", *dosage_.plan_lines(plan), ""]
+    for args in calls:
+        label = (args["scorer"] or "the brief's measure") + (
+            f".{args['field']}" if args["field"] else "") + (
+            f", settings {', '.join(args['settings'])}" if args["settings"] else "")
+        text = _again(tools.dose_response, args)
+        figure = re.search(r"^Figure: (\S+)", text, re.M)
+        text = re.sub(r"\n?^Figure: .*$", "", text, flags=re.M)  # L2's embedding hint
+        out += [f"### dose_response ({label})", "", text, ""]
+        if figure and (out_dir / figure[1]).exists():
+            out += [f"![Dose-response: {label}]({figure[1]})", ""]
+    try:
+        ran = set(tools.results().runs)
+    except Exception:
+        ran = set()
+    labelled = set(dosage_.labels(out_dir))
+    if unlabelled := sorted(ran - labelled):
+        out += ["Variants run without dosage labels (not in the tables above): "
+                + ", ".join(unlabelled) + ".", ""]
+    return out
+
+
+def run_statistics(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
+    """General statistics of the runs: how many, how complete, per scenario, along the
+    dosage ladder, how often the behaviour showed, and what they cost."""
+    out = ["## Run statistics (from the logs)", ""]
+    try:
+        results = tools.results()
+    except Exception as error:
+        return out + [f"(The runs could not be read: {error})", ""]
+    samples = results.samples
+    if not samples:
+        return out + ["No run finished.", ""]
+    ids = sorted({s.variant_id for s in samples})
+    epochs = sorted(len(results.of(v)) for v in ids)
+    errored = sum(1 for s in samples if s.error)
+    incomplete = sum(1 for s in samples if any(v is None for v in s.scores.values()))
+    b = tools.audit.budget()
+    runs_usd = b["by_kind"]["experiments"]
+    out += [f"- Runs (samples): {len(samples)}, of {len(ids)} variant(s) in "
+            f"{len({tools._where.get(v, '?') for v in ids})} experiment(s); epochs per "
+            f"variant {epochs[0]}–{epochs[-1]} (median {epochs[len(epochs) // 2]})",
+            f"- Runs that errored: {errored}; runs with a score missing or incomplete: "
+            f"{incomplete}",
+            f"- Cost: ${runs_usd:.4f} on runs (${runs_usd / len(samples):.4f} per run), "
+            f"${b['by_kind']['l2']:.4f} on L2's own calls, ${b['spent_usd']:.4f} in all"]
+    t = tools.audit.clock_state()
+    if t.get("elapsed_s") is not None:
+        out.append(f"- Time: {t['elapsed_s'] / 60:.1f} min")
+    bases: dict[str, list[str]] = {}
+    for vid in ids:
+        bases.setdefault(results.base(vid), []).append(vid)
+    dose = next(iter(dose_calls(trace)), None)
+    labels = dosage_.labels(tools.audit.out)
+    plan = dosage_.current(tools.audit.out)
+    rows = []
+    for base, vids in bases.items():
+        scorer = SCORER.get(base)
+        field = None
+        if dose is not None and dose["scorer"] is not None and (
+                dose["scorer"] != "outcome" or dose["field"]):
+            scorer, field = dose["scorer"], dose["field"]
+        for target in results.targets(vids[0]):
+            known: list[bool | None] = []
+            if scorer is not None:
+                try:
+                    known = [results.adopted(s, target, scorer, field=field)
+                             for v in vids for s in results.of(v)]
+                except Exception:
+                    known = []
+            done = [x for x in known if x is not None]
+            rows.append([base, len(vids), sum(len(results.of(v)) for v in vids), target,
+                         (scorer or "-") + (f".{field}" if field else ""),
+                         f"{sum(done)}/{len(done)}" + (f" (+{len(known) - len(done)} unknown)"
+                                                       if len(done) < len(known) else "")
+                         if known else "-"])
+    out += ["", "Per scenario and target, over every run (all variants pooled: a spread of "
+            "setups, not an estimate for any one):", "",
+            "| scenario | variants | runs | target | measure | runs showing the behaviour |",
+            "|---|---|---|---|---|---|",
+            *[f"| {' | '.join(str(c) for c in row)} |" for row in rows]]
+    if plan is not None:
+        mine = {v: labels[v] for v in ids if v in labels}
+        cells = {(r["setting"], r["dosage"]) for r in mine.values()}
+        per_level = Counter()
+        for vid, row in mine.items():
+            per_level[row["dosage"]] += len(results.of(vid))
+        out += ["", f"- Dosage: {len({c[0] for c in cells})} of {len(plan.settings)} planned "
+                f"setting(s) and {len({c[1] for c in cells})} of {len(plan.levels)} levels "
+                f"run; {len(cells)} of {len(plan.settings) * len(plan.levels)} "
+                "setting × level cells", "- Runs per level: " + ", ".join(
+                    f"L{lv.level} {per_level.get(lv.level, 0)}" for lv in plan.levels)]
+    out.append("")
+    return out
 
 
 def _inline(value: Any) -> str:
@@ -995,10 +1133,22 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
         *([("Withheld by L2's provider", f"{tools.blocked['blocked']} of "
             f"{tools.blocked['calls']} replies (content_filter)")]
           if tools.blocked and tools.blocked["blocked"] else []),
+        *([("Dosage", _dose_fact(tools))] if dosage_.current(audit.out) else []),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),
     ]
+
+
+def _dose_fact(tools: Tools) -> str:
+    plan = dosage_.current(tools.audit.out)
+    first = next(iter(dose_calls(tools.trace())), {"scorer": None, "field": None})
+    try:
+        found, _, measure = tools.dose_data(first["scorer"], first["field"])
+    except Exception:
+        return f"a {len(plan.levels)}-level ladder over {len(plan.settings)} setting(s); no " \
+               "dose-response read"
+    return f"{dosage_.summary(plan, found)} (on {measure}; see report.md)"
 
 
 def _head(tools: Tools, facts: list[tuple[str, str]], final: bool) -> list[str]:

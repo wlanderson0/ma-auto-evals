@@ -165,6 +165,7 @@ def test_the_tool_description_states_the_limits():
 
     class Stub:  # inspect_tools only wraps; nothing is called here
         audit = None
+        dosage = "optional"
 
     [run] = [ToolDef(t) for t in inspect_tools(Stub()) if ToolDef(t).name == "run_python"]
     assert f"after {workspace.TIME_LIMIT} seconds" in " ".join(run.description.split())
