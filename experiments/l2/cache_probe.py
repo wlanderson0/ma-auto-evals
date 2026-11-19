@@ -13,10 +13,13 @@ Variants:
   C    our own breakpoints, all 1 h: last tool, system, last two messages (tool included)
   D    as C, but the message breakpoints skip tool messages (user/assistant only)
 
-Needs OPENROUTER_API_KEY. About 4 short calls per variant:
+``$`` is our price table's estimate (cache writes at the 1 h rate); ``billed`` is what
+OpenRouter charged, when it says. Needs OPENROUTER_API_KEY. About 4 short calls per
+variant:
 
     uv run python -m experiments.l2.cache_probe
     uv run python -m experiments.l2.cache_probe --variants C,D --only amazon-bedrock
+    uv run python -m experiments.l2.cache_probe --variants B1h,C --pause 400
 """
 
 from __future__ import annotations
@@ -101,30 +104,37 @@ def _model(variant: str, model: str, only: str | None) -> Model:
     return m
 
 
-def _provider(m: Model) -> list[str]:
-    """Record the provider of each completion ``m`` receives."""
-    seen: list[str] = []
+def _provider(m: Model) -> list[tuple[str, float | None]]:
+    """Record the provider and OpenRouter's billed cost of each completion ``m`` receives."""
+    seen: list[tuple[str, float | None]] = []
     api = m.api
     send = api._generate_completion
 
     async def recorded(request: dict[str, Any], config: Any) -> Any:
         completion = await send(request, config)
-        seen.append(str(getattr(completion, "provider", None)))
+        usage = getattr(completion, "usage", None)
+        extra = getattr(usage, "model_extra", None) or {}
+        seen.append((str(getattr(completion, "provider", None)), extra.get("cost")))
         return completion
 
     api._generate_completion = recorded  # type: ignore[method-assign]
     return seen
 
 
-async def probe(variant: str, model: str, calls: int, only: str | None) -> list[dict]:
+async def probe(variant: str, model: str, calls: int, only: str | None,
+                pause: float = 0) -> list[dict]:
     m = _model(variant, model, only)
     providers = _provider(m)
     rows = []
     for i, messages in enumerate(_conversation(secrets.token_hex(6), calls)):
+        if pause and i == calls - 1:  # does the cache outlive the default 5 minutes?
+            print(f"{variant:4} pausing {pause:.0f}s before the last call", flush=True)
+            await asyncio.sleep(pause)
         out = await m.generate(messages, tools=TOOLS, config=GenerateConfig(max_tokens=16))
         u = out.usage
         assert u is not None
-        rows.append({"variant": variant, "call": i, "provider": providers[-1],
+        provider, billed = providers[-1]
+        rows.append({"variant": variant, "call": i, "provider": provider, "billed": billed,
                      "input": u.input_tokens, "cache_read": u.input_tokens_cache_read or 0,
                      "cache_write": u.input_tokens_cache_write or 0,
                      "cost": round(usage_cost(model, u), 4)})
@@ -137,23 +147,33 @@ def main() -> None:
     p.add_argument("--variants", default=",".join(VARIANTS))
     p.add_argument("--calls", type=int, default=4)
     p.add_argument("--only", help="pin one OpenRouter provider, e.g. anthropic, amazon-bedrock")
+    p.add_argument("--pause", type=float, default=0,
+                   help="seconds to wait before the last call (e.g. 400, past 5 minutes)")
     p.add_argument("--out", type=Path, default=Path("logs/cache-probe.jsonl"))
     args = p.parse_args()
     # OPENROUTER_API_KEY from the gitignored .env: the nearest one up from here, so a
     # worktree under .worktrees/ uses the main checkout's
     load_dotenv(find_dotenv(usecwd=True))
+    variants = args.variants.split(",")
+
+    async def run_all() -> list[list[dict] | BaseException]:
+        # concurrently, so a pause is waited once, not once per variant
+        return await asyncio.gather(
+            *(probe(v, args.model, args.calls, args.only, args.pause) for v in variants),
+            return_exceptions=True)
+
     rows: list[dict] = []
-    print(f"{'var':4} {'call':>4} {'provider':18} {'input':>7} {'read':>7} {'write':>7} {'$':>7}")
-    for v in args.variants.split(","):
-        try:
-            got = asyncio.run(probe(v, args.model, args.calls, args.only))
-        except Exception as e:  # report and go on to the next variant
-            print(f"{v:4} failed: {type(e).__name__}: {str(e)[:200]}")
-            rows.append({"variant": v, "error": f"{type(e).__name__}: {e}"})
+    print(f"{'var':4} {'call':>4} {'provider':22} {'input':>7} {'read':>7} {'write':>7} "
+          f"{'$':>7} {'billed':>7}")
+    for v, got in zip(variants, asyncio.run(run_all()), strict=True):
+        if isinstance(got, BaseException):  # report and go on to the next variant
+            print(f"{v:4} failed: {type(got).__name__}: {str(got)[:200]}")
+            rows.append({"variant": v, "error": f"{type(got).__name__}: {got}"})
             continue
         for r in got:
-            print(f"{r['variant']:4} {r['call']:>4} {r['provider']:18} {r['input']:>7} "
-                  f"{r['cache_read']:>7} {r['cache_write']:>7} {r['cost']:>7}")
+            print(f"{r['variant']:4} {r['call']:>4} {r['provider']:22} {r['input']:>7} "
+                  f"{r['cache_read']:>7} {r['cache_write']:>7} {r['cost']:>7} "
+                  f"{r['billed']!s:>7}")
         rows += got
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("a") as f:
