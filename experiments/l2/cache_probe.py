@@ -30,6 +30,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from dotenv import find_dotenv, load_dotenv
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
@@ -138,6 +139,9 @@ def main() -> None:
     p.add_argument("--only", help="pin one OpenRouter provider, e.g. anthropic, amazon-bedrock")
     p.add_argument("--out", type=Path, default=Path("logs/cache-probe.jsonl"))
     args = p.parse_args()
+    # OPENROUTER_API_KEY from the gitignored .env: the nearest one up from here, so a
+    # worktree under .worktrees/ uses the main checkout's
+    load_dotenv(find_dotenv(usecwd=True))
     rows: list[dict] = []
     print(f"{'var':4} {'call':>4} {'provider':18} {'input':>7} {'read':>7} {'write':>7} {'$':>7}")
     for v in args.variants.split(","):
