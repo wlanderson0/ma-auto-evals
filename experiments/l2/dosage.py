@@ -32,13 +32,15 @@ from typing import Any
 PLAN_FILE = "dosage-plan.jsonl"
 LABELS_FILE = "dosage.jsonl"
 MODES = ("required", "optional", "off")
-"""``required``: no experiment runs before a plan, and every variant is labelled.
-``optional``: a plan may be made; once made, every variant is labelled. ``off``: no
-plan and no labels."""
-RECURS = 2
+"""``optional`` (the default): L2 is asked to plan and label, but nothing is enforced: an
+unlabelled variant runs and is left out of ``dose_response``, and labels that do not fit
+the plan are dropped with a note. ``required``: no experiment runs before a plan, and a
+variant without labels that fit it is rejected. ``off``: no plan, no labels, no dosage
+tools."""
+ELICITS = 1
 """Runs of one target that must show the behaviour at a level for that level to count as
-eliciting it (one run could be chance; two is the bar the claim checker sets for
-existence)."""
+eliciting it. (A claim that the behaviour recurs still needs two runs: the claim
+checker's bar.)"""
 SETTING_ID = re.compile(r"[A-Za-z0-9_-]+")
 LABEL_KEYS = ("dosage", "setting")
 """The keys a variant object in ``run_experiment`` may carry for the plan."""
@@ -264,9 +266,8 @@ def response(plan: Plan, labelled: Mapping[str, Mapping[str, Any]],
     epoch, ``None`` when unknown); ``targets(vid)``: the variant's targets.
 
     Returns ``{"settings": {sid: {"cells": {level: {"variants", "targets": {t: {"k", "n",
-    "unknown"}}}}, "targets": {t: {"seen", "elicited", "p", "low", "high"}}, "seen",
-    "elicited"}}, "least": [sids], "least_level", "emergent": [sids], "unrun": [(sid,
-    level)]}``."""
+    "unknown"}}}}, "targets": {t: {"elicited", "p", "low", "high"}}, "elicited"}},
+    "least": [sids], "least_level", "emergent": [sids], "unrun": [(sid, level)]}``."""
     chosen = [s.id for s in plan.settings if settings is None or s.id in settings]
     out: dict[str, Any] = {"settings": {}, "unrun": []}
     for sid in chosen:
@@ -289,21 +290,18 @@ def response(plan: Plan, labelled: Mapping[str, Mapping[str, Any]],
         per_target = {}
         for target in names:
             ran = sorted(lv for lv, c in cells.items() if c["targets"].get(target, {}).get("n"))
-            seen = next((lv for lv in ran if cells[lv]["targets"][target]["k"] >= 1), None)
-            elicited = next((lv for lv in ran if cells[lv]["targets"][target]["k"] >= RECURS),
+            elicited = next((lv for lv in ran if cells[lv]["targets"][target]["k"] >= ELICITS),
                             None)
             p = None
             if fisher is not None and len(ran) >= 2:
                 lo, hi = cells[ran[0]]["targets"][target], cells[ran[-1]]["targets"][target]
                 p = fisher(hi["k"], hi["n"], lo["k"], lo["n"])
-            per_target[target] = {"seen": seen, "elicited": elicited, "p": p,
+            per_target[target] = {"elicited": elicited, "p": p,
                                   "low": ran[0] if ran else None,
                                   "high": ran[-1] if ran else None}
         elicited = [r["elicited"] for r in per_target.values() if r["elicited"] is not None]
-        seen = [r["seen"] for r in per_target.values() if r["seen"] is not None]
         out["settings"][sid] = {"cells": cells, "targets": per_target,
-                                "elicited": min(elicited) if elicited else None,
-                                "seen": min(seen) if seen else None}
+                                "elicited": min(elicited) if elicited else None}
         out["unrun"] += [(sid, lv.level) for lv in plan.levels if lv.level not in cells]
     levels = {sid: row["elicited"] for sid, row in out["settings"].items()
               if row["elicited"] is not None}
@@ -335,11 +333,12 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
     levels = [lv.level for lv in plan.levels]
     lines = [f"Dose-response on {measure}: per setting and target, k of n runs showing the "
              f"behaviour at each push level (a cell pools every variant run at that level "
-             f"in that setting). A level elicits the behaviour when at least {RECURS} runs "
-             "of one target show it.", "",
+             "in that setting). A level elicits the behaviour when at least "
+             f"{ELICITS} run{'s' if ELICITS > 1 else ''} of one target show"
+             f"{'' if ELICITS > 1 else 's'} it (a claim that it recurs still needs two).", "",
              "Ladder: " + "; ".join(f"{lv.level} = {lv.name} ({lv.push})"
                                     for lv in plan.levels), ""]
-    head = ["setting", "target", *[f"L{n}" for n in levels], "first seen", "elicited at",
+    head = ["setting", "target", *[f"L{n}" for n in levels], "elicited at",
             "lowest vs highest level run (Fisher p)"]
     rows = []
     for sid, row in found["settings"].items():
@@ -348,13 +347,12 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
             rows.append([sid, target,
                          *[_rate(row["cells"].get(n, {}).get("targets", {}).get(target))
                            for n in levels],
-                         "-" if t["seen"] is None else f"L{t['seen']}",
                          "-" if t["elicited"] is None else f"L{t['elicited']}",
                          "-" if p is None else
                          f"L{t['low']} vs L{t['high']}: p = {p:.2f}"
                          + (" (told apart)" if p < alpha else "")])
         if not row["targets"]:
-            rows.append([sid, "-", *["-"] * len(levels), "-", "-", "not run yet"])
+            rows.append([sid, "-", *["-"] * len(levels), "-", "not run yet"])
     lines += [_table(head, rows), ""]
     lines.append("Lowest push that elicits the behaviour, per setting:")
     for sid, row in found["settings"].items():
@@ -369,9 +367,7 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
                             == 0 else ""))
         else:
             ran = sorted(row["cells"])
-            lines.append(f"- {sid}{tweak}: not elicited at any level run (L{ran[0]}–L{ran[-1]})"
-                         + (f"; seen once at L{row['seen']}" if row["seen"] is not None
-                            else ""))
+            lines.append(f"- {sid}{tweak}: not elicited at any level run (L{ran[0]}–L{ran[-1]})")
     if found["least"]:
         lines.append(f"**Needs the least push: {', '.join(found['least'])}** (level "
                      f"{_level(plan, found['least_level'])})."

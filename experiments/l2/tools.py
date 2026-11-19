@@ -170,7 +170,7 @@ class Tools:
             raise ValueError(f"dosage must be one of {dosage_.MODES}, not {dosage!r}")
         self.dosage = audit.brief.dosage or dosage
         """Whether L2 plans a dosage ladder first (``experiments.l2.dosage.MODES``): the
-        brief's ``dosage``, else the harness's choice (the CLI requires it of an LLM L2)."""
+        brief's ``dosage``, else ``dosage`` (optional: asked of L2, not enforced)."""
         self.on_end = on_end
         """Called once ``end_audit`` has recorded the conclusions (writes the report)."""
         self.conclusions: str | None = None
@@ -452,12 +452,17 @@ class Tools:
                  and e["id"] else f"#{i + 1}" for i, e in enumerate(entries)]
         problems: list[list[str]] = []
         built: dict[int, Variant] = {}
+        dropped: list[str] = []  # optional dosage: labels that do not fit, never a rejection
         for i, entry in enumerate(entries):
             variant, found = entry_variant(dosage_.split_labels(entry)[0], self.audit.brief,
                                            self.written)
-            if variant is not None or labels[i]:
-                found = [*found, *dosage_.label_problems(
-                    labels[i], None if variant is None else variant.base, plan, self.dosage)]
+            if variant is not None and (labels[i] or self.dosage == "required"):
+                wrong = dosage_.label_problems(labels[i], variant.base, plan, self.dosage)
+                if self.dosage == "required":
+                    found = [*found, *wrong]
+                elif wrong:
+                    dropped.append(f"{names[i]}: {'; '.join(wrong)}")
+                    labels[i] = {}
             problems.append(found)
             if variant is not None:
                 built[i] = variant
@@ -493,19 +498,25 @@ class Tools:
             if len(rows) == len(entries) else {} for i in range(len(entries))])
         if result["status"] != "ran":
             raise Refused(self._launch_text(result))
-        return self._launch_text(result) + self._dosage_notes(result["experiment"])
+        return self._launch_text(result) + self._dosage_notes(
+            result["experiment"], dropped,
+            [names[i] for i in range(len(entries)) if not labels[i]] if plan else [])
 
-    def _dosage_notes(self, experiment: str | None) -> str:
-        """Steps up the ladder in this experiment whose setups do not differ at all."""
+    def _dosage_notes(self, experiment: str | None, dropped: Sequence[str] = (),
+                      unlabelled: Sequence[str] = ()) -> str:
+        """Labels dropped, variants run unlabelled under a plan, and steps up the ladder in
+        this experiment whose setups do not differ at all."""
         if self.dosage == "off" or not experiment:
             return ""
+        notes = [f"labels dropped (the variant ran unlabelled) for {d}" for d in dropped]
+        if unlabelled:
+            notes.append(f"unlabelled, so left out of dose_response: {', '.join(unlabelled)}")
         labelled = {vid: row for vid, row in dosage_.labels(self.audit.out).items()
                     if row.get("experiment") == experiment}
         try:
             runs = self.results().runs
         except Exception:
-            return ""
-        notes = []
+            runs = {}
         by_setting: dict[str, dict[int, str]] = {}
         for vid, row in sorted(labelled.items()):
             by_setting.setdefault(row["setting"], {}).setdefault(row["dosage"], vid)

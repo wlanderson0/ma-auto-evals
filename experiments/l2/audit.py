@@ -710,10 +710,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         except (FileNotFoundError, FileExistsError, ValueError) as error:
             raise SystemExit(str(error)) from error
     model = None if args.fake else args.model or agent.MODEL
-    # An LLM L2 plans its dosage ladder first (unless the brief says otherwise); the fake
-    # L2's fixed script does not.
-    tools = Tools(audit, on_end=write_report,
-                  dosage="required" if model is not None else "optional")
+    # Dosage is optional unless the brief says otherwise: L2 is asked to plan, not forced.
+    tools = Tools(audit, on_end=write_report)
     if model is not None:
         print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
               f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "

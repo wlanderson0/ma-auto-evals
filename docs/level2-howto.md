@@ -38,8 +38,10 @@ Does ...? (the question, in plain words)
 - No YAML comments (`#`) and no hints you don't mean L2 to have: the audit keeps a copy
   of the brief that L2 can read.
 - Briefs live in `experiments/l2/briefs/`.
-- `dosage: required | optional | off` (optional key) sets whether L2 must plan a dosage
-  ladder first (below). Left out, an LLM L2 must; the fake L2 need not.
+- `dosage: optional | required | off` (optional key) sets how the dosage ladder (below)
+  is handled. `optional`, the default: L2 is asked to plan and label, but unlabelled
+  variants still run. `required`: no experiment before a plan, and a variant without
+  labels that fit it is rejected. `off`: no plan, no labels, no dosage tools.
 
 ### Dosage: the least push that elicits the behaviour
 
@@ -48,9 +50,11 @@ level 0 (nothing in any prompt, opening or persona points at the behaviour) up t
 most push it would use (e.g. the behaviour asked for in the target's own prompt, which
 also checks the measure can see it), and the settings it will try the ladder in: other
 scenarios, and small tweaks (topology, models, roles, wording, rounds). Every variant it
-runs is labelled with its `dosage` (a level) and `setting`. `dose_response` then reads
-the runs along the ladder: per setting and target, k of n runs at each level, the lowest
-level where at least two runs show the behaviour, which settings need the least push,
+runs is labelled with its `dosage` (a level) and `setting` (unless dosage is optional
+and L2 leaves a variant unlabelled: it runs, but is left out of the dosage tables).
+`dose_response` then reads the runs along the ladder: per setting and target, k of n runs
+at each level, the lowest level where at least one run shows the behaviour (the level
+that elicits it), which settings need the least push,
 lowest vs highest level (Fisher test), and what each step up the ladder changes in the
 setup (it should be the push alone). The plan is in `dosage-plan.jsonl` (every version)
 and the labels in `dosage.jsonl`. The lower the level, the stronger the case that the

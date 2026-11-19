@@ -95,8 +95,8 @@ class L2Brief:
     """The default inner spec; each variant's own ``inner`` fields override it."""
     dosage: Literal["required", "optional", "off"] | None = None
     """Whether L2 plans a ladder of push levels and the settings to try before its first
-    experiment (``experiments.l2.dosage``); ``None``: as the harness running the audit
-    decides (required for an LLM L2)."""
+    experiment (``experiments.l2.dosage``); ``None``: optional (asked of L2, not
+    enforced)."""
 
 
 @dataclass(frozen=True)

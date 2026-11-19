@@ -264,8 +264,10 @@ def brief_message(tools: Tools) -> str:
         lines.append({
             "required": "- dosage: plan it with plan_dosage before your first experiment; "
                         "every variant then gives its dosage and setting",
-            "optional": "- dosage: you may plan a ladder with plan_dosage; once you do, every "
-                        "variant gives its dosage and setting",
+            "optional": "- dosage: plan a ladder with plan_dosage before your first "
+                        "experiment and label each variant with its dosage and setting "
+                        "(expected, not enforced: an unlabelled variant runs but is left "
+                        "out of dose_response)",
             "off": "- dosage: this audit plans no dosage (plan_dosage and dose_response are "
                    "off)"}[tools.dosage])
     if audit.carried is not None:

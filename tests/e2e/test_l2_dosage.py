@@ -89,7 +89,7 @@ def test_a_plan_on_a_base_the_brief_does_not_allow_is_refused(tmp_path):
     assert not (tools.audit.out / "dosage-plan.jsonl").exists()
 
 
-def test_with_a_plan_every_variant_needs_labels_that_fit_it(tmp_path):
+def test_a_required_dosage_rejects_variants_without_labels_that_fit(tmp_path):
     tools = new(tmp_path)
     planned(tools)
     unlabelled = {k: v for k, v in P2.items() if k not in ("dosage", "setting")}
@@ -119,7 +119,7 @@ def test_dose_response_reads_the_runs_along_the_ladder(ran):
     ok, text = tools.call("dose_response")  # the brief's measure: the probe
     assert ok, text
     assert text.startswith("Dose-response on probe")
-    assert "| setting | target | L0 | L1 | L2 | first seen | elicited at |" in text
+    assert "| setting | target | L0 | L1 | L2 | elicited at |" in text
     for target in ("bob", "carol", "dave"):
         assert f"| plain | {target} |" in text and f"| dave-town | {target} | - | - |" in text
     assert "plain L0 → L1 (P0 → P1): alice's persona" in text
@@ -215,7 +215,32 @@ def test_an_optional_dosage_runs_unlabelled_variants_as_before(tmp_path, offline
     ok, text = tools.call("run_experiment", variants=json.dumps([unlabelled]), epochs=1,
                           rationale="no plan")
     assert ok, text
+    assert "Dosage notes" not in text
     assert "## Dosage" not in render(tools)
+
+
+def test_an_optional_dosage_never_rejects_for_labels(tmp_path, offline_module):
+    """With a plan, an unlabelled variant runs (left out of dose_response), and labels
+    that do not fit the plan are dropped with a note, never a rejection."""
+    tools = new(tmp_path, dosage="optional")
+    planned(tools)
+    unlabelled = {k: v for k, v in P2.items() if k not in ("dosage", "setting")}
+    wrong = {**P0, "dosage": 7}
+    ok, text = tools.call("run_experiment", variants=json.dumps([unlabelled, wrong, P1]),
+                          epochs=1, rationale="labels missing, wrong and right")
+    assert ok and text.startswith("Ran exp-1."), text
+    assert "labels dropped (the variant ran unlabelled) for P0: dosage 7 is not a level" \
+        in text
+    assert "unlabelled, so left out of dose_response: P2, P0" in text
+    assert set(dosage_labels(tools)) == {"P1"}
+    report = render(tools)
+    assert "Variants run without dosage labels (not in the tables above): P0, P2." in report
+
+
+def dosage_labels(tools):
+    from experiments.l2 import dosage
+
+    return dosage.labels(tools.audit.out)
 
 
 def test_a_continued_audit_carries_the_plan_and_the_labels():
@@ -244,7 +269,7 @@ def test_the_agent_plans_runs_and_reads_the_ladder_through_its_tools(tmp_path, o
     assert "### dose_response (the brief's measure)" in report
 
 
-def test_the_cli_requires_a_plan_of_an_llm_l2_but_not_of_the_fake(tmp_path, monkeypatch):
+def test_the_cli_leaves_dosage_optional_unless_the_brief_says(tmp_path, monkeypatch):
     from experiments.l2.audit import main
 
     seen = []
@@ -255,4 +280,8 @@ def test_the_cli_requires_a_plan_of_an_llm_l2_but_not_of_the_fake(tmp_path, monk
         with pytest.raises(SystemExit):  # the stand-in never ends the audit
             main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / out),
                   "--mock", *extra])
-    assert seen == ["required", "optional"]
+    assert seen == ["optional", "optional"]
+    with pytest.raises(SystemExit):
+        main(["--brief", str(brief(tmp_path, 1.0, "\ndosage: required")), "--out",
+              str(tmp_path / "strict"), "--mock", "--fake"])
+    assert seen[-1] == "required"

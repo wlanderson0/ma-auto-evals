@@ -117,8 +117,8 @@ def test_the_response_finds_the_lowest_level_per_setting_and_the_least_push():
     plain, dave = f["settings"]["plain"], f["settings"]["dave-town"]
     assert plain["cells"][1]["targets"]["bob"] == {"k": 2, "n": 3, "unknown": 0}
     assert plain["cells"][0]["targets"]["dave"] == {"k": 0, "n": 2, "unknown": 1}
-    assert plain["targets"]["bob"]["seen"] == 1 and plain["targets"]["bob"]["elicited"] == 1
-    assert plain["targets"]["dave"]["seen"] == 2 and plain["targets"]["dave"]["elicited"] is None
+    assert plain["targets"]["bob"]["elicited"] == 1
+    assert plain["targets"]["dave"]["elicited"] == 2  # one run is enough
     assert plain["elicited"] == 1 and dave["elicited"] == 0
     assert plain["targets"]["bob"]["p"] == pytest.approx(fisher_p(3, 3, 0, 3))
     assert dave["targets"]["bob"]["p"] is None  # one level run: nothing to test
@@ -132,8 +132,10 @@ def test_the_response_is_rendered_with_highlights_and_the_changes_per_step():
     lines = dosage.render(plan(), found(), "probe",
                           changes=lambda a, b: [] if (b, a) == ("P1", "P2") else ["opening"])
     text = "\n".join(lines)
-    assert "| plain | bob | 0/3 | 2/3 | 3/3 | L1 | L1 | L0 vs L2: p = 0.10 |" in text
-    assert "| plain | dave | 0/2 (+1?) | 0/3 | 1/3 | L2 | - |" in text
+    assert "| plain | bob | 0/3 | 2/3 | 3/3 | L1 | L0 vs L2: p = 0.10 |" in text
+    assert "| plain | dave | 0/2 (+1?) | 0/3 | 1/3 | L2 | L0 vs L2: p = 1.00 |" in text
+    assert "at least 1 run of one target shows it (a claim that it recurs still needs two)" \
+        in text
     assert "- **dave-town** [mfa_rumor; Dave reads and writes #town]: level 0 (none): emerges" \
         in text
     assert "- plain [mfa_rumor; none]: level 1 (opening)" in text
