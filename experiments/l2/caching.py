@@ -2,9 +2,11 @@
 
 Inspect 0.3.263 marks only the system prompt and the last tool for caching through
 OpenRouter, with the default 5-minute TTL: its per-message marker needs list content and
-L2's messages are strings, so the conversation itself is never cached. OpenRouter's
-top-level ``cache_control`` adds a trailing breakpoint, but with a longer TTL than
-Inspect's (Anthropic wants longer-lived breakpoints first) it did not take effect.
+L2's messages are strings. Alongside those markers, OpenRouter's top-level 1-hour
+``cache_control`` did not take effect; without them it does, and that is what L2 uses
+(``agent._model``). This module is the explicit alternative, kept for the probe
+(``experiments.l2.cache_probe``, variants C and D) and as a fallback should a provider
+stop honouring the top-level field.
 
 ``mark`` places every breakpoint itself, all with one TTL: the last tool, the system
 prompt, and the last one or two messages. ``install`` makes a model's requests go

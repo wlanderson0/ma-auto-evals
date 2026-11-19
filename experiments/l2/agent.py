@@ -647,14 +647,15 @@ def _model(model: str | Model | None) -> str | Model | None:
         # rounds), which OpenAI then rejects with a 400 before any call is made.
         config = GenerateConfig()
         if model.startswith("openrouter/anthropic/"):
-            # Inspect marks only the system prompt and the tools for caching through
-            # OpenRouter: its per-message marker needs list content, and L2's messages
-            # are strings. OpenRouter's automatic caching (a top-level cache_control)
-            # moves the breakpoint forward as the conversation grows, where the provider
-            # honours it: in live runs (2026-11-17/18) OpenRouter routed every call to
-            # Amazon Bedrock, which did not, so the conversation is still not cached
-            # (#54). Other providers cache automatically.
-            config = GenerateConfig(extra_body={"cache_control": {
+            # OpenRouter's automatic caching: a top-level cache_control, which it turns
+            # into a breakpoint at the end of the prompt, so the whole conversation is
+            # cached and the breakpoint moves forward as it grows. Inspect's own markers
+            # are turned off: they put 5-minute breakpoints on the system prompt and
+            # tools, ahead of the 1-hour one, and with them only those were ever cached
+            # (#54). Checked with experiments.l2.cache_probe (2026-11-19): with this
+            # setup each call reads the previous prompt from the cache, on Bedrock and
+            # Claude Platform on AWS, still after a 400 s pause, at the 1-hour write rate.
+            config = GenerateConfig(cache_prompt=False, extra_body={"cache_control": {
                 "type": "ephemeral", "ttl": CACHE_TTL}})
         return get_model(model, strict_tools=False, config=config)
     return model
