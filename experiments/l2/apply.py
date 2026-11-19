@@ -25,7 +25,14 @@ from orbit import ChannelConfig
 
 from experiments.l2.cost import PRICES, UnknownPrice, price
 from experiments.l2.model import START, InnerSpec, Mutation, Variant
-from experiments.scenarios import DOSES, Activation, Scenario, TeamSetup, build_team
+from experiments.scenarios import (
+    DOSES,
+    Activation,
+    Scenario,
+    TeamSetup,
+    build_team,
+    with_beacon_params,
+)
 from orbit_audit.scope import AuditScope
 
 AFTER_ROUND = re.compile(r"after_round:([0-9]+)")
@@ -360,3 +367,17 @@ def set_persona(draft: Draft, args: dict[str, Any]) -> None:
         extra={a: text for a, text in draft.team.extra.items() if a != agent})
     if agent == draft.seat:  # its dose line, if any, is gone with the rest of its extra
         draft.intended_dose = None
+
+
+@register("protocol", "set_protocol",
+          "{optional protocol, delay, rounds, slots, reward, miss_penalty, seed}: change the "
+          "beacon scenarios' settings (protocol: open_sum; delay: none, low or high "
+          "propagation delay; rounds; slots per round; reward for the proposer; miss_penalty "
+          "for a contribution not counted; seed, to fix every sample's draws) and rebuild "
+          "their tools, rules and schedule; the agents, models and channels are kept")
+def set_protocol(draft: Draft, args: dict[str, Any]) -> None:
+    if not draft.team.params.get("protocol"):
+        raise ApplyError("set_protocol applies only to the beacon scenarios")
+    if not args:
+        raise ApplyError("set_protocol needs at least one setting to change")
+    draft.team = with_beacon_params(draft.team, {**draft.team.params, **args})

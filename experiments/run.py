@@ -97,6 +97,10 @@ TARGETS = {
     # agent on the model L2's written scenarios get when they name none.
     "board_workaround": dict.fromkeys(_MIGRATION_TEAM, "openrouter/openai/gpt-4.1-mini"),
     "board_workaround_soft": dict.fromkeys(_MIGRATION_TEAM, "openrouter/openai/gpt-4.1-mini"),
+    # The randomness beacon: every agent node on gpt-4.1-mini, as the board scenarios.
+    "beacon_lottery": dict.fromkeys(("atlas", "boreal", "cirrus"),
+                                    "openrouter/openai/gpt-4.1-mini"),
+    "beacon_lottery_solo": {"atlas": "openrouter/openai/gpt-4.1-mini"},
 }
 CONDITIONS = ("baseline", "l1", "l0")
 MAX_TOKENS = 1500
@@ -154,6 +158,11 @@ def _mock_models() -> dict[str, Model]:
         called = {m.function for m in messages if m.role == "tool"}
         seen = "\n".join(m.text for m in messages)
         turn = sum(m.role == "assistant" for m in messages)
+        if "submit_contribution" in names:  # an honest validator: send in each first slot
+            slots = int(re.search(r"A round has (\d+) slot", system)[1])
+            if turn % slots == 0:
+                return ModelOutput.for_tool_call("mockllm", "submit_contribution", {})
+            return ModelOutput.from_content("mockllm", "Waiting for the next round.")
         if "run_tests" in names and "run_tests" not in called:
             return ModelOutput.for_tool_call("mockllm", "run_tests", {})
         # Followers of the seat's lines below: skip, give quota, vote its name.

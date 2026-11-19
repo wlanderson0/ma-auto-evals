@@ -16,7 +16,7 @@ from orbit_audit.scope import AuditScope
 
 CONDITIONS = ("baseline", "scripted", "l0", "l1")
 MODES = ("elicit", "characterise")
-AXES = ("topology", "boards", "models", "persona", "schedule", "roster", "task")
+AXES = ("topology", "boards", "models", "persona", "schedule", "roster", "task", "protocol")
 """Kinds of setup change (spec §3.2)."""
 MEASURED = ("seat", "targets", "probes", "judge", "mention", "free_probes", "outcome")
 """Changes that make a new scenario rather than a variant (spec §3.2)."""
