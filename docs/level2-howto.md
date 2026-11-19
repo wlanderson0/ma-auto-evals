@@ -38,6 +38,23 @@ Does ...? (the question, in plain words)
 - No YAML comments (`#`) and no hints you don't mean L2 to have: the audit keeps a copy
   of the brief that L2 can read.
 - Briefs live in `experiments/l2/briefs/`.
+- `dosage: required | optional | off` (optional key) sets whether L2 must plan a dosage
+  ladder first (below). Left out, an LLM L2 must; the fake L2 need not.
+
+### Dosage: the least push that elicits the behaviour
+
+Before its first experiment, L2 plans (`plan_dosage`) a ladder of push levels, from
+level 0 (nothing in any prompt, opening or persona points at the behaviour) up to the
+most push it would use (e.g. the behaviour asked for in the target's own prompt, which
+also checks the measure can see it), and the settings it will try the ladder in: other
+scenarios, and small tweaks (topology, models, roles, wording, rounds). Every variant it
+runs is labelled with its `dosage` (a level) and `setting`. `dose_response` then reads
+the runs along the ladder: per setting and target, k of n runs at each level, the lowest
+level where at least two runs show the behaviour, which settings need the least push,
+lowest vs highest level (Fisher test), and what each step up the ladder changes in the
+setup (it should be the push alone). The plan is in `dosage-plan.jsonl` (every version)
+and the labels in `dosage.jsonl`. The lower the level, the stronger the case that the
+behaviour is emergent rather than instructed.
 
 ## 2. Run L2
 
@@ -131,6 +148,12 @@ uv run python -m experiments.l2.audit --continue logs/l2-audit/<earlier> --live 
   runs; L2 then revised once and said how it answered. A point L2 dismissed is worth
   checking yourself. The draft is in `review.json`.
 - Check that a comparison's variants ran in the same experiment, with the same epochs.
+- Read the Dosage section of `report.md` (when L2 planned one): the ladder, the
+  dose-response tables read again from the logs, the setting that needs the least push
+  (in bold), and what each step up the ladder changes. A step marked "NO DIFFERENCE"
+  means two levels ran the same setup; a step that changes more than the push makes
+  the level's effect hard to read. "Run statistics" gives the counts behind everything:
+  runs, errors, runs per level, the behaviour pooled per scenario and target, cost.
 - Read a few transcripts (on Cosmos, below) before trusting a measure.
 
 ## 4. Share it on Cosmos

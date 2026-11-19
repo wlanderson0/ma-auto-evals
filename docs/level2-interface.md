@@ -83,6 +83,7 @@ single bridge between #town and #pod matters most.
 | `controls` | variants (same format as `variants`) that L2's own variants can name as a shorthand: such a variant is the control's base, mutations and inner, with its own mutations added | L2 builds every variant from a base scenario |
 | `hypotheses` | starting points L2 may refine or replace, recording why | L2 forms its own |
 | `inner` | default inner condition (baseline, scripted; L0 and L1 not built yet, §4) | L2 chooses per variant |
+| `dosage` | `required`, `optional` or `off`: whether L2 plans a dosage ladder before its first experiment (§6.7) | required for an LLM L2, optional for the fake L2 |
 
 The brief cannot add count limits (variants, samples, calls): the money budget covers them (§7). A time limit is not a count: it bounds how long the audit takes, not what it may try.
 
@@ -338,10 +339,12 @@ L2's tools (`experiments/l2/tools.py`):
 
 | Tool | Does |
 | --- | --- |
-| `run_experiment(variants, epochs, rationale, confirm)` | builds, checks and runs an experiment (§5), with L2's reason for running it next; a variant may name one of the brief's `controls` |
+| `plan_dosage(levels, settings, rationale)` | records the dosage plan: the ladder of push levels and the settings to try it in (§6.7); called again, revises it |
+| `run_experiment(variants, epochs, rationale, confirm)` | builds, checks and runs an experiment (§5), with L2's reason for running it next; a variant may name one of the brief's `controls`; with a dosage plan, each variant gives its `dosage` and `setting` |
 | `write_scenario(name, code)` | checks, dry-runs and saves a scenario (§3.5) |
 | `list_runs()` | every variant run so far: experiment, base, condition, changes, status, epochs, cost, warnings |
 | `scores(variant_ids, scorer, against, rounds, field)` | per-target score table across epochs (incomplete shown as such); with `against`, each variant is also compared with it: k of n per target, the difference, Fisher's exact test and the reading-guidance checks (§6.3). Left out, `scorer` is the brief's measure |
+| `dose_response(scorer, field, settings)` | the runs along the dosage ladder: per setting and target, k of n at each level, the lowest level that elicits the behaviour, the settings that need least push, and what each step up changes (§6.7) |
 | `transcript(variant_id, epoch, agent, max_posts)` | a bounded slice of one run's posts, each with its authorship label |
 | `find(pattern, variant_ids, agent, author, max_results)` | every match of a regex across runs, each with its run, post and author label (agent, or auditor speaking as an agent); e.g. every post where a target uses "Kestrel" |
 | `run_python(code)` | L2's own code on the logs (§6) |
@@ -451,6 +454,21 @@ L2 then revises once: `end_audit(conclusions, claims, response)`, where `respons
 - **Never refused.** A problem in the write-up must not cost the audit its claims, so nothing in it is refused: an empty write-up is no write-up, and an image that will not show (not a file in the audit directory by a relative path, e.g. missing, outside it, absolute or a URL; read as markdown reads it) is named in the tool result and in the facts table.
 - **The audit's facts.** `writeup.md` opens with a table the harness writes from the record, not L2: the question, L2's model, the budget and spend (L2's own calls, the reviewer's share, runs), the time, the variants and epochs that ran (not those asked for), how the audit ended, any stop, and the claims' verdicts. A line then says that what follows is L2's own and unchecked, and that the checked claims are in `report.md`.
 - **Unchecked, but reviewed.** Nothing in the write-up is checked like a claim; the reviewer reads the draft (§6.5). If L2 never ends the audit, `writeup.md` is the reviewed draft, marked as a draft; with no write-up at all there is no `writeup.md`.
+
+### 6.7 Dosage: the least push that elicits the behaviour
+
+How hard a setup pushes towards the behaviour matters as much as whether the behaviour happens: a behaviour seen only when a prompt asks for it is instructed, not emergent. So before its first experiment L2 plans, with `plan_dosage`:
+
+- **A ladder of push levels**, numbered from 0. Level 0 is the least push L2 can design: nothing in any prompt, opening or persona points at the behaviour, only the situation could bring it about. The top level is the most push it would use, e.g. the behaviour asked for in the target's own prompt; it also checks that the measure can see the behaviour at all. The rungs between push a little more each, e.g. pressure or an incentive in the situation, a cue in a tool result, the seat's scripted opening, a line in the seat's persona.
+- **The settings** to try the ladder in: other scenarios, and small tweaks to one (topology, models, roles, wording, rounds), since a tweak can change how much push the behaviour needs.
+
+Each variant L2 then runs gives its `dosage` (a level) and `setting` (whose base it must use); a variant without them, or with labels the plan does not have, is rejected. Within a setting, variants at different levels should differ in the push alone. A plan can be revised, but a level or setting that already has runs keeps its meaning (same number and name; same base). The plan's versions are in `dosage-plan.jsonl`, the labels in `dosage.jsonl`.
+
+`dose_response` reads the runs along the ladder from the logs: per setting and target, k of n runs showing the behaviour at each level (variants at one level of one setting are pooled), the first level where it is seen, the lowest level where it recurs (at least two runs of one target: the level that *elicits* it), a Fisher test of the lowest against the highest level run, the settings that need the least push (and those where it emerges at level 0), what each step up the ladder changes in the setup (from the variants' definitions, so a step that changes more than the push, or nothing, shows), and the cells planned but not run. It draws the dose-response figure for the write-up.
+
+The report (§8) has a Dosage section, read again from the logs: the plan, each dose-response L2 read, and the least-push setting in bold; and a Run statistics section: runs, errors, epochs per variant, runs per level and the share of the planned cells run, the behaviour pooled per scenario and target, and cost per run. The write-up's facts carry the least-push line.
+
+A claim that one setting needs less push than another is a comparison like any other: two variants one change apart, in the same experiment, with equal epochs; otherwise it is a lead.
 
 ## 7. Budget
 
