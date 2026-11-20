@@ -7,7 +7,9 @@ the whole prompt of the call before it. Each variant uses its own random prefix,
 variant reads another's (or an earlier run's) cache.
 
 Variants:
-  A    current L2 setup: Inspect's markers (5 min) + top-level cache_control (1 h)
+  A    L2's setup before #54 was fixed: Inspect's markers (5 min) + top-level (1 h)
+  A5   Inspect's markers (5 min) + top-level cache_control (5 min): is a top-level field
+       blocked by Inspect's markers whatever its TTL, or only a longer one?
   B5   top-level cache_control only (5 min); Inspect's markers off
   B1h  top-level cache_control only (1 h); Inspect's markers off
   C    our own breakpoints, all 1 h: last tool, system, last two messages (tool included)
@@ -46,11 +48,11 @@ from inspect_ai.model import (
 )
 from inspect_ai.tool import ToolCall, ToolInfo, ToolParams
 
-from experiments.l2 import agent, caching
+from experiments.l2 import caching
 from experiments.l2.cost import usage_cost
 
 MODEL = "openrouter/anthropic/claude-opus-5.5"
-VARIANTS = ("A", "B5", "B1h", "C", "D")
+VARIANTS = ("A", "A5", "B5", "B1h", "C", "D")
 WORDS = ("audit", "agent", "channel", "round", "brief", "variant", "epoch", "score",
          "seat", "target", "rumour", "budget", "ledger", "schedule", "persona", "probe",
          "migration", "reviewer", "claim", "sample", "token", "cache", "provider", "log")
@@ -88,12 +90,10 @@ TOOLS = [
 
 def _model(variant: str, model: str, only: str | None) -> Model:
     extra: dict[str, Any] = {"provider": {"only": [only]}} if only else {}
-    if variant == "A":
-        m = agent._model(model)
-        assert isinstance(m, Model)
-        if only:
-            m.config.extra_body = {**(m.config.extra_body or {}), **extra}
-        return m
+    if variant in ("A", "A5"):  # Inspect's own markers stay on (cache_prompt unset)
+        control = {"type": "ephemeral", **({"ttl": "1h"} if variant == "A" else {})}
+        config = GenerateConfig(extra_body={**extra, "cache_control": control})
+        return get_model(model, strict_tools=False, config=config, memoize=False)
     if variant in ("B5", "B1h"):
         control = {"type": "ephemeral", **({"ttl": "1h"} if variant == "B1h" else {})}
         extra["cache_control"] = control
