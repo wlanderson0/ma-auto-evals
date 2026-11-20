@@ -279,6 +279,9 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"done); launch attempts: {len(launches)}",
             f"- Scorers read: {len(scorers)} ({', '.join(scorers) or 'none'})",
             f"- Comparisons tried: {len(compares)} distinct ({ok_compares} successful calls)",
+            *([f"- Dose-response readings: {len(dose_calls(trace))} distinct (each also tests "
+               "lowest vs highest level per setting and target, descriptively)"]
+              if dose_calls(trace) else []),
             f"- Transcripts read: {calls['transcript']}; searches: {calls['find']}; "
             f"code runs: {calls['run_python']} (the code and its output are in trace.jsonl)",
             f"- Tool calls: {len(trace)} ({failed} refused or failed)"
@@ -382,6 +385,8 @@ def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
     lowest push that elicits the behaviour, and the settings that need least (spec:
     ``experiments.l2.dosage``). Empty when the audit has no plan."""
     out_dir = tools.audit.out
+    if tools.dosage == "off":
+        return []
     versions = dosage_.plans(out_dir)
     if not versions:
         if tools.dosage == "off" or tools.audit.analysis is not None:
@@ -391,8 +396,9 @@ def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
     out = ["## Dosage: how hard the setups pushed (read from the logs)", ""]
     calls = dose_calls(trace) or [{"scorer": None, "field": None, "settings": None}]
     first = calls[0]
+    tools._caller = "l2"  # the report redraws L2's figures, whoever called last
     try:
-        found, _, measure = tools.dose_data(first["scorer"], first["field"])
+        found, _, measure = tools.dose_data(first["scorer"], first["field"], first["settings"])
         out += [f"**Dosage: {dosage_.summary(plan, found)}** (on {measure}).", ""]
     except Exception as error:
         out += [f"No dose-response could be read: {error}", ""]
@@ -443,8 +449,11 @@ def run_statistics(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
             f"variant {epochs[0]}–{epochs[-1]} (median {epochs[len(epochs) // 2]})",
             f"- Runs that errored: {errored}; runs with a score missing or incomplete: "
             f"{incomplete}",
-            f"- Cost: ${runs_usd:.4f} on runs (${runs_usd / len(samples):.4f} per run), "
-            f"${b['by_kind']['l2']:.4f} on L2's own calls, ${b['spent_usd']:.4f} in all"]
+            f"- Cost: ${runs_usd:.4f} on runs"
+            # per run only when every run read here was paid for in this audit
+            + (f" (${runs_usd / len(samples):.4f} per run)" if tools.audit.carried is None
+               and tools.audit.analysis is None else "")
+            + f", ${b['by_kind']['l2']:.4f} on L2's own calls, ${b['spent_usd']:.4f} in all"]
     t = tools.audit.clock_state()
     if t.get("elapsed_s") is not None:
         out.append(f"- Time: {t['elapsed_s'] / 60:.1f} min")
@@ -456,11 +465,11 @@ def run_statistics(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
     plan = dosage_.current(tools.audit.out)
     rows = []
     for base, vids in bases.items():
-        scorer = SCORER.get(base)
-        field = None
+        scorer, field = SCORER.get(base), None
         if dose is not None and dose["scorer"] is not None and (
-                dose["scorer"] != "outcome" or dose["field"]):
-            scorer, field = dose["scorer"], dose["field"]
+                dose["scorer"] != "outcome" or dose["field"]) and tools._reads(
+                    results, base, vids, dose["scorer"], dose["field"]) is not None:
+            scorer, field = dose["scorer"], dose["field"]  # L2's scorer, where it applies
         for target in results.targets(vids[0]):
             known: list[bool | None] = []
             if scorer is not None:
@@ -1141,9 +1150,9 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
         *([("Withheld by L2's provider", f"{tools.blocked['blocked']} of "
             f"{tools.blocked['calls']} replies (content_filter)")]
           if tools.blocked and tools.blocked["blocked"] else []),
-        *([("Dosage", _dose_fact(tools))] if dosage_.current(audit.out) else
-          [("Dosage", "L2 made no dosage plan")] if tools.dosage != "off"
-          and audit.analysis is None else []),
+        *([] if tools.dosage == "off" or audit.analysis is not None else
+          [("Dosage", _dose_fact(tools))] if dosage_.current(audit.out) else
+          [("Dosage", "L2 made no dosage plan")]),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),
@@ -1152,9 +1161,10 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
 
 def _dose_fact(tools: Tools) -> str:
     plan = dosage_.current(tools.audit.out)
-    first = next(iter(dose_calls(tools.trace())), {"scorer": None, "field": None})
+    mine = [row for row in tools.trace() if row.get("by") != "reviewer"]  # as the report
+    first = next(iter(dose_calls(mine)), {"scorer": None, "field": None, "settings": None})
     try:
-        found, _, measure = tools.dose_data(first["scorer"], first["field"])
+        found, _, measure = tools.dose_data(first["scorer"], first["field"], first["settings"])
     except Exception:
         return f"a {len(plan.levels)}-level ladder over {len(plan.settings)} setting(s); no " \
                "dose-response read"

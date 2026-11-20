@@ -348,7 +348,7 @@ def continuation_lines(audit: Any) -> list[str]:
              "audit's conclusion until you make it yours.", ""]
     for exp in _launch_rationales(audit):
         lines.append(f"- {exp['experiment']}: {exp['rationale']}")
-    if (plan := dosage_.current(audit.out)) is not None:
+    if audit.brief.dosage != "off" and (plan := dosage_.current(audit.out)) is not None:
         lines += ["", f"Its dosage plan (version {plan.revision}) carries over and still "
                   "holds: dose_response reads its labelled runs, and plan_dosage revises it.",
                   "", *dosage_.plan_lines(plan)]

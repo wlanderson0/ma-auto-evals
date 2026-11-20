@@ -98,10 +98,14 @@ MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
 """A marker per setting too, so identity never rests on colour alone."""
 
 
-def dose_figure_name(scorer: str, field: str | None = None) -> str:
-    """The dose-response figure's path in the audit, e.g. ``figures/dose-probe.png``."""
-    stem = "dose-" + scorer + (f".{field}" if field else "")
-    return f"{FIGURES}/{re.sub(r'[^A-Za-z0-9._-]+', '_', stem)}.png"
+def dose_figure_name(scorer: str, field: str | None = None,
+                     settings: list[str] | None = None) -> str:
+    """The dose-response figure's path in the audit, e.g. ``figures/dose-probe.png``, or
+    ``figures/dose-probe-plain+dave-town.png`` for some of the plan's settings: one file per
+    reading, so a later reading never redraws an earlier one."""
+    stem = "dose-" + scorer + (f".{field}" if field else "") + (
+        "-" + "+".join(settings) if settings else "")
+    return f"{FIGURES}/{re.sub(r'[^A-Za-z0-9._+-]+', '_', stem)}.png"
 
 
 def dose_figure(found: Mapping[str, Any], levels: list[int], measure: str,

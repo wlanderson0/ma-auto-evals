@@ -174,26 +174,39 @@ def save(out: Path, plan: Plan, seq: int | None) -> None:
         file.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def revision_problems(plan: Plan, used: Mapping[str, Mapping[str, Any]],
-                      before: Plan | None) -> list[str]:
-    """Why ``plan`` cannot replace ``before``: a level or setting that variants already ran
-    under must keep its meaning (same level number and name; same base)."""
+def revision(plan: Plan, used: Mapping[str, Mapping[str, Any]],
+             before: Plan | None) -> tuple[list[str], dict[int, int]]:
+    """Whether ``plan`` can replace ``before``, given the labels of variants that ran.
+
+    A level with runs keeps its meaning: the new plan has a level with the same name and
+    the same push (its number may change, e.g. to insert a rung below it, as long as the
+    levels with runs keep their order). A setting with runs keeps its base and tweak.
+    Returns the problems (empty: accepted) and the renumbering ``{old: new}`` of the
+    levels with runs whose number changed."""
     if before is None:
-        return []
-    problems = []
+        return [], {}
+    problems, remap = [], {}
     for level in sorted({row["dosage"] for row in used.values()}):
-        old, new = before.level(level), plan.level(level)
-        if old is not None and (new is None or new.name != old.name):
-            ran = sorted(v for v, row in used.items() if row["dosage"] == level)
-            problems.append(f"level {level} ({old.name}) has runs ({', '.join(ran)}): keep it "
-                            "with the same number and name")
+        old = before.level(level)
+        if old is None:
+            continue
+        ran = ", ".join(sorted(v for v, row in used.items() if row["dosage"] == level))
+        new = next((lv for lv in plan.levels if lv.name == old.name), None)
+        if new is None or new.push != old.push:
+            problems.append(f"level {level} ({old.name}) has runs ({ran}): keep it, with the "
+                            "same name and push (its number may change)")
+        else:
+            remap[level] = new.level
+    kept = [remap[level] for level in sorted(remap)]
+    if kept != sorted(kept):
+        problems.append("levels with runs must keep their order on the ladder")
     for sid in sorted({row["setting"] for row in used.values()}):
         old, new = before.setting(sid), plan.setting(sid)
-        if old is not None and (new is None or new.base != old.base):
-            ran = sorted(v for v, row in used.items() if row["setting"] == sid)
-            problems.append(f"setting {sid} (base {old.base}) has runs ({', '.join(ran)}): "
-                            "keep it, on the same base")
-    return problems
+        if old is not None and (new is None or (new.base, new.tweak) != (old.base, old.tweak)):
+            ran = ", ".join(sorted(v for v, row in used.items() if row["setting"] == sid))
+            problems.append(f"setting {sid} (base {old.base}) has runs ({ran}): keep it, with "
+                            "the same base and tweak")
+    return problems, {old: new for old, new in remap.items() if old != new}
 
 
 # ------------------------------------------------------------------ labels
@@ -248,6 +261,21 @@ def record_labels(out: Path, experiment: str | None,
                                        "setting": found["setting"]}, sort_keys=True) + "\n")
 
 
+def relabel(out: Path, used: Mapping[str, Mapping[str, Any]], remap: Mapping[int, int],
+            revision: int) -> list[str]:
+    """Record the new level of every variant whose level was renumbered by a revision
+    (the old rows stay: the last row of an id holds); the ids relabelled."""
+    moved = sorted(v for v, row in used.items() if row["dosage"] in remap)
+    if not moved:
+        return []
+    with (out / LABELS_FILE).open("a") as file:
+        for vid in moved:
+            row = used[vid]
+            file.write(json.dumps({**row, "dosage": remap[row["dosage"]],
+                                   "renumbered_by_revision": revision}, sort_keys=True) + "\n")
+    return moved
+
+
 def labels(out: Path) -> dict[str, dict[str, Any]]:
     """Variant id -> its labels (the last record of each id)."""
     return {row["variant"]: row for row in _jsonl(out / LABELS_FILE)}
@@ -266,7 +294,7 @@ def response(plan: Plan, labelled: Mapping[str, Mapping[str, Any]],
     epoch, ``None`` when unknown); ``targets(vid)``: the variant's targets.
 
     Returns ``{"settings": {sid: {"cells": {level: {"variants", "targets": {t: {"k", "n",
-    "unknown"}}}}, "targets": {t: {"elicited", "p", "low", "high"}}, "elicited"}},
+    "unknown"}}}}, "targets": {t: {"elicited", "at", "p", "low", "high"}}, "elicited"}},
     "least": [sids], "least_level", "emergent": [sids], "unrun": [(sid, level)]}``."""
     chosen = [s.id for s in plan.settings if settings is None or s.id in settings]
     out: dict[str, Any] = {"settings": {}, "unrun": []}
@@ -297,6 +325,8 @@ def response(plan: Plan, labelled: Mapping[str, Mapping[str, Any]],
                 lo, hi = cells[ran[0]]["targets"][target], cells[ran[-1]]["targets"][target]
                 p = fisher(hi["k"], hi["n"], lo["k"], lo["n"])
             per_target[target] = {"elicited": elicited, "p": p,
+                                  "at": (None if elicited is None
+                                         else dict(cells[elicited]["targets"][target])),
                                   "low": ran[0] if ran else None,
                                   "high": ran[-1] if ran else None}
         elicited = [r["elicited"] for r in per_target.values() if r["elicited"] is not None]
@@ -324,33 +354,36 @@ def _level(plan: Plan, n: int | None) -> str:
     return f"{n} ({level.name})" if level else str(n)
 
 
+def _p(p: float) -> str:
+    return "p < 0.01" if p < 0.01 else f"p = {p:.2f}"
+
+
 def render(plan: Plan, found: Mapping[str, Any], measure: str,
-           changes: Callable[[str, str], list[str]] | None = None,
-           alpha: float = 0.05) -> list[str]:
+           changes: Callable[[str, str], list[str]] | None = None) -> list[str]:
     """``response`` as markdown lines, for L2 and for the report. ``changes(a, b)``: the
     settings two variants differ in (``tools._difference``), to show what each step up
-    the ladder changes."""
+    the ladder changes and how the variants pooled in one cell differ."""
     levels = [lv.level for lv in plan.levels]
     lines = [f"Dose-response on {measure}: per setting and target, k of n runs showing the "
-             f"behaviour at each push level (a cell pools every variant run at that level "
+             "behaviour at each push level (a cell pools every variant run at that level "
              "in that setting). A level elicits the behaviour when at least "
              f"{ELICITS} run{'s' if ELICITS > 1 else ''} of one target show"
-             f"{'' if ELICITS > 1 else 's'} it (a claim that it recurs still needs two).", "",
+             f"{'' if ELICITS > 1 else 's'} it; k/n is given beside it, since one run may "
+             "be chance (a claim that it recurs still needs two).", "",
              "Ladder: " + "; ".join(f"{lv.level} = {lv.name} ({lv.push})"
                                     for lv in plan.levels), ""]
     head = ["setting", "target", *[f"L{n}" for n in levels], "elicited at",
-            "lowest vs highest level run (Fisher p)"]
+            "lowest vs highest level run (Fisher, descriptive)"]
     rows = []
     for sid, row in found["settings"].items():
         for target, t in row["targets"].items():
-            p = t["p"]
+            p, at = t["p"], t["at"]
             rows.append([sid, target,
                          *[_rate(row["cells"].get(n, {}).get("targets", {}).get(target))
                            for n in levels],
-                         "-" if t["elicited"] is None else f"L{t['elicited']}",
-                         "-" if p is None else
-                         f"L{t['low']} vs L{t['high']}: p = {p:.2f}"
-                         + (" (told apart)" if p < alpha else "")])
+                         "-" if t["elicited"] is None else
+                         f"L{t['elicited']} ({at['k']}/{at['n']})",
+                         "-" if p is None else f"L{t['low']} vs L{t['high']}: {_p(p)}"])
         if not row["targets"]:
             rows.append([sid, "-", *["-"] * len(levels), "-", "not run yet"])
     lines += [_table(head, rows), ""]
@@ -362,12 +395,18 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
             lines.append(f"- {sid}{tweak}: not run yet")
         elif row["elicited"] is not None:
             name = f"**{sid}**" if sid in found["least"] else sid  # the least push, in bold
-            lines.append(f"- {name}{tweak}: level {_level(plan, row['elicited'])}"
+            by = [f"{t} {r['at']['k']}/{r['at']['n']}" for t, r in row["targets"].items()
+                  if r["elicited"] == row["elicited"]]
+            lines.append(f"- {name}{tweak}: level {_level(plan, row['elicited'])}, "
+                         f"{', '.join(by)} runs"
                          + (": emerges with the least push on the ladder" if row["elicited"]
                             == 0 else ""))
         else:
             ran = sorted(row["cells"])
             lines.append(f"- {sid}{tweak}: not elicited at any level run (L{ran[0]}–L{ran[-1]})")
+    for sid, base in (found.get("unmeasured") or {}).items():
+        lines.append(f"- {sid} [{base}]: not measured by {measure} on {base}: read it with "
+                     "a scorer its scenario has")
     if found["least"]:
         lines.append(f"**Needs the least push: {', '.join(found['least'])}** (level "
                      f"{_level(plan, found['least_level'])})."
@@ -375,8 +414,12 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
                         if found["emergent"] else ""))
     else:
         lines.append("No setting elicits the behaviour at any level run so far.")
+    lines.append("These readings are descriptive: cells may pool variants from different "
+                 "experiments and epochs. A finding that a level, or a setting, changes the "
+                 "behaviour rests on a scores comparison (one change apart, same experiment, "
+                 "equal epochs).")
     if changes is not None:
-        steps = []
+        steps, pooled = [], []
         for sid, row in found["settings"].items():
             ran = sorted(row["cells"])
             for lo, hi in zip(ran, ran[1:], strict=False):
@@ -385,9 +428,18 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
                 steps.append(f"- {sid} L{lo} → L{hi} ({b} → {a}): "
                              + ("; ".join(diff) if diff else
                                 "NO DIFFERENCE in setup: the push does not change here"))
+            for level in ran:
+                first, *others = row["cells"][level]["variants"]
+                for other in others:
+                    diff = changes(other, first)
+                    pooled.append(f"- {sid} L{level}: {other} vs {first}: "
+                                  + ("; ".join(diff) if diff else "same setup"))
         if steps:
             lines += ["", "What each step up the ladder changes (first variant of each cell; "
                       "within a setting it should be the push alone):", *steps]
+        if pooled:
+            lines += ["", "Variants pooled in one cell, and how they differ (each should push "
+                      "as much as the others at its level):", *pooled]
     if found["unrun"]:
         lines += ["", "Planned but not run: " + ", ".join(f"{sid} at L{lv}"
                                                           for sid, lv in found["unrun"])]

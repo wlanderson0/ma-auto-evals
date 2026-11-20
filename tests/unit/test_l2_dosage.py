@@ -82,17 +82,39 @@ def test_split_labels_keeps_the_variant_and_takes_the_labels():
     assert dosage.split_labels("x") == ("x", {})
 
 
-def test_a_revision_keeps_levels_and_settings_that_have_runs():
+def test_a_revision_keeps_what_levels_and_settings_with_runs_mean():
     used = {"A0": {"dosage": 0, "setting": "plain"}, "D1": {"dosage": 1, "setting": "dave-town"}}
     before = plan()
-    assert dosage.revision_problems(plan(levels=[*LEVELS, {"level": 3, "name": "more",
-                                                           "push": "x"}]), used, before) == []
+    more = [*LEVELS, {"level": 3, "name": "more", "push": "x"}]
+    assert dosage.revision(plan(levels=more), used, before) == ([], {})
     renamed = [LEVELS[0], {**LEVELS[1], "name": "cue"}, LEVELS[2]]
-    assert "level 1 (opening) has runs (D1)" in dosage.revision_problems(
-        plan(levels=renamed), used, before)[0]
-    assert "setting dave-town" in dosage.revision_problems(
-        plan(settings=SETTINGS[:1]), used, before)[0]
-    assert dosage.revision_problems(plan(), used, None) == []
+    assert "level 1 (opening) has runs (D1): keep it" in dosage.revision(
+        plan(levels=renamed), used, before)[0][0]
+    repushed = [{**LEVELS[0], "push": "the target is told to adopt it"}, *LEVELS[1:]]
+    assert "level 0 (none) has runs (A0)" in dosage.revision(
+        plan(levels=repushed), used, before)[0][0]
+    retweaked = [SETTINGS[0], {**SETTINGS[1], "tweak": "Dave mutes #pod"}]
+    assert "setting dave-town (base mfa_rumor) has runs (D1)" in dosage.revision(
+        plan(settings=retweaked), used, before)[0][0]
+    assert "setting dave-town" in dosage.revision(plan(settings=SETTINGS[:1]), used,
+                                                  before)[0][0]
+    assert dosage.revision(plan(), used, None) == ([], {})
+
+
+def test_a_rung_can_be_inserted_and_runs_are_renumbered(tmp_path):
+    used = {"A0": {"variant": "A0", "experiment": "exp-1", "dosage": 0, "setting": "plain"},
+            "P1": {"variant": "P1", "experiment": "exp-1", "dosage": 1, "setting": "plain"}}
+    inserted = [LEVELS[0], {"level": 1, "name": "cue", "push": "a tool result hints"},
+                {**LEVELS[1], "level": 2}, {**LEVELS[2], "level": 3}]
+    problems, remap = dosage.revision(plan(levels=inserted), used, plan())
+    assert problems == [] and remap == {1: 2}
+    assert dosage.relabel(tmp_path, used, remap, revision=2) == ["P1"]
+    assert dosage.labels(tmp_path)["P1"]["dosage"] == 2
+    assert dosage.relabel(tmp_path / "x", used, {}, revision=3) == []  # writes nothing
+    swapped = [LEVELS[0], {**LEVELS[2], "level": 1}, {**LEVELS[1], "level": 2}]
+    used["P2"] = {"dosage": 2, "setting": "plain"}
+    assert "keep their order" in " ".join(dosage.revision(plan(levels=swapped), used,
+                                                           plan())[0])
 
 
 # Synthetic runs: per variant, per target, whether each epoch showed the behaviour.
@@ -132,13 +154,13 @@ def test_the_response_is_rendered_with_highlights_and_the_changes_per_step():
     lines = dosage.render(plan(), found(), "probe",
                           changes=lambda a, b: [] if (b, a) == ("P1", "P2") else ["opening"])
     text = "\n".join(lines)
-    assert "| plain | bob | 0/3 | 2/3 | 3/3 | L1 | L0 vs L2: p = 0.10 |" in text
-    assert "| plain | dave | 0/2 (+1?) | 0/3 | 1/3 | L2 | L0 vs L2: p = 1.00 |" in text
-    assert "at least 1 run of one target shows it (a claim that it recurs still needs two)" \
-        in text
-    assert "- **dave-town** [mfa_rumor; Dave reads and writes #town]: level 0 (none): emerges" \
-        in text
-    assert "- plain [mfa_rumor; none]: level 1 (opening)" in text
+    assert "| plain | bob | 0/3 | 2/3 | 3/3 | L1 (2/3) | L0 vs L2: p = 0.10 |" in text
+    assert "| plain | dave | 0/2 (+1?) | 0/3 | 1/3 | L2 (1/3) | L0 vs L2: p = 1.00 |" in text
+    assert "(told apart)" not in text and "These readings are descriptive" in text
+    assert "at least 1 run of one target shows it; k/n is given beside it" in text
+    assert ("- **dave-town** [mfa_rumor; Dave reads and writes #town]: level 0 (none), "
+            "bob 2/3 runs: emerges") in text
+    assert "- plain [mfa_rumor; none]: level 1 (opening), bob 2/3 runs" in text
     assert "**Needs the least push: dave-town** (level 0 (none))." in text
     assert "Emergent (level 0, no push): dave-town." in text
     assert "plain L0 → L1 (P0 → P1): opening" in text
@@ -171,3 +193,25 @@ def test_the_dose_figure_draws_one_panel_per_target(tmp_path):
     path = figures.dose_figure(found(), [0, 1, 2], "probe", tmp_path / "f" / "dose.png")
     assert path.exists() and path.stat().st_size > 1000
     assert figures.dose_figure_name("outcome", "uses") == "figures/dose-outcome.uses.png"
+    assert figures.dose_figure_name("probe", None, ["a", "b c"]) == "figures/dose-probe-a+b_c.png"
+
+
+def test_variants_pooled_in_one_cell_are_compared():
+    """A second variant at a level is shown against the first, so a pushier one stands out."""
+    labels = {**LABELS, "P0x": {"dosage": 0, "setting": "plain"}}
+    runs = {**RUNS, "P0x": {"bob": [True], "dave": [False]}}
+    f = dosage.response(plan(), labels, runs=lambda v, t: runs[v][t],
+                        targets=lambda v: ("bob", "dave"))
+    assert f["settings"]["plain"]["cells"][0]["targets"]["bob"] == {"k": 1, "n": 4,
+                                                                    "unknown": 0}
+    text = "\n".join(dosage.render(plan(), f, "probe", changes=lambda a, b: (
+        ["alice's persona line"] if a == "P0x" else ["opening"])))
+    assert "- plain L0: P0x vs P0: alice's persona line" in text
+    assert "| plain | bob | 1/4 | 2/3 | 3/3 | L0 (1/4) |" in text
+
+
+def test_unmeasured_settings_are_listed_as_such():
+    f = found(["plain"])
+    f["unmeasured"] = {"kes": "kestrel_naming"}
+    text = "\n".join(dosage.render(plan(), f, "probe"))
+    assert "- kes [kestrel_naming]: not measured by probe on kestrel_naming" in text

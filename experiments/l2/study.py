@@ -323,6 +323,8 @@ def figures_json(audit: Path, out: Path,
     calls = figure_calls(audit)
     entries = []
     for sidecar in sorted((audit / FIGURES).glob("*.json")):
+        if sidecar.name.startswith("dose-"):
+            continue  # a dose-response reading, not a comparison (Tools._dose_figure)
         path = sidecar.with_suffix(".png").relative_to(audit).as_posix()
         if not (Path(out) / path).is_file():
             continue  # the image was left out, or never drawn: a JSON of L2's own

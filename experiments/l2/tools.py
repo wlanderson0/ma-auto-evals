@@ -498,17 +498,19 @@ class Tools:
             if len(rows) == len(entries) else {} for i in range(len(entries))])
         if result["status"] != "ran":
             raise Refused(self._launch_text(result))
+        gone = {d.split(":")[0] for d in dropped}
         return self._launch_text(result) + self._dosage_notes(
             result["experiment"], dropped,
-            [names[i] for i in range(len(entries)) if not labels[i]] if plan else [])
+            [names[i] for i in range(len(entries)) if not labels[i] and names[i] not in gone]
+            if plan else [])
 
     def _dosage_notes(self, experiment: str | None, dropped: Sequence[str] = (),
                       unlabelled: Sequence[str] = ()) -> str:
         """Labels dropped, variants run unlabelled under a plan, and steps up the ladder in
         this experiment whose setups do not differ at all."""
-        if self.dosage == "off" or not experiment:
-            return ""
         notes = [f"labels dropped (the variant ran unlabelled) for {d}" for d in dropped]
+        if self.dosage == "off" or not experiment:
+            return ("\n\nDosage notes: " + "; ".join(notes) + ".") if notes else ""
         if unlabelled:
             notes.append(f"unlabelled, so left out of dose_response: {', '.join(unlabelled)}")
         labelled = {vid: row for vid, row in dosage_.labels(self.audit.out).items()
@@ -905,14 +907,20 @@ class Tools:
             raise Refused(f"refused: {error}. Nothing was recorded.") from error
         ran = set(self.results().runs)
         used = {vid: row for vid, row in dosage_.labels(self.audit.out).items() if vid in ran}
-        if problems := dosage_.revision_problems(plan, used, before):
+        problems, remap = dosage_.revision(plan, used, before)
+        if problems:
             raise Refused("refused: " + "; ".join(problems) + ". Nothing was recorded.")
         dosage_.save(self.audit.out, plan, self._seq)
+        moved = dosage_.relabel(self.audit.out, used, remap, plan.revision)
         lines = [f"Recorded dosage plan (version {plan.revision}): {len(plan.levels)} levels, "
                  f"{len(plan.settings)} setting(s).", "", *dosage_.plan_lines(plan), "",
                  "Label every variant with \"dosage\": <level> and \"setting\": <setting id> "
                  "in run_experiment; within a setting, variants at different levels should "
                  "differ in the push alone. dose_response reads the runs along the ladder."]
+        if moved:
+            lines.append("Renumbered (their runs keep their level, now numbered "
+                         + ", ".join(f"{a} → {b}" for a, b in sorted(remap.items()))
+                         + f"): {', '.join(moved)}.")
         if len(plan.settings) < 2:
             lines.append("Note: one setting only. Tweaks to the scenario can change how much "
                          "push the behaviour needs; plan more settings when you can.")
@@ -923,34 +931,23 @@ class Tools:
         found, plan, measure = self.dose_data(scorer, field, settings)
         results = self.results()
         lines = dosage_.render(plan, found, measure, changes=lambda a, b: _difference(
-            results.runs[a]["variant"], results.runs[b]["variant"]), alpha=ALPHA)
-        return "\n".join(lines) + self._dose_figure(found, plan, measure, scorer, field)
+            results.runs[a]["variant"], results.runs[b]["variant"]))
+        return "\n".join(lines) + self._dose_figure(found, plan, measure, scorer, field,
+                                                   settings)
 
     def dose_data(self, scorer: str | None = None, field: str | None = None,
                   settings: Sequence[str] | str | None = None
                   ) -> tuple[dict[str, Any], dosage_.Plan, str]:
-        """``dosage.response`` for the labelled runs, with the plan and the measure read
-        (``scorer`` defaults to the brief's measure)."""
+        """``dosage.response`` for the labelled runs, with the plan and the measure read.
+
+        Each setting is read with the scorer that measures its scenario: ``scorer`` where
+        the scenario has it (probes, a mention pattern, an outcome with ``field``), else
+        the brief's measure for that scenario. A setting whose scenario the scorer does not
+        measure is listed as not measured, never as "not elicited"."""
         plan = dosage_.current(self.audit.out)
         if plan is None:
             raise Refused("no dosage plan: plan_dosage records one")
-        results = self.results()
-        labelled = {vid: row for vid, row in dosage_.labels(self.audit.out).items()
-                    if vid in results.runs and results.of(vid)}
-        if not labelled:
-            raise Refused("no variant labelled with a dosage and setting has runs yet")
-        chosen = None if settings is None else _ids(settings)
-        if chosen is not None and (unknown := [s for s in chosen if plan.setting(s) is None]):
-            raise Refused(f"settings {unknown} are not in the plan "
-                          f"({', '.join(s.id for s in plan.settings)})")
-        if chosen is not None:
-            labelled = {v: r for v, r in labelled.items() if r["setting"] in chosen}
-            if not labelled:
-                raise Refused(f"no labelled run in settings {chosen} yet")
-        ids = sorted(labelled)
-        if scorer is None:
-            scorer = self.measure_scorer(ids)
-        if scorer not in ("probe", "counts", "outcome"):
+        if scorer is not None and scorer not in ("probe", "counts", "outcome"):
             raise Refused(f"dose_response reads 'probe', 'counts' or 'outcome' (with field), "
                           f"not {scorer!r}")
         if scorer == "outcome" and field is None:
@@ -958,21 +955,71 @@ class Tools:
                           "behaviour when > 0 or true")
         if field is not None and scorer != "outcome":
             raise Refused("field applies only to scorer outcome")
-        self._measured(results, ids, scorer)
-        if field is not None:
-            self._field(results, ids, field)
+        if scorer is None and self.audit.brief.measure is None:
+            raise Refused("the brief fixes no measure: name a scorer (probe, counts, or "
+                          "outcome with field)")
+        results = self.results()
+        labelled = {vid: row for vid, row in dosage_.labels(self.audit.out).items()
+                    if vid in results.runs and results.of(vid)}
+        if not labelled:
+            raise Refused("no variant labelled with a dosage and setting has runs yet")
+        chosen = [s.id for s in plan.settings] if settings is None else _ids(settings)
+        if unknown := [s for s in chosen if plan.setting(s) is None]:
+            raise Refused(f"settings {unknown} are not in the plan "
+                          f"({', '.join(s.id for s in plan.settings)})")
+        reads = {}  # base -> the scorer that measures it here (None: not measured)
+        for base in {plan.setting(sid).base for sid in chosen}:
+            vids = [v for v, r in labelled.items() if results.base(v) == base]
+            reads[base] = (self._reads(results, base, vids, scorer, field) if scorer
+                           else MEASURE_SCORER.get(base))
+        unmeasured = {sid: plan.setting(sid).base for sid in chosen
+                      if reads[plan.setting(sid).base] is None}
+        measured = [sid for sid in chosen if sid not in unmeasured]
+        labelled = {v: r for v, r in labelled.items() if r["setting"] in measured}
+        used = sorted({reads[plan.setting(sid).base] for sid in measured})
+        name = (scorer + (f".{field}" if field else "")) if scorer else (
+            used[0] if len(used) == 1 else "the brief's measure (" + "; ".join(
+                f"{reads[b]} on {b}" for b in sorted(reads) if reads[b]) + ")")
+        if not labelled:
+            raise Refused(f"no labelled run in {'these settings' if settings else 'any setting'} "
+                          f"is measured by {name}"
+                          + (f" (not measured on: {', '.join(sorted(set(unmeasured.values())))})"
+                             if unmeasured else ""))
         found = dosage_.response(
             plan, labelled,
-            runs=lambda vid, target: [results.adopted(s, target, scorer, field=field)
-                                      for s in results.of(vid)],
-            targets=results.targets, settings=chosen, fisher=fisher_p)
-        return found, plan, scorer + (f".{field}" if field else "")
+            runs=lambda vid, target: [
+                results.adopted(s, target, reads[results.base(vid)], field=field)
+                for s in results.of(vid)],
+            targets=results.targets, settings=measured, fisher=fisher_p)
+        found["unmeasured"] = unmeasured
+        return found, plan, name
+
+    def _reads(self, results: Results, base: str, vids: Sequence[str], scorer: str,
+               field: str | None) -> str | None:
+        """``scorer`` if it measures ``base`` (with ``field``, for outcome), else ``None``."""
+        scenario = results.scenario(base)
+        if scorer == "probe":
+            return scorer if scenario.probes else None
+        if scorer == "counts":
+            return scorer if scenario.mention is not None else None
+        if scenario.outcome is None:
+            return None
+        if vids:  # the field must be one of the outcome's fields in its runs
+            try:
+                self._field(results, vids, field)
+            except Refused:
+                return None
+        return scorer
 
     def _dose_figure(self, found: dict[str, Any], plan: dosage_.Plan, measure: str,
-                     scorer: str | None, field: str | None) -> str:
+                     scorer: str | None, field: str | None,
+                     settings: Sequence[str] | str | None = None) -> str:
         if self._caller == "reviewer":
             return ""
-        name = figures.dose_figure_name(measure.split(".")[0], field)
+        read = scorer or (measure if " " not in measure else "measure")  # e.g. probe
+        # one file per reading: the settings asked for (none: every setting) name it
+        name = figures.dose_figure_name(read, field, None if settings is None
+                                        else sorted(_ids(settings)))
         try:
             path = figures.dose_figure(found, [lv.level for lv in plan.levels], measure,
                                        self.audit.out / name)
@@ -1418,13 +1465,16 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                           settings: list[str] | None = None) -> str:
             """Read the runs along the dosage ladder: per setting and target, k of n runs
             showing the behaviour at each push level, the lowest level that elicits it
-            (in at least two runs of one target), which settings need the least push, a
-            test of lowest vs highest level run, and what each step up the ladder changes
-            in the setup.
+            (at least one run of one target; its k/n is shown), which settings need the
+            least push, a descriptive test of lowest vs highest level run, what each step
+            up the ladder changes in the setup, and how variants pooled at one level
+            differ. Each setting is read with a scorer its scenario has; settings it does
+            not measure are listed as such.
 
             Args:
-                scorer: Leave out to read the brief's measure, if the brief fixes one.
-                    Otherwise probe, counts, or outcome (with field).
+                scorer: Leave out to read the brief's measure, if the brief fixes one (each
+                    scenario's own scorer for it). Otherwise probe, counts, or outcome
+                    (with field).
                 field: With outcome: the outcome's value that counts as the behaviour
                     when > 0 or true.
                 settings: Only these settings of the plan (default: all).
@@ -1666,7 +1716,8 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                               writeup=writeup, response=response)
         return execute
 
-    dosing = tools.dosage != "off"
+    dosing = tools.dosage != "off" and tools.audit is not None \
+        and tools.audit.analysis is None
     if by == "reviewer":
         return [list_runs(), scores(), *([dose_response()] if dosing else []), transcript(),
                 find()]

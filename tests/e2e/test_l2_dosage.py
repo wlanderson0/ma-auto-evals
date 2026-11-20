@@ -250,7 +250,7 @@ def test_an_optional_dosage_never_rejects_for_labels(tmp_path, offline_module):
     assert ok and text.startswith("Ran exp-1."), text
     assert "labels dropped (the variant ran unlabelled) for P0: dosage 7 is not a level" \
         in text
-    assert "unlabelled, so left out of dose_response: P2, P0" in text
+    assert "unlabelled, so left out of dose_response: P2." in text  # P0 is under dropped
     assert set(dosage_labels(tools)) == {"P1"}
     report = render(tools)
     assert "Variants run without dosage labels (not in the tables above): P0, P2." in report
@@ -304,3 +304,89 @@ def test_the_cli_leaves_dosage_optional_unless_the_brief_says(tmp_path, monkeypa
         main(["--brief", str(brief(tmp_path, 1.0, "\ndosage: required")), "--out",
               str(tmp_path / "strict"), "--mock", "--fake"])
     assert seen[-1] == "required"
+
+
+# ------------------------------------------------------- after the adversarial review
+KES = {"id": "kes", "base": "kestrel_naming", "tweak": "the naming scenario"}
+K0 = {"id": "K0", "base": "kestrel_naming", "inner": {"condition": "baseline"},
+      "rationale": "no push, naming", "dosage": 0, "setting": "kes"}
+
+
+@pytest.fixture(scope="module")
+def two_scenarios(tmp_path_factory, offline_module):
+    """A plan over mfa_rumor (probe) and kestrel_naming (counts), with runs of both."""
+    tmp = tmp_path_factory.mktemp("two")
+    path = brief(tmp, 1.0)
+    path.write_text(path.read_text().replace("base_scenarios: [mfa_rumor]",
+                                             "base_scenarios: [mfa_rumor, kestrel_naming]"))
+    audit = Audit.create(path, tmp / "audit", mock=True, launch=InProcess())
+    tools = Tools(audit)
+    ok, text = tools.call("plan_dosage", levels=LEVELS, settings=[*SETTINGS, KES],
+                          rationale="two scenarios")
+    assert ok, text
+    ok, text = tools.call("run_experiment", variants=json.dumps([P0, P2, K0]), epochs=1,
+                          rationale="both scenarios")
+    assert ok, text
+    return tools
+
+
+def test_each_setting_is_read_with_its_own_scenario_s_measure(two_scenarios):
+    tools = two_scenarios
+    ok, text = tools.call("dose_response")
+    assert ok, text
+    assert text.startswith("Dose-response on the brief's measure (counts on kestrel_naming; "
+                           "probe on mfa_rumor)")
+    assert "| plain | bob |" in text and "| kes | " in text
+
+
+def test_a_scorer_a_scenario_lacks_marks_its_settings_not_measured(two_scenarios):
+    tools = two_scenarios
+    ok, text = tools.call("dose_response", scorer="probe")
+    assert ok, text
+    assert "- kes [kestrel_naming]: not measured by probe on kestrel_naming" in text
+    assert "| kes |" not in text and "kes at L" not in text
+    ok, text = tools.call("dose_response", scorer="probe", settings=["kes"])
+    assert not ok and "is measured by probe (not measured on: kestrel_naming)" in text
+
+
+def test_readings_of_different_settings_keep_their_own_figures(two_scenarios):
+    tools = two_scenarios
+    _, everything = tools.call("dose_response", scorer="probe")
+    _, one = tools.call("dose_response", scorer="probe", settings=["plain"])
+    assert "Figure: figures/dose-probe.png" in everything
+    assert "Figure: figures/dose-probe-plain.png" in one
+    tools.numbered_call("scores", by="reviewer", variant_ids=["P0"], scorer="probe")
+    report = render(tools)  # the reviewer called last: the figures are still drawn
+    assert "](figures/dose-probe.png)" in report and "](figures/dose-probe-plain.png)" in report
+    assert "- Dose-response readings: " in report
+    # run statistics read each scenario with a scorer it has
+    assert "| kestrel_naming | 1 | 1 | " in report and "| probe | 0/0" not in report
+
+
+def test_cosmos_figures_leave_out_dose_readings(two_scenarios, tmp_path):
+    from experiments.l2.study import figures_json
+
+    tools = two_scenarios
+    tools.call("dose_response", scorer="probe")
+    said = []
+    entries = figures_json(tools.audit.out, tools.audit.out, say=said.append)
+    assert said == [] and not [e for e in entries if "dose-" in e["path"]]
+
+
+def test_dosage_off_drops_labels_with_a_note_and_says_nothing_else(tmp_path, offline_module):
+    tools = new(tmp_path, extra="\ndosage: off")
+    ok, text = tools.call("run_experiment", variants=json.dumps([P2]), epochs=1,
+                          rationale="labels in an off audit")
+    assert ok, text
+    assert "labels dropped (the variant ran unlabelled) for P2: this audit plans no dosage" \
+        in text
+    from experiments.l2 import dosage
+
+    dosage.save(tools.audit.out, dosage.parse_plan(LEVELS, SETTINGS, "r", lambda b: True), 1)
+    assert "## Dosage" not in render(tools)  # even with a plan left from earlier
+    tools.writeup = "a write-up"
+    try:
+        facts, _, _ = writeup_parts(tools)
+    finally:
+        tools.writeup = None
+    assert "Dosage" not in dict(facts)
