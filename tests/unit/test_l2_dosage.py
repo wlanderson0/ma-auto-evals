@@ -215,3 +215,38 @@ def test_unmeasured_settings_are_listed_as_such():
     f["unmeasured"] = {"kes": "kestrel_naming"}
     text = "\n".join(dosage.render(plan(), f, "probe"))
     assert "- kes [kestrel_naming]: not measured by probe on kestrel_naming" in text
+
+
+def test_only_approved_or_unasked_plans_hold(tmp_path):
+    import dataclasses
+
+    first = dataclasses.replace(plan(), approval={"approved": True, "comment": ""})
+    second = dataclasses.replace(plan(revision=2), approval={"approved": False, "comment": "x"})
+    dosage.save(tmp_path, first, seq=1)
+    dosage.save(tmp_path, second, seq=2)
+    assert [p.holds for p in dosage.plans(tmp_path)] == [True, False]
+    assert dosage.current(tmp_path).revision == 1
+    assert plan().holds  # never sent
+    text = dosage.plan_text(plan())
+    assert text.startswith("Dosage plan, version 1") and "  plain (on mfa_rumor): none" in text
+
+
+def test_the_progress_panel_pauses_and_resumes():
+    from experiments.l2.progress import Status
+
+    calls = []
+
+    class Live:
+        def stop(self):
+            calls.append("stop")
+
+        def start(self):
+            calls.append("start")
+
+    status = Status("m")
+    with status.paused():  # nothing shown: nothing to pause
+        pass
+    status.live = Live()
+    with status.paused():
+        calls.append("asked")
+    assert calls == ["stop", "asked", "start"]

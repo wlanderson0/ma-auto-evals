@@ -74,6 +74,14 @@ class Plan:
     settings: tuple[Setting, ...]
     rationale: str
     revision: int = 1
+    approval: dict[str, Any] | None = None
+    """The user's answer when the plan was sent for approval (``{"approved", "comment",
+    "by", "time"}``); ``None``: not sent (approval off)."""
+
+    @property
+    def holds(self) -> bool:
+        """Whether this version can be the plan in force: approved, or never sent."""
+        return self.approval is None or bool(self.approval.get("approved"))
 
     def level(self, n: int) -> Level | None:
         return next((lv for lv in self.levels if lv.level == n), None)
@@ -88,7 +96,8 @@ class Plan:
     def as_record(self) -> dict[str, Any]:
         return {"levels": [asdict(lv) for lv in self.levels],
                 "settings": [asdict(s) for s in self.settings],
-                "rationale": self.rationale, "revision": self.revision}
+                "rationale": self.rationale, "revision": self.revision,
+                "approval": self.approval}
 
 
 # ------------------------------------------------------------------ the plan
@@ -158,12 +167,14 @@ def plans(out: Path) -> list[Plan]:
     """Every version of the plan, in order."""
     return [Plan(tuple(Level(**lv) for lv in row["levels"]),
                  tuple(Setting(**s) for s in row["settings"]), row["rationale"],
-                 row.get("revision", i + 1))
+                 row.get("revision", i + 1), row.get("approval"))
             for i, row in enumerate(_jsonl(out / PLAN_FILE))]
 
 
 def current(out: Path) -> Plan | None:
-    found = plans(out)
+    """The plan in force: the last version approved by the user, or never sent for
+    approval. A version the user did not approve is kept in the record but never holds."""
+    found = [p for p in plans(out) if p.holds]
     return found[-1] if found else None
 
 
@@ -483,3 +494,12 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
             except json.JSONDecodeError:  # a line cut by a crash: skipped
                 continue
     return rows
+
+
+def plan_text(plan: Plan) -> str:
+    """The plan as the user is asked to approve it."""
+    return "\n".join([f"Dosage plan, version {plan.revision}", "", "Ladder (0 = least push):",
+                      *[f"  L{lv.level} {lv.name}: {lv.push}" for lv in plan.levels], "",
+                      "Settings:",
+                      *[f"  {s.id} (on {s.base}): {s.tweak}" for s in plan.settings], "",
+                      f"L2's rationale: {plan.rationale}"])

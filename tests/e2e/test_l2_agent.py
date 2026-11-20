@@ -133,7 +133,7 @@ def test_the_cli_runs_the_llm_agent_with_the_prompt(tmp_path, monkeypatch, capsy
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
-              "--live", "--time-limit", "150"])
+              "--live", "--time-limit", "150", "--no-plan-approval"])
     assert stop.value.code == 2
     assert calls == [(MODEL, SYSTEM_PROMPT, 150)]
     assert f"L2 is {MODEL}" in capsys.readouterr().out

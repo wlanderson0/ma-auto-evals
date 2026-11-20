@@ -80,6 +80,12 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
+- L2's dosage plan (below) comes to you for approval first: the panel pauses, the plan
+  is shown, and you answer yes or no, with an optional note that L2 reads. No experiment
+  runs until you approve a plan; every revision comes back to you too. Stay at the
+  terminal until L2 has planned (the time limit keeps running while it waits). To skip
+  this, add `--no-plan-approval`; without a terminal (output to a pipe, a scheduled
+  run) the audit refuses to start unless you do. The fake L2 is never asked.
 - Each of L2's calls costs more as its conversation grows, so the reserve held back for
   its review and report grows with it: 10% of the budget, or four of its calls at its
   latest price plus the reviewer's share, if that is more. To leave L2 room to think,

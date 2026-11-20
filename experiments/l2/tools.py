@@ -55,6 +55,7 @@ from inspect_ai.log import transcript as inspect_transcript
 from inspect_ai.tool import Tool, ToolError, tool
 from markdown_it import MarkdownIt
 
+from experiments.l2 import approval as approval_
 from experiments.l2 import claims as claims_
 from experiments.l2 import dosage as dosage_
 from experiments.l2 import figures, workspace
@@ -164,8 +165,12 @@ class Tools:
 
     def __init__(self, audit: Audit,
                  on_end: Callable[[Tools], None] | None = None,
-                 dosage: str = "optional") -> None:
+                 dosage: str = "optional",
+                 approve: approval_.Approver | None = None) -> None:
         self.audit = audit
+        self.approve = approve if audit.analysis is None else None
+        """Asks the user to approve each version of the dosage plan (``approval``); with
+        one, no experiment runs before a plan is approved. ``None``: no approval asked."""
         if dosage not in dosage_.MODES:
             raise ValueError(f"dosage must be one of {dosage_.MODES}, not {dosage!r}")
         self.dosage = audit.brief.dosage or dosage
@@ -440,6 +445,13 @@ class Tools:
         entries = [{**e, "id": e["id"].strip()} if isinstance(e, Mapping)
                    and isinstance(e.get("id"), str) else e for e in variants]
         plan = dosage_.current(self.audit.out)
+        if (self.approve is not None and self.dosage != "off" and plan is None
+                and self.audit.analysis is None):
+            self._propose(entries, "refused", None,
+                          [{"problems": ["no approved dosage plan"]}] * len(entries))
+            raise Refused("refused: no approved dosage plan yet. Call plan_dosage first: the "
+                          "plan goes to the user, and no experiment runs until they approve "
+                          "it. Nothing ran.")
         if self.dosage == "required" and plan is None and self.audit.analysis is None:
             self._propose(entries, "refused", None,
                           [{"problems": ["no dosage plan"]}] * len(entries))
@@ -912,9 +924,25 @@ class Tools:
         problems, remap = dosage_.revision(plan, used, before)
         if problems:
             raise Refused("refused: " + "; ".join(problems) + ". Nothing was recorded.")
+        head = []
+        if self.approve is not None:  # the user decides before the plan holds
+            self.audit.say("tool", name="plan_dosage (waiting for the user's approval)",
+                           done=False)
+            answer = approval_.decide(self.approve, plan, dosage_.plan_text(plan))
+            plan = dataclasses.replace(plan, approval=answer)
+            note = f" Their note: {answer['comment']}" if answer["comment"] else ""
+            if not answer["approved"]:
+                dosage_.save(self.audit.out, plan, self._seq)  # kept, but never holds
+                raise Refused(f"The user did not approve version {plan.revision} of the "
+                              f"dosage plan.{note} Revise it and call plan_dosage again; no "
+                              "experiment runs until a plan is approved"
+                              + (" (version " f"{before.revision}, approved earlier, still "
+                                 "holds meanwhile)." if before is not None else "."))
+            head = [f"The user approved version {plan.revision} of the dosage plan.{note}", ""]
         dosage_.save(self.audit.out, plan, self._seq)
         moved = dosage_.relabel(self.audit.out, used, remap, plan.revision)
-        lines = [f"Recorded dosage plan (version {plan.revision}): {len(plan.levels)} levels, "
+        lines = [*head,
+                 f"Recorded dosage plan (version {plan.revision}): {len(plan.levels)} levels, "
                  f"{len(plan.settings)} setting(s).", "", *dosage_.plan_lines(plan), "",
                  "Label every variant with \"dosage\": <level> and \"setting\": <setting id> "
                  "in run_experiment; within a setting, variants at different levels should "
@@ -1507,7 +1535,9 @@ def inspect_tools(tools: Tools, spend: Callable[[], dict[str, Any]] | None = Non
                     that scenario ("none" for the scenario as it is)}: different
                     scenarios, and small tweaks to a scenario (who reads which channel,
                     models, roles, wording) that could change how much push is needed.
-                rationale: Why this ladder and these settings.
+                rationale: Why this ladder and these settings. If the audit asks for
+                    approval (the first message says), the user sees the plan and the
+                    rationale, and their answer and note come back as the result.
             """
             return await call("plan_dosage", levels=levels, settings=settings,
                               rationale=rationale)

@@ -406,6 +406,16 @@ def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
             + (f", revised {plan.revision - 1} time(s); every version is in "
                "dosage-plan.jsonl" if plan.revision > 1 else "") + "). L2's rationale: "
             + _inline(plan.rationale), "", *dosage_.plan_lines(plan), ""]
+    asked = [p for p in versions if p.approval is not None]
+    if asked:
+        out += ["Approval by the user (each version was sent before it could hold):", ""]
+        out += [f"- Version {p.revision}: "
+                + ("approved" if p.approval.get("approved") else "**not approved**")
+                + (f"; their note: {_inline(p.approval['comment'])}"
+                   if p.approval.get("comment") else "") for p in asked]
+        out.append("")
+    elif tools.approve is None:
+        out += ["The plan was not sent to the user for approval.", ""]
     for args in calls:
         label = (args["scorer"] or "the brief's measure") + (
             f".{args['field']}" if args["field"] else "") + (

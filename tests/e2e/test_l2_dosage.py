@@ -324,6 +324,7 @@ def test_the_cli_leaves_dosage_optional_unless_the_brief_says(tmp_path, monkeypa
 
     seen = []
     monkeypatch.setattr(agent, "run_l2", lambda tools, *a, **k: seen.append(tools.dosage))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)  # plan approval asks there
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     for out, extra in (("llm", ["--live"]), ("fake", ["--fake"])):
@@ -432,3 +433,131 @@ def test_label_variants_needs_a_plan_and_dosage_on(tmp_path):
     ok, text = off.call("label_variants", labels="[]", rationale="r")
     assert not ok and "plans no dosage" in text
     assert "label_variants" not in {ToolDef(t).name for t in inspect_tools(off)}
+
+
+# ----------------------------------------------------------------- plan approval
+class Answers:
+    """A stand-in for the user: answers in order, recording each plan it was shown."""
+
+    def __init__(self, *answers):
+        self.answers, self.shown = list(answers), []
+
+    def __call__(self, plan, text):
+        self.shown.append(text)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def approving(tmp_path, *answers):
+    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
+                         launch=InProcess())
+    user = Answers(*answers)
+    return Tools(audit, approve=user), user
+
+
+def test_no_experiment_runs_before_the_user_approves_a_plan(tmp_path, offline_module):
+    tools, user = approving(tmp_path, {"approved": False, "comment": "add a cue level"},
+                            {"approved": True, "comment": "fine, go"})
+    ok, text = tools.call("run_experiment", variants=json.dumps([P2]), epochs=1,
+                          rationale="before any plan")
+    assert not ok and "no approved dosage plan yet" in text
+    ok, text = tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS, rationale="first")
+    assert not ok and text.startswith("The user did not approve version 1 of the dosage "
+                                      "plan. Their note: add a cue level")
+    assert "Dosage plan, version 1" in user.shown[0] and "L1 belief:" in user.shown[0]
+    ok, text = tools.call("run_experiment", variants=json.dumps([P2]), epochs=1,
+                          rationale="after a refused plan")
+    assert not ok and "no approved dosage plan yet" in text
+    ok, text = tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS, rationale="second")
+    assert ok and text.startswith("The user approved version 2 of the dosage plan. Their "
+                                  "note: fine, go")
+    from experiments.l2 import dosage
+
+    versions = dosage.plans(tools.audit.out)
+    assert [(p.revision, p.approval["approved"]) for p in versions] == [(1, False), (2, True)]
+    assert dosage.current(tools.audit.out).revision == 2
+    ok, text = tools.call("run_experiment", variants=json.dumps([P2]), epochs=1,
+                          rationale="approved")
+    assert ok, text
+    report = render(tools)
+    assert "- Version 1: **not approved**; their note: add a cue level" in report
+    assert "- Version 2: approved; their note: fine, go" in report
+    assert "- plan approval: each version of your dosage plan goes to the user" in \
+        agent.brief_message(tools)
+
+
+def test_a_refused_revision_leaves_the_approved_plan_in_force(tmp_path):
+    tools, _ = approving(tmp_path, {"approved": True, "comment": ""},
+                         {"approved": False, "comment": "no"}, RuntimeError("closed"))
+    assert tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS, rationale="r")[0]
+    ok, text = tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS[:1],
+                          rationale="drop a setting")
+    assert not ok and "(version 1, approved earlier, still holds meanwhile)" in text
+    ok, text = tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS[:1], rationale="again")
+    assert not ok and "the approval failed: RuntimeError: closed" in text  # never approves
+    from experiments.l2 import dosage
+
+    assert dosage.current(tools.audit.out).revision == 1
+
+
+def test_without_an_approver_nothing_is_asked(tmp_path):
+    tools = new(tmp_path, dosage="optional")
+    assert planned(tools).startswith("Recorded dosage plan (version 1)")
+    assert "plan approval" not in agent.brief_message(tools)
+    assert "The plan was not sent to the user for approval." in render(tools)
+
+
+def test_the_terminal_asks_until_it_gets_yes_or_no_and_pauses_the_panel(monkeypatch):
+    from contextlib import contextmanager
+    from io import StringIO
+
+    from rich.console import Console
+
+    from experiments.l2.approval import terminal_approver
+
+    events = []
+
+    class Panel:
+        @contextmanager
+        def paused(self):
+            events.append("paused")
+            yield
+            events.append("resumed")
+
+    replies = iter(["maybe", "Y", "start low", "n", ""])
+    monkeypatch.setattr("builtins.input", lambda *a: next(replies))
+    out = StringIO()
+    approve = terminal_approver(lambda: Panel(), Console(file=out, width=100))
+    assert approve(None, "Dosage plan, version 1") == {"approved": True,
+                                                        "comment": "start low"}
+    assert events == ["paused", "resumed"] and "Dosage plan, version 1" in out.getvalue()
+    assert "Approve this plan? [y]es / [n]o: " in out.getvalue()  # not read as markup
+    assert approve(None, "L0 [no hints]") is not None
+
+    def closed(*a):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", closed)
+    assert approve(None, "x")["approved"] is False
+
+
+def test_the_cli_asks_for_approval_only_of_an_llm_l2_in_a_terminal(tmp_path, monkeypatch):
+    from experiments.l2.audit import main
+
+    seen = []
+    monkeypatch.setattr(agent, "run_l2", lambda tools, *a, **k: seen.append(tools.approve))
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    with pytest.raises(SystemExit, match="add --no-plan-approval"):
+        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
+              "--live"])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    for out, extra in (("b", ["--live"]), ("c", ["--live", "--no-plan-approval"]),
+                       ("d", ["--fake"])):
+        with pytest.raises(SystemExit):  # the stand-in never ends the audit
+            main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / out),
+                  "--mock", *extra])
+    assert [a is not None for a in seen] == [True, False, False]

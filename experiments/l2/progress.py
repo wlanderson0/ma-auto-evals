@@ -54,6 +54,22 @@ class Status:
         self.budget: dict[str, Any] | None = None
         self.tool_calls = self.experiments = self.epochs = 0
         self.recent: deque[str] = deque(maxlen=RECENT)
+        self.live: Any = None
+        """The live panel while it is shown (``reporter``), so it can pause."""
+
+    @contextmanager
+    def paused(self) -> Iterator[None]:
+        """Stop redrawing the live panel while the block runs (e.g. while the user
+        answers a question in the terminal), then show it again."""
+        live = self.live
+        if live is None:
+            yield
+            return
+        live.stop()
+        try:
+            yield
+        finally:
+            live.start()
 
     def _doing(self, now: str) -> None:
         self.now, self.since = now, self.clock()
@@ -148,7 +164,10 @@ def reporter(audit: Any, *, quiet: bool = False, model: str = "L2",
 
     audit.progress = status.update
     try:
-        with Live(get_renderable=status.render, console=console, refresh_per_second=2):
+        with Live(get_renderable=status.render, console=console,
+                  refresh_per_second=2) as live:
+            status.live = live
             yield status
     finally:
+        status.live = None
         audit.progress = None

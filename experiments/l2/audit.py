@@ -53,6 +53,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -613,6 +614,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     import argparse
 
     from experiments.l2 import agent
+    from experiments.l2.approval import terminal_approver
     from experiments.l2.audit_report import write_report
     from experiments.l2.fake import ANALYSIS, FULL, PROMPT, fake_model
     from experiments.l2.progress import reporter
@@ -651,6 +653,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                              "the report to them (experiments.l2.share)")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
+    parser.add_argument("--no-plan-approval", action="store_true",
+                        help="do not ask you to approve L2's dosage plan before its first "
+                             "experiment (by default an LLM L2's plan, and every revision "
+                             "of it, waits for your yes or no in this terminal)")
     parser.add_argument("--quiet", action="store_true",
                         help="show no progress (the live status panel, or lines when the "
                              "output is not a terminal) while the audit runs")
@@ -711,13 +717,24 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise SystemExit(str(error)) from error
     model = None if args.fake else args.model or agent.MODEL
     # Dosage is optional unless the brief says otherwise: L2 is asked to plan, not forced.
-    tools = Tools(audit, on_end=write_report)
+    # An LLM L2's plan goes to the user for approval first, unless turned off.
+    approval = (model is not None and not args.no_plan_approval
+                and audit.analysis is None and audit.brief.dosage != "off")
+    if approval and not sys.stdin.isatty():
+        raise SystemExit("L2's dosage plan is sent to you for approval in this terminal, but "
+                         "there is no terminal to answer in: run it in one, or add "
+                         "--no-plan-approval")
+    shown: dict[str, Any] = {}
+    tools = Tools(audit, on_end=write_report,
+                  approve=terminal_approver(lambda: shown.get("status")) if approval
+                  else None)
     if model is not None:
         print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
               f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "
               "then L2 concludes; twice: stop at once.", flush=True)
     try:
-        with reporter(audit, quiet=args.quiet, model=model or "the fake L2"):
+        with reporter(audit, quiet=args.quiet, model=model or "the fake L2") as status:
+            shown["status"] = status
             if model is None:
                 script = ANALYSIS if args.analysis_only else FULL
                 agent.run_l2(tools, fake_model(script), PROMPT, time_limit=args.time_limit)
