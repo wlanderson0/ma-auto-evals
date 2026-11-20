@@ -128,7 +128,7 @@ def test_the_cli_continues_with_the_earlier_brief(tmp_path, earlier, monkeypatch
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
         main(["--continue", str(earlier.out), "--out", str(tmp_path / "a"), "--mock",
-              "--live", "--no-plan-approval"])
+              "--live"])
     assert stop.value.code == 2
     [audit] = seen
     assert audit.carried["experiments"] == ["exp-1"]

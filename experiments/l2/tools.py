@@ -166,11 +166,15 @@ class Tools:
     def __init__(self, audit: Audit,
                  on_end: Callable[[Tools], None] | None = None,
                  dosage: str = "optional",
-                 approve: approval_.Approver | None = None) -> None:
+                 approve: approval_.Approver | None = None,
+                 approve_revisions: bool = False) -> None:
         self.audit = audit
         self.approve = approve if audit.analysis is None else None
-        """Asks the user to approve each version of the dosage plan (``approval``); with
-        one, no experiment runs before a plan is approved. ``None``: no approval asked."""
+        """Asks the user to approve the dosage plan (``approval``); with one, no experiment
+        runs before a plan is approved. ``None``: no approval asked."""
+        self.approve_revisions = approve_revisions
+        """With ``approve``: also ask for each revision once a plan holds (otherwise a
+        revision holds at once, recorded as not sent)."""
         if dosage not in dosage_.MODES:
             raise ValueError(f"dosage must be one of {dosage_.MODES}, not {dosage!r}")
         self.dosage = audit.brief.dosage or dosage
@@ -925,7 +929,8 @@ class Tools:
         if problems:
             raise Refused("refused: " + "; ".join(problems) + ". Nothing was recorded.")
         head = []
-        if self.approve is not None:  # the user decides before the plan holds
+        if self.approve is not None and (before is None or self.approve_revisions):
+            # the user decides before the plan holds: the first plan, and revisions if asked
             self.audit.say("tool", name="plan_dosage (waiting for the user's approval)",
                            done=False)
             answer = approval_.decide(self.approve, plan, dosage_.plan_text(plan))

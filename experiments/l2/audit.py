@@ -653,14 +653,22 @@ def main(argv: Sequence[str] | None = None) -> None:
                              "the report to them (experiments.l2.share)")
     parser.add_argument("--history", type=Path, nargs="*", default=(),
                         help="earlier milestone 1 audits to estimate costs from")
+    parser.add_argument("--plan-approval", action="store_true",
+                        help="ask you, in this terminal, to approve L2's first dosage plan "
+                             "before any experiment runs (off by default: the plan holds as "
+                             "soon as L2 makes it)")
+    parser.add_argument("--approve-revisions", action="store_true",
+                        help="with --plan-approval (which it turns on), also ask you to "
+                             "approve each later revision of the plan; the run waits for "
+                             "your answer each time, so stay at the terminal")
     parser.add_argument("--no-plan-approval", action="store_true",
-                        help="do not ask you to approve L2's dosage plan before its first "
-                             "experiment (by default an LLM L2's plan, and every revision "
-                             "of it, waits for your yes or no in this terminal)")
+                        help=argparse.SUPPRESS)  # the default now; kept so old commands run
     parser.add_argument("--quiet", action="store_true",
                         help="show no progress (the live status panel, or lines when the "
                              "output is not a terminal) while the audit runs")
     args = parser.parse_args(argv)
+    if args.no_plan_approval and (args.plan_approval or args.approve_revisions):
+        parser.error("--no-plan-approval contradicts --plan-approval / --approve-revisions")
     if (args.question is None) != (args.budget is None):
         parser.error("--question and --budget go together (a --brief sets its own budget)")
     if args.carry is not None:
@@ -717,17 +725,20 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise SystemExit(str(error)) from error
     model = None if args.fake else args.model or agent.MODEL
     # Dosage is optional unless the brief says otherwise: L2 is asked to plan, not forced.
-    # An LLM L2's plan goes to the user for approval first, unless turned off.
-    approval = (model is not None and not args.no_plan_approval
-                and audit.analysis is None and audit.brief.dosage != "off")
+    # Its plan waits for the user's approval only when asked for (--plan-approval), and
+    # its revisions only with --approve-revisions, so an unattended run never stalls.
+    asked = args.plan_approval or args.approve_revisions
+    approval = (asked and model is not None and audit.analysis is None
+                and audit.brief.dosage != "off")
+    if asked and model is None:
+        print("note: the fake L2 makes no dosage plan, so nothing is sent for approval")
     if approval and not sys.stdin.isatty():
-        raise SystemExit("L2's dosage plan is sent to you for approval in this terminal, but "
-                         "there is no terminal to answer in: run it in one, or add "
-                         "--no-plan-approval")
+        raise SystemExit("--plan-approval asks you in this terminal, but there is no terminal "
+                         "to answer in: run it in one, or leave the flag out")
     shown: dict[str, Any] = {}
     tools = Tools(audit, on_end=write_report,
                   approve=terminal_approver(lambda: shown.get("status")) if approval
-                  else None)
+                  else None, approve_revisions=args.approve_revisions)
     if model is not None:
         print(f"L2 is {model}; budget ${audit.brief.budget_usd:.2f} (L2's calls "
               f"included); audit: {out}. Ctrl-C once: the running experiment finishes, "

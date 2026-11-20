@@ -141,7 +141,8 @@ first experiment, with:
   how much push is needed. Several settings, not one, unless the brief rules it out.
 If the first message says the plan goes to the user for approval, plan_dosage's result
 gives their answer and any note: when they do not approve, revise the plan as their note
-asks and call plan_dosage again (every revision goes to them too).
+asks and call plan_dosage again (the first message says whether revisions go to them
+too).
 Then design your experiments along the ladder in each setting, and label every variant
 with its dosage and setting. A good order: bracket first (the lowest and the top level of
 one setting), then fill in the levels between to find where the behaviour starts, then
@@ -276,9 +277,11 @@ def brief_message(tools: Tools) -> str:
             "off": "- dosage: this audit plans no dosage (plan_dosage and dose_response are "
                    "off)"}[tools.dosage])
         if tools.approve is not None and tools.dosage != "off":
-            lines.append("- plan approval: each version of your dosage plan goes to the user, "
-                         "who approves it or not, with an optional note for you; no "
-                         "experiment runs until a plan is approved")
+            lines.append("- plan approval: your dosage plan goes to the user, who approves it "
+                         "or not, with an optional note for you; no experiment runs until a "
+                         "plan is approved; "
+                         + ("each later revision goes to them too" if tools.approve_revisions
+                            else "once one is approved, revisions hold at once"))
     if audit.carried is not None:
         lines += ["", *continuation_lines(audit)]
     if audit.analysis is not None:

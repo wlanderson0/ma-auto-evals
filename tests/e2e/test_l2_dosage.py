@@ -324,7 +324,6 @@ def test_the_cli_leaves_dosage_optional_unless_the_brief_says(tmp_path, monkeypa
 
     seen = []
     monkeypatch.setattr(agent, "run_l2", lambda tools, *a, **k: seen.append(tools.dosage))
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)  # plan approval asks there
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     for out, extra in (("llm", ["--live"]), ("fake", ["--fake"])):
@@ -450,11 +449,11 @@ class Answers:
         return answer
 
 
-def approving(tmp_path, *answers):
+def approving(tmp_path, *answers, revisions=False):
     audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True,
                          launch=InProcess())
     user = Answers(*answers)
-    return Tools(audit, approve=user), user
+    return Tools(audit, approve=user, approve_revisions=revisions), user
 
 
 def test_no_experiment_runs_before_the_user_approves_a_plan(tmp_path, offline_module):
@@ -484,13 +483,14 @@ def test_no_experiment_runs_before_the_user_approves_a_plan(tmp_path, offline_mo
     report = render(tools)
     assert "- Version 1: **not approved**; their note: add a cue level" in report
     assert "- Version 2: approved; their note: fine, go" in report
-    assert "- plan approval: each version of your dosage plan goes to the user" in \
-        agent.brief_message(tools)
+    assert "- plan approval: your dosage plan goes to the user" in agent.brief_message(tools)
+    assert "once one is approved, revisions hold at once" in agent.brief_message(tools)
 
 
 def test_a_refused_revision_leaves_the_approved_plan_in_force(tmp_path):
     tools, _ = approving(tmp_path, {"approved": True, "comment": ""},
-                         {"approved": False, "comment": "no"}, RuntimeError("closed"))
+                         {"approved": False, "comment": "no"}, RuntimeError("closed"),
+                         revisions=True)
     assert tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS, rationale="r")[0]
     ok, text = tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS[:1],
                           rationale="drop a setting")
@@ -543,21 +543,49 @@ def test_the_terminal_asks_until_it_gets_yes_or_no_and_pauses_the_panel(monkeypa
     assert approve(None, "x")["approved"] is False
 
 
-def test_the_cli_asks_for_approval_only_of_an_llm_l2_in_a_terminal(tmp_path, monkeypatch):
+def test_by_default_only_the_first_plan_waits_for_the_user(tmp_path):
+    tools, user = approving(tmp_path, {"approved": True, "comment": "ok"})
+    assert tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS, rationale="first")[0]
+    ok, text = tools.call("plan_dosage", levels=LEVELS, settings=SETTINGS[:1],
+                          rationale="a revision")
+    assert ok and text.startswith("Recorded dosage plan (version 2)"), text
+    assert len(user.shown) == 1  # the revision was not sent
+    from experiments.l2 import dosage
+
+    assert dosage.current(tools.audit.out).revision == 2
+    report = render(tools)
+    assert "- Version 1: approved; their note: ok" in report
+    assert "- Version 2: not sent (a revision holds at once without --approve-revisions)" \
+        in report
+
+
+def test_the_cli_asks_for_approval_only_when_a_flag_says(tmp_path, monkeypatch, capsys):
     from experiments.l2.audit import main
 
     seen = []
-    monkeypatch.setattr(agent, "run_l2", lambda tools, *a, **k: seen.append(tools.approve))
+    monkeypatch.setattr(agent, "run_l2", lambda tools, *a, **k: seen.append(
+        (tools.approve is not None, tools.approve_revisions)))
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-    with pytest.raises(SystemExit, match="add --no-plan-approval"):
-        main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
-              "--live"])
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    for out, extra in (("b", ["--live"]), ("c", ["--live", "--no-plan-approval"]),
-                       ("d", ["--fake"])):
-        with pytest.raises(SystemExit):  # the stand-in never ends the audit
+
+    def run(out, *extra):
+        with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
             main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / out),
                   "--mock", *extra])
-    assert [a is not None for a in seen] == [True, False, False]
+        return stop.value
+
+    run("a", "--live")  # by default nothing is asked, even with no terminal
+    assert "no terminal" in str(run("b", "--live", "--plan-approval"))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    run("c", "--live", "--plan-approval")
+    run("d", "--live", "--approve-revisions")  # turns approval on too
+    run("e", "--live", "--no-plan-approval")  # still accepted: the default
+    run("f", "--fake", "--plan-approval")  # the fake L2 plans nothing: not asked
+    assert seen == [(False, False), (True, False), (True, True), (False, False),
+                    (False, False)]
+    assert "the fake L2 makes no dosage plan" in capsys.readouterr().out
+    assert run("g", "--live", "--no-plan-approval", "--plan-approval").code == 2
+    assert "contradicts --plan-approval" in capsys.readouterr().err
+    assert not (tmp_path / "g").exists()  # refused before anything was made
+    assert len(seen) == 5

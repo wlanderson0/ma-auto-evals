@@ -88,8 +88,8 @@ Install, login, reading runs and troubleshooting: [`docs/cosmos.md`](docs/cosmos
 Giving L2 (the auditor that designs and runs experiments) a research question, running
 it, and sharing its experiments on cosmos: [`docs/level2-howto.md`](docs/level2-howto.md).
 By default L2 first plans a dosage ladder (how hard each setup pushes towards the
-behaviour) and sends it to you for approval in the terminal; `--no-plan-approval` skips
-that step.
+behaviour); `--plan-approval` makes it wait for your approval of the plan in the terminal
+before any experiment runs, and `--approve-revisions` for each revision too.
 
 ### Inspect scorers
 

@@ -56,8 +56,10 @@ the case that the behaviour is emergent rather than instructed.
    settings it will try the ladder in: other scenarios, and small tweaks to one
    (topology, models, roles, wording, rounds). When the brief has L2 write its own
    scenario (`base_scenarios: []`), it writes it first, since the plan names it.
-2. **You approve it.** By default the plan comes to you in the terminal before any
-   experiment runs (step 2 below); `--no-plan-approval` skips this.
+2. **Optionally, you approve it.** With `--plan-approval` the plan comes to you in the
+   terminal before any experiment runs, and with `--approve-revisions` every revision
+   too (step 2 below). By default nothing waits for you: the plan holds as soon as L2
+   makes it, and you read it in the report.
 3. **Labelled runs.** Each variant L2 runs gives its `dosage` (a level) and `setting`.
    With `dosage: optional` a variant without labels still runs but is left out of the
    dosage tables, and labels that don't fit the plan are dropped with a note (never a
@@ -90,9 +92,9 @@ uv run python -m experiments.l2.audit --question "Does ...?" --budget 3 --live \
 # or, with a brief file:
 uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md --live \
     --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name>
-# without approving L2's dosage plan yourself:
+# approving L2's first dosage plan yourself before any experiment runs:
 uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md --live \
-    --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name> --no-plan-approval
+    --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name> --plan-approval
 ```
 
 - `--model` is L2's own model; it must have a row in `experiments/l2/cost.py`
@@ -104,20 +106,25 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
-- **Approving L2's dosage plan.** When L2 calls `plan_dosage` (step 1, "Dosage"), the
-  live panel pauses and the plan is shown: each level and its push, each setting and
-  L2's rationale. Answer `y` or `n`, then optionally type a note for L2 (Enter to skip):
-  L2 reads your answer and note as the result of its call. If you answer `n`, that
-  version is kept in the record but never holds, and L2 is asked to revise it as your
-  note says and send it again. No experiment runs until you approve a plan, and every
-  later revision comes back to you; if you turn a revision down, the plan you approved
-  last stays in force. Stay at the terminal until L2 has planned: the time
-  limit keeps running while it waits for you. To stop after seeing the plan, answer `n`
-  with a note such as "stop here", then press Ctrl-C once.
-- `--no-plan-approval` skips the approval: L2's plan holds as soon as it makes it, and
-  nothing waits for you. Use it for unattended runs: without a terminal to answer in
-  (output piped, a scheduled run) the audit refuses to start unless it is given. The
-  fake L2 (`--fake`), analysis-only audits and briefs with `dosage: off` are never asked.
+- **Approving L2's dosage plan (opt-in).** By default L2's dosage plan (step 1,
+  "Dosage") holds as soon as L2 makes it, and nothing waits for you, so an audit can run
+  unattended.
+  - `--plan-approval`: when L2 first calls `plan_dosage`, the live panel pauses and the
+    plan is shown (each level and its push, each setting, L2's rationale). Answer `y`
+    or `n`, then optionally type a note for L2 (Enter to skip); L2 reads your answer and
+    note as the result of its call. If you answer `n`, that version is kept in the
+    record but never holds, and L2 is asked to revise it as your note says and send it
+    again. No experiment runs until you approve a plan. Once one is approved, L2's later
+    revisions hold at once (the report marks them "not sent"), so the run never stops
+    for you again.
+  - `--approve-revisions` (turns `--plan-approval` on too): every later revision also
+    waits for your answer; if you turn one down, the plan you approved last stays in
+    force. Only use it if you will stay at the terminal: the run stops at each revision
+    until you answer, and the time limit keeps running meanwhile.
+  - Either flag needs a terminal to answer in: with output piped or in a scheduled run,
+    the audit refuses to start. The fake L2 (`--fake`), analysis-only audits and briefs
+    with `dosage: off` are never asked. To stop after seeing the plan, answer `n` with a
+    note such as "stop here", then press Ctrl-C once.
 - Each of L2's calls costs more as its conversation grows, so the reserve held back for
   its review and report grows with it: 10% of the budget, or four of its calls at its
   latest price plus the reviewer's share, if that is more. To leave L2 room to think,

@@ -1,10 +1,12 @@
 """Asking the user to approve L2's dosage plan (``plan_dosage``) before any experiment.
 
-By default the CLI (``python -m experiments.l2.audit``) sends every version of an LLM L2's
-plan to the person running the audit, in the terminal: the live panel pauses, the plan
-is shown, and they answer yes or no with an optional note for L2. L2 gets the answer and
-the note as the tool's result; no experiment runs until a plan is approved. The answer is
-recorded with the plan (``dosage-plan.jsonl``). ``--no-plan-approval`` turns this off.
+Opt-in, so an unattended audit never waits: with ``--plan-approval`` the CLI
+(``python -m experiments.l2.audit``) sends an LLM L2's plan to the person running the
+audit, in the terminal: the live panel pauses, the plan is shown, and they answer yes or
+no with an optional note for L2. L2 gets the answer and the note as the tool's result; no
+experiment runs until a plan is approved. Once one is, revisions hold at once, unless
+``--approve-revisions`` sends each of them too. The answer is recorded with the plan
+(``dosage-plan.jsonl``).
 """
 
 from __future__ import annotations
