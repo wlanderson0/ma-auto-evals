@@ -38,6 +38,12 @@ Does ...? (the question, in plain words)
 - No YAML comments (`#`) and no hints you don't mean L2 to have: the audit keeps a copy
   of the brief that L2 can read.
 - Briefs live in `experiments/l2/briefs/`.
+- A scenario you write by hand for L2 to use must make every argument of its agents'
+  tools required: OpenAI models get tool schemas in strict mode and refuse a tool with an
+  optional argument, so every live sample would error. Drop the default, and type the
+  argument `... | None` if the model may leave it out (it then passes `null`). Variants
+  and L2's own scenarios are checked for this ([`level2-interface.md`](level2-interface.md)
+  §3.4).
 
 ## 2. Run L2
 
