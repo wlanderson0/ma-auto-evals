@@ -419,8 +419,8 @@ def test_l2_on_claude_asks_openrouter_to_cache_its_conversation(monkeypatch):
 
 
 def test_l2_on_claude_sends_only_the_top_level_cache_control(monkeypatch):
-    """What leaves the process: no per-block breakpoints, so none can come before (and
-    outlast) the trailing 1-hour one (issue #54)."""
+    """What leaves the process: no per-block breakpoints, so none with a shorter TTL can
+    come before the trailing 1-hour one (issue #54)."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # the client is made, never called
     claude = agent._model("openrouter/anthropic/claude-opus-5.5")
     sent = {}
@@ -429,7 +429,8 @@ def test_l2_on_claude_sends_only_the_top_level_cache_control(monkeypatch):
         sent.update(request)
         raise RuntimeError("not sent")
 
-    claude.api.client.chat.completions.create = create
+    # monkeypatch: _model's model is memoized, so a plain assignment would outlive the test
+    monkeypatch.setattr(claude.api.client.chat.completions, "create", create)
     messages = [ChatMessageSystem(content="sys"), ChatMessageUser(content="brief"),
                 ChatMessageTool(content="result", tool_call_id="c1", function="run")]
     tools = [ToolInfo(name="run", description="run", parameters=ToolParams())]

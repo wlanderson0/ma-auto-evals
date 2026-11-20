@@ -62,6 +62,13 @@ def test_without_tool_messages_marks_the_latest_user_or_assistant_text():
     assert r["messages"][5]["content"] == "result 2"
 
 
+def test_blank_messages_are_not_marked():
+    r = {"messages": [{"role": "user", "content": "brief"}, {"role": "assistant", "content": "  "}]}
+    caching.mark(r, "1h")
+    assert r["messages"][1]["content"] == "  "
+    assert r["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
 def test_no_ttl_gives_the_default_breakpoint():
     r = _request()
     caching.mark(r, None)

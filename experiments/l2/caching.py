@@ -35,7 +35,7 @@ def _mark_message(msg: dict[str, Any], ttl: str | None) -> bool:
     """Mark ``msg``'s last content block, turning string content into one text block.
     False if it has no content to mark (e.g. an assistant turn with only tool calls)."""
     content = msg.get("content")
-    if isinstance(content, str) and content:
+    if isinstance(content, str) and content.strip():
         msg["content"] = [{"type": "text", "text": content, "cache_control": _control(ttl)}]
         return True
     if isinstance(content, list) and content and isinstance(content[-1], dict):
@@ -76,7 +76,9 @@ def install(model: Model, marker: Callable[[dict[str, Any]], None]) -> Model:
     """Run ``marker`` on every request ``model`` sends, just before it is sent.
 
     Wraps the provider's ``_generate_completion`` (Inspect's own hook for its markers;
-    private, but Inspect is pinned). Like Inspect's markers, these never appear in the
+    private, but Inspect is pinned). Use on a model made with ``memoize=False``: a
+    memoized model is shared, so every caller would get the markers, and installing
+    twice stacks the wrappers. Like Inspect's markers, these never appear in the
     request logged to the ``.eval`` file: check the usage's cache reads instead.
     """
     api = model.api

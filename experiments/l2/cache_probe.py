@@ -4,7 +4,8 @@ Sends a short conversation shaped like L2's (a long system prompt, tools, then s
 tool results) once per variant, and prints for each call the provider that served it and
 the tokens read from and written to the cache. Caching works when each call reads about
 the whole prompt of the call before it. Each variant uses its own random prefix, so no
-variant reads another's (or an earlier run's) cache.
+variant reads another's (or an earlier run's) cache. The probe runs outside an Inspect
+sample, so it sends no ``x-session-id`` and its routing can differ from L2's.
 
 Variants:
   A    L2's setup before #54 was fixed: Inspect's markers (5 min) + top-level (1 h)
