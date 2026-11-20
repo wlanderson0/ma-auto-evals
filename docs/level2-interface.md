@@ -500,6 +500,7 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 **Recording.** One directory per L2 audit, containing:
 
 - `brief.md`, the brief as given, and `decisions.jsonl`, what L2 decided for what the brief left open (mode, measure…), with its reasons;
+- `dosage-plan.jsonl`, every version of L2's dosage plan with the user's answer to it when it was sent for approval, and `dosage.jsonl`, each labelled variant's level and setting, with `labelled_after` for labels given after the runs (§6.7);
 - `proposed.jsonl`, every variant L2 proposed, rejected ones too, with its rationale, problems and warnings, and `launches.jsonl`, every launch, with L2's rationale for the experiment (§5), and what came of it;
 - `scenarios/`, the code of every scenario L2 wrote, with its hash (§3.5);
 - `trace.jsonl`, every tool call with its arguments, result (shortened) and the result's hash, including the code L2 ran on the logs;
@@ -507,7 +508,7 @@ An L2 audit has one budget, in money, set by the brief (`budget_usd`, §2). It c
 - `ledger.json`, the budget ledger (§7), and `l2/`, L2's own Inspect log;
 - `claims.json`, L2's claims with their verdicts (§6.4), and `review.json`, the reviewer's critique of L2's draft and L2's response (§6.5);
 - `writeup.md`, L2's write-up under the audit's facts, and `figures/`, its figures (§6.6);
-- `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the review, each experiment's rationale with its variants and theirs, the tables they rest on (read again from the logs), the search counts, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
+- `report.md`: L2's claims with their verdicts and where their evidence is, its conclusions, the review, each experiment's rationale with its variants and theirs, the tables they rest on (read again from the logs), the dosage plan with each version's approval and the dose-response readings (§6.7), the search counts, the run statistics, where L2 departed from the guidance (checked automatically), its decisions and the ledger;
 - `annotations.jsonl` (§6.2), in each experiment's directory, once something writes it;
 - once shared (§8.1): `cosmos-runs.json`, `cosmos.json` and `cosmos/`.
 

@@ -45,21 +45,42 @@ Does ...? (the question, in plain words)
 
 ### Dosage: the least push that elicits the behaviour
 
-Before its first experiment, L2 plans (`plan_dosage`) a ladder of push levels, from
-level 0 (nothing in any prompt, opening or persona points at the behaviour) up to the
-most push it would use (e.g. the behaviour asked for in the target's own prompt, which
-also checks the measure can see it), and the settings it will try the ladder in: other
-scenarios, and small tweaks (topology, models, roles, wording, rounds). Every variant it
-runs is labelled with its `dosage` (a level) and `setting` (unless dosage is optional
-and L2 leaves a variant unlabelled: it runs, but is left out of the dosage tables until
-L2 labels it afterwards with `label_variants`; the report lists such late labels).
-`dose_response` then reads the runs along the ladder: per setting and target, k of n runs
-at each level, the lowest level where at least one run shows the behaviour (the level
-that elicits it), which settings need the least push,
-lowest vs highest level (Fisher test), and what each step up the ladder changes in the
-setup (it should be the push alone). The plan is in `dosage-plan.jsonl` (every version)
-and the labels in `dosage.jsonl`. The lower the level, the stronger the case that the
-behaviour is emergent rather than instructed.
+Any brief, including a plain `--question`, gets this by default (`dosage: optional`).
+The aim is the lowest push at which the behaviour appears: the lower it is, the stronger
+the case that the behaviour is emergent rather than instructed.
+
+1. **Plan.** Before its first experiment, L2 calls `plan_dosage` with a ladder of push
+   levels, from level 0 (nothing in any prompt, opening or persona points at the
+   behaviour) to the most push it would use (e.g. the behaviour asked for in the
+   target's own prompt, which also checks that the measure can see it), and the
+   settings it will try the ladder in: other scenarios, and small tweaks to one
+   (topology, models, roles, wording, rounds). When the brief has L2 write its own
+   scenario (`base_scenarios: []`), it writes it first, since the plan names it.
+2. **You approve it.** By default the plan comes to you in the terminal before any
+   experiment runs (step 2 below); `--no-plan-approval` skips this.
+3. **Labelled runs.** Each variant L2 runs gives its `dosage` (a level) and `setting`.
+   With `dosage: optional` a variant without labels still runs but is left out of the
+   dosage tables, and labels that don't fit the plan are dropped with a note (never a
+   rejection). L2 can label such variants afterwards with `label_variants`; those labels
+   are marked as given after the runs, and the report lists them apart. A variant's
+   labels never change once given.
+4. **Revisions.** L2 can revise the plan with `plan_dosage` (each revision comes to you
+   too). A level or setting that already has runs keeps its meaning: same name and push
+   (its number may change, to insert a rung below it), same scenario and tweak.
+5. **Reading.** `dose_response` reads the runs along the ladder: per setting and target,
+   k of n runs at each level; the lowest level where at least one run shows the
+   behaviour (the level that *elicits* it), with its k/n; the settings that need the
+   least push, and those where it appears at level 0 (emergent); a descriptive test of
+   lowest against highest level; what each step up the ladder changes in the setup (it
+   should be the push alone); and how variants pooled at one level differ. Each setting
+   is read with a scorer its scenario has; one it does not have is reported as "not
+   measured", never as "not elicited". Each reading draws a figure
+   (`figures/dose-<scorer>[-<settings>].png`) for the write-up.
+
+The plan's versions (with your answers) are in `dosage-plan.jsonl`, the labels in
+`dosage.jsonl`. Set `dosage: required` in the brief to make L2 plan before any experiment
+and reject variants without labels that fit the plan, or `dosage: off` for no plan, no
+labels and no dosage tools.
 
 ## 2. Run L2
 
@@ -69,6 +90,9 @@ uv run python -m experiments.l2.audit --question "Does ...?" --budget 3 --live \
 # or, with a brief file:
 uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md --live \
     --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name>
+# without approving L2's dosage plan yourself:
+uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md --live \
+    --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name> --no-plan-approval
 ```
 
 - `--model` is L2's own model; it must have a row in `experiments/l2/cost.py`
@@ -80,12 +104,20 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   `decisions.json` lists those variants (`without_run_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
-- L2's dosage plan (below) comes to you for approval first: the panel pauses, the plan
-  is shown, and you answer yes or no, with an optional note that L2 reads. No experiment
-  runs until you approve a plan; every revision comes back to you too. Stay at the
-  terminal until L2 has planned (the time limit keeps running while it waits). To skip
-  this, add `--no-plan-approval`; without a terminal (output to a pipe, a scheduled
-  run) the audit refuses to start unless you do. The fake L2 is never asked.
+- **Approving L2's dosage plan.** When L2 calls `plan_dosage` (step 1, "Dosage"), the
+  live panel pauses and the plan is shown: each level and its push, each setting and
+  L2's rationale. Answer `y` or `n`, then optionally type a note for L2 (Enter to skip):
+  L2 reads your answer and note as the result of its call. If you answer `n`, that
+  version is kept in the record but never holds, and L2 is asked to revise it as your
+  note says and send it again. No experiment runs until you approve a plan, and every
+  later revision comes back to you; if you turn a revision down, the plan you approved
+  last stays in force. Stay at the terminal until L2 has planned: the time
+  limit keeps running while it waits for you. To stop after seeing the plan, answer `n`
+  with a note such as "stop here", then press Ctrl-C once.
+- `--no-plan-approval` skips the approval: L2's plan holds as soon as it makes it, and
+  nothing waits for you. Use it for unattended runs: without a terminal to answer in
+  (output piped, a scheduled run) the audit refuses to start unless it is given. The
+  fake L2 (`--fake`), analysis-only audits and briefs with `dosage: off` are never asked.
 - Each of L2's calls costs more as its conversation grows, so the reserve held back for
   its review and report grows with it: 10% of the budget, or four of its calls at its
   latest price plus the reviewer's share, if that is more. To leave L2 room to think,
@@ -114,7 +146,9 @@ The audit directory holds `writeup.md` (L2's write-up: a results report with tab
 figures, under a table of the audit's facts; start here), `figures/`, `report.md` (L2's claims with their verdicts, its conclusions,
 the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
 evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
-`scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
+`scenarios/` (the code L2 wrote), `dosage-plan.jsonl` (every version of the dosage plan,
+with your answer to each) and `dosage.jsonl` (each variant's level and setting), and
+`experiments/exp-<n>/` (one per launch).
 
 ### Continuing an audit
 
@@ -159,12 +193,23 @@ uv run python -m experiments.l2.audit --continue logs/l2-audit/<earlier> --live 
   runs; L2 then revised once and said how it answered. A point L2 dismissed is worth
   checking yourself. The draft is in `review.json`.
 - Check that a comparison's variants ran in the same experiment, with the same epochs.
-- Read the Dosage section of `report.md` (when L2 planned one): the ladder, the
-  dose-response tables read again from the logs, the setting that needs the least push
-  (in bold), and what each step up the ladder changes. A step marked "NO DIFFERENCE"
-  means two levels ran the same setup; a step that changes more than the push makes
-  the level's effect hard to read. "Run statistics" gives the counts behind everything:
-  runs, errors, runs per level, the behaviour pooled per scenario and target, cost.
+- Read the Dosage section of `report.md`: the ladder, each version's approval and your
+  note, the dose-response tables read again from the logs, the setting that needs the
+  least push (in bold), and what each step up the ladder changes. Things to check:
+  - "Elicited at" can rest on a single run: look at the k/n beside it before calling
+    a behaviour emergent.
+  - A step marked "NO DIFFERENCE" means two levels ran the same setup; a step that
+    changes more than the push makes the level's effect hard to read; variants pooled
+    at one level should push equally.
+  - "Labelled after they ran" lists variants L2 placed on the ladder knowing their
+    results; "not measured" settings were not read by that scorer at all.
+  - The dosage tests are descriptive. A finding that a level, or a setting, changes
+    the behaviour rests on a checked comparison claim.
+  - If the section says L2 made no dosage plan, nothing in the audit says how much push
+    the behaviour needed.
+- "Run statistics" gives the counts behind everything: runs, errors, epochs, runs per
+  level and the planned cells covered, the behaviour pooled per scenario and target,
+  cost per run.
 - Read a few transcripts (on Cosmos, below) before trusting a measure.
 
 ## 4. Share it on Cosmos
