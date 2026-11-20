@@ -420,10 +420,17 @@ def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
         ran = set(tools.results().runs)
     except Exception:
         ran = set()
-    labelled = set(dosage_.labels(out_dir))
-    if unlabelled := sorted(ran - labelled):
+    labels = dosage_.labels(out_dir)
+    if unlabelled := sorted(ran - set(labels)):
         out += ["Variants run without dosage labels (not in the tables above): "
                 + ", ".join(unlabelled) + ".", ""]
+    if after := sorted((vid, row) for vid, row in labels.items()
+                       if row.get("labelled_after") is not None):
+        out += ["Labelled after they ran (label_variants: L2 chose their level and setting "
+                "after their runs, so they may have been placed knowing the results):", ""]
+        out += [f"- {vid}: L{row['dosage']}, {row['setting']} (call {row['labelled_after']}): "
+                + _inline(row.get("rationale") or "no reason given") for vid, row in after]
+        out.append("")
     return out
 
 

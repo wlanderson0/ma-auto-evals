@@ -51,7 +51,8 @@ most push it would use (e.g. the behaviour asked for in the target's own prompt,
 also checks the measure can see it), and the settings it will try the ladder in: other
 scenarios, and small tweaks (topology, models, roles, wording, rounds). Every variant it
 runs is labelled with its `dosage` (a level) and `setting` (unless dosage is optional
-and L2 leaves a variant unlabelled: it runs, but is left out of the dosage tables).
+and L2 leaves a variant unlabelled: it runs, but is left out of the dosage tables until
+L2 labels it afterwards with `label_variants`; the report lists such late labels).
 `dose_response` then reads the runs along the ladder: per setting and target, k of n runs
 at each level, the lowest level where at least one run shows the behaviour (the level
 that elicits it), which settings need the least push,

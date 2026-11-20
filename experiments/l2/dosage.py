@@ -253,12 +253,13 @@ def label_problems(found: Mapping[str, Any], base: str | None, plan: Plan | None
 
 def record_labels(out: Path, experiment: str | None,
                   rows: Sequence[tuple[str, Mapping[str, Any]]]) -> None:
+    """Append each variant's labels; extra keys in a row's labels (e.g. ``labelled_after``,
+    the call that labelled a variant after its runs) are kept."""
     with (out / LABELS_FILE).open("a") as file:
         for vid, found in rows:
             if found:
-                file.write(json.dumps({"variant": vid, "experiment": experiment,
-                                       "dosage": found["dosage"],
-                                       "setting": found["setting"]}, sort_keys=True) + "\n")
+                file.write(json.dumps({"experiment": experiment, **found, "variant": vid},
+                                      sort_keys=True) + "\n")
 
 
 def relabel(out: Path, used: Mapping[str, Mapping[str, Any]], remap: Mapping[int, int],

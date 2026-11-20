@@ -147,7 +147,8 @@ def test_the_reviewer_can_read_the_dose_response_but_not_plan(ran):
     assert [ToolDef(t).name for t in inspect_tools(tools, by="reviewer")] == [
         "list_runs", "scores", "dose_response", "transcript", "find"]
     names = [ToolDef(t).name for t in inspect_tools(tools)]
-    assert names[:2] == ["plan_dosage", "run_experiment"] and "dose_response" in names
+    assert names[:3] == ["plan_dosage", "label_variants", "run_experiment"]
+    assert "dose_response" in names
 
 
 def test_a_revision_that_drops_a_level_with_runs_is_refused(ran):
@@ -248,12 +249,42 @@ def test_an_optional_dosage_never_rejects_for_labels(tmp_path, offline_module):
     ok, text = tools.call("run_experiment", variants=json.dumps([unlabelled, wrong, P1]),
                           epochs=1, rationale="labels missing, wrong and right")
     assert ok and text.startswith("Ran exp-1."), text
-    assert "labels dropped (the variant ran unlabelled) for P0: dosage 7 is not a level" \
-        in text
-    assert "unlabelled, so left out of dose_response: P2." in text  # P0 is under dropped
+    assert ("labels dropped (the variant ran unlabelled; label_variants can label it) for "
+            "P0: dosage 7 is not a level") in text
+    assert "until labelled with label_variants: P2." in text  # P0 is under dropped
     assert set(dosage_labels(tools)) == {"P1"}
     report = render(tools)
     assert "Variants run without dosage labels (not in the tables above): P0, P2." in report
+    assert "Labelled after they ran" not in report
+
+    # label_variants: all or nothing, only variants that ran unlabelled, labels that fit
+    label = {"variant": "P0", "dosage": 0, "setting": "plain"}
+    for labels, why in [
+        ([label, {"variant": "P1", "dosage": 0, "setting": "plain"}],
+         "P1: already labelled (L1, plain); labels are never changed"),
+        ([label, {"variant": "nope", "dosage": 0, "setting": "plain"}],
+         "nope: no runs of this variant"),
+        ([{**label, "dosage": 9}], "P0: dosage 9 is not a level of the plan"),
+        ([{"variant": "P0", "dosage": 0}], "P0: missing setting"),
+        ([label, label], "P0: given twice"),
+        ([{**label, "level": 0}], "P0: unknown key(s) ['level']"),
+    ]:
+        ok, text = tools.call("label_variants", labels=json.dumps(labels), rationale="r")
+        assert not ok and why in text and "nothing was labelled" in text, text
+    assert set(dosage_labels(tools)) == {"P1"}
+    ok, text = tools.call("label_variants", rationale="P0 has no push, P2 has the opening",
+                          labels=json.dumps([label, {"variant": "P2", "dosage": 2,
+                                                     "setting": "plain"}]))
+    assert ok and text.startswith("Labelled 2 variant(s) after their runs: P0 → L0, plain, "
+                                  "P2 → L2, plain."), text
+    rows = dosage_labels(tools)
+    assert rows["P0"]["experiment"] == "exp-1" and rows["P0"]["labelled_after"] > 0
+    ok, text = tools.call("dose_response")
+    assert ok and "| plain | bob | 0/1 | " in text and "Planned but not run: dave-town" in text
+    report = render(tools)
+    assert "Variants run without dosage labels" not in report
+    assert "Labelled after they ran (label_variants" in report
+    assert "- P0: L0, plain (call " in report and "P0 has no push, P2 has the opening" in report
 
 
 def dosage_labels(tools):
@@ -378,7 +409,7 @@ def test_dosage_off_drops_labels_with_a_note_and_says_nothing_else(tmp_path, off
     ok, text = tools.call("run_experiment", variants=json.dumps([P2]), epochs=1,
                           rationale="labels in an off audit")
     assert ok, text
-    assert "labels dropped (the variant ran unlabelled) for P2: this audit plans no dosage" \
+    assert "label_variants can label it) for P2: this audit plans no dosage" \
         in text
     from experiments.l2 import dosage
 
@@ -390,3 +421,14 @@ def test_dosage_off_drops_labels_with_a_note_and_says_nothing_else(tmp_path, off
     finally:
         tools.writeup = None
     assert "Dosage" not in dict(facts)
+
+
+def test_label_variants_needs_a_plan_and_dosage_on(tmp_path):
+    tools = new(tmp_path, dosage="optional")
+    ok, text = tools.call("label_variants", labels="[]", rationale="r")
+    assert not ok and "no dosage plan yet" in text
+    (tmp_path / "off").mkdir()
+    off = new(tmp_path / "off", extra="\ndosage: off")
+    ok, text = off.call("label_variants", labels="[]", rationale="r")
+    assert not ok and "plans no dosage" in text
+    assert "label_variants" not in {ToolDef(t).name for t in inspect_tools(off)}
