@@ -216,7 +216,26 @@ def test_an_optional_dosage_runs_unlabelled_variants_as_before(tmp_path, offline
                           rationale="no plan")
     assert ok, text
     assert "Dosage notes" not in text
+    report = render(tools)
+    assert "## Dosage\n\nL2 made no dosage plan: it was asked to, but the brief does not " \
+        "require one." in report
+    tools.writeup = "a write-up"
+    try:
+        facts, _, _ = writeup_parts(tools)
+    finally:
+        tools.writeup = None
+    assert dict(facts)["Dosage"] == "L2 made no dosage plan"
+
+
+def test_a_skipped_plan_is_not_mentioned_when_dosage_is_off(tmp_path):
+    tools = new(tmp_path, extra="\ndosage: off")
     assert "## Dosage" not in render(tools)
+    tools.writeup = "a write-up"
+    try:
+        facts, _, _ = writeup_parts(tools)
+    finally:
+        tools.writeup = None
+    assert "Dosage" not in dict(facts)
 
 
 def test_an_optional_dosage_never_rejects_for_labels(tmp_path, offline_module):

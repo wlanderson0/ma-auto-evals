@@ -368,6 +368,15 @@ def dose_calls(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(seen.values())
 
 
+NO_PLAN = {
+    "required": "L2 made no dosage plan (the brief requires one), so no experiment ran.",
+    "optional": "L2 made no dosage plan: it was asked to, but the brief does not require "
+                "one. No run is placed on a push ladder, so this audit does not say how "
+                "much push the behaviour needs.",
+}
+"""What the report says when an audit that could have had a dosage plan has none."""
+
+
 def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
     """The dosage plan and the runs along it, read again from the logs: per setting, the
     lowest push that elicits the behaviour, and the settings that need least (spec:
@@ -375,10 +384,9 @@ def dosage_section(tools: Tools, trace: list[dict[str, Any]]) -> list[str]:
     out_dir = tools.audit.out
     versions = dosage_.plans(out_dir)
     if not versions:
-        if tools.dosage == "required" and tools.audit.analysis is None:
-            return ["## Dosage", "", "L2 made no dosage plan (it was required), so no "
-                    "experiment ran under one.", ""]
-        return []
+        if tools.dosage == "off" or tools.audit.analysis is not None:
+            return []
+        return ["## Dosage", "", NO_PLAN[tools.dosage], ""]
     plan = versions[-1]
     out = ["## Dosage: how hard the setups pushed (read from the logs)", ""]
     calls = dose_calls(trace) or [{"scorer": None, "field": None, "settings": None}]
@@ -1133,7 +1141,9 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
         *([("Withheld by L2's provider", f"{tools.blocked['blocked']} of "
             f"{tools.blocked['calls']} replies (content_filter)")]
           if tools.blocked and tools.blocked["blocked"] else []),
-        *([("Dosage", _dose_fact(tools))] if dosage_.current(audit.out) else []),
+        *([("Dosage", _dose_fact(tools))] if dosage_.current(audit.out) else
+          [("Dosage", "L2 made no dosage plan")] if tools.dosage != "off"
+          and audit.analysis is None else []),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),
