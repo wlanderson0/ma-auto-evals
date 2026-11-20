@@ -928,12 +928,13 @@ class Tools:
         problems, remap = dosage_.revision(plan, used, before)
         if problems:
             raise Refused("refused: " + "; ".join(problems) + ". Nothing was recorded.")
-        head = []
+        head, budget = [], self._plan_budget(plan)
         if self.approve is not None and (before is None or self.approve_revisions):
             # the user decides before the plan holds: the first plan, and revisions if asked
             self.audit.say("tool", name="plan_dosage (waiting for the user's approval)",
                            done=False)
-            answer = approval_.decide(self.approve, plan, dosage_.plan_text(plan))
+            answer = approval_.decide(self.approve, plan,
+                                      dosage_.plan_text(plan) + "\n\n" + budget)
             plan = dataclasses.replace(plan, approval=answer)
             note = f" Their note: {answer['comment']}" if answer["comment"] else ""
             if not answer["approved"]:
@@ -959,7 +960,23 @@ class Tools:
         if len(plan.settings) < 2:
             lines.append("Note: one setting only. Tweaks to the scenario can change how much "
                          "push the behaviour needs; plan more settings when you can.")
+        lines.append(budget)
         return "\n".join(lines)
+
+    def _plan_budget(self, plan: dosage_.Plan) -> str:
+        """``dosage.budget_check`` for ``plan``: the cost per run is this audit's own (runs
+        carried from an earlier audit were not paid for here)."""
+        b = self.audit.budget()
+        results = self.results()
+        mine = set(b["by_experiment"])
+        runs = sum(len(results.of(vid)) for vid in results.runs
+                   if self._where.get(vid) in mine)
+        spent = sum(b["by_experiment"].values())
+        labels = dosage_.labels(self.audit.out)
+        done = {(row["setting"], row["dosage"]) for vid, row in labels.items()
+                if vid in results.runs and results.of(vid)}
+        return dosage_.budget_check(plan, done, b["available_for_experiments_usd"],
+                                    spent / runs if runs and spent > 0 else None)
 
     def label_variants(self, labels: Any, rationale: str) -> str:
         """Label variants that ran without dosage labels (all or nothing). Labels once

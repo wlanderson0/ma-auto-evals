@@ -51,11 +51,24 @@ the case that the behaviour is emergent rather than instructed.
 
 1. **Plan.** Before its first experiment, L2 calls `plan_dosage` with a ladder of push
    levels, from level 0 (nothing in any prompt, opening or persona points at the
-   behaviour) to the most push it would use (e.g. the behaviour asked for in the
-   target's own prompt, which also checks that the measure can see it), and the
-   settings it will try the ladder in: other scenarios, and small tweaks to one
-   (topology, models, roles, wording, rounds). When the brief has L2 write its own
+   behaviour; L2 is asked to say what push level 0 still carries, such as a tool that
+   makes the behaviour possible) to the most push it would use (e.g. the behaviour
+   asked for in the target's own prompt, which also checks that the measure can see
+   it), and the settings it will try the ladder in: other scenarios, and tweaks to a
+   scenario's structure (topology, roles, what the other agents know or can detect,
+   tools, wording, rounds). The target's model is kept apart from the tweaks: to compare
+   models, L2 runs the same ladder in the same settings for each model, with the model
+   in the setting's name (e.g. `forum@gpt-4.1`). When the brief has L2 write its own
    scenario (`base_scenarios: []`), it writes it first, since the plan names it.
+   - **The budget sets how fine the ladder is.** With a small budget, the two ends and
+     one rung between, in one or two settings; with a larger one, more rungs (above all
+     where the behaviour starts) and more settings, at about 8 epochs per cell rather
+     than many thin cells. `plan_dosage`'s result ends with a budget check: how many
+     setting × level cells are not run yet and, once a cost per run is known, what they
+     would cost at 8 epochs each against what is left (it says whether the plan fits, or
+     has room for a finer ladder).
+   - **Rungs are small steps.** When one step jumps from rare to almost always, L2 is
+     asked to insert a rung between the two before adding settings elsewhere.
 2. **Optionally, you approve it.** With `--plan-approval` the plan comes to you in the
    terminal before any experiment runs, and with `--approve-revisions` every revision
    too (step 2 below). By default nothing waits for you: the plan holds as soon as L2
@@ -72,12 +85,16 @@ the case that the behaviour is emergent rather than instructed.
 5. **Reading.** `dose_response` reads the runs along the ladder: per setting and target,
    k of n runs at each level; the lowest level where at least one run shows the
    behaviour (the level that *elicits* it), with its k/n; the settings that need the
-   least push, and those where it appears at level 0 (emergent); a descriptive test of
-   lowest against highest level; what each step up the ladder changes in the setup (it
-   should be the push alone); and how variants pooled at one level differ. Each setting
+   least push, and those where it appears at level 0, the lowest level run; a
+   descriptive test of lowest against highest level; what each step up the ladder
+   changes in the setup (it should be the push alone); and how variants pooled at one
+   level differ. Each setting
    is read with a scorer its scenario has; one it does not have is reported as "not
    measured", never as "not elicited". Each reading draws a figure
-   (`figures/dose-<scorer>[-<settings>].png`) for the write-up.
+   (`figures/dose-<scorer>[-<settings>].png`) for the write-up. A run that errored
+   counts as showing the behaviour only if it did so before the error; otherwise it is
+   unknown (shown as `(+N?)`), never a run without the behaviour, here and in every
+   other count of runs (`scores`, comparisons, the claim checker).
 
 The plan's versions (with your answers) are in `dosage-plan.jsonl`, the labels in
 `dosage.jsonl`. Set `dosage: required` in the brief to make L2 plan before any experiment
@@ -204,7 +221,10 @@ uv run python -m experiments.l2.audit --continue logs/l2-audit/<earlier> --live 
   note, the dose-response tables read again from the logs, the setting that needs the
   least push (in bold), and what each step up the ladder changes. Things to check:
   - "Elicited at" can rest on a single run: look at the k/n beside it before calling
-    a behaviour emergent.
+    a behaviour emergent, and at what push level 0 still carries ("appears at L0" means
+    at the least push designed, not necessarily none).
+  - Cells with many errored runs show `(+N?)`: those runs are unknown, so a 0 there
+    rests on fewer runs than the epochs launched.
   - A step marked "NO DIFFERENCE" means two levels ran the same setup; a step that
     changes more than the push makes the level's effect hard to read; variants pooled
     at one level should push equally.

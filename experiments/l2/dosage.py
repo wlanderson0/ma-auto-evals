@@ -42,6 +42,9 @@ ELICITS = 1
 eliciting it. (A claim that the behaviour recurs still needs two runs: the claim
 checker's bar.)"""
 SETTING_ID = re.compile(r"[A-Za-z0-9_-]+")
+CELL_EPOCHS = 8
+"""Epochs per setting × level cell that the budget check plans for: about the fewest at
+which a difference between two cells can be told apart from chance."""
 LABEL_KEYS = ("dosage", "setting")
 """The keys a variant object in ``run_experiment`` may carry for the plan."""
 
@@ -411,8 +414,9 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
                   if r["elicited"] == row["elicited"]]
             lines.append(f"- {name}{tweak}: level {_level(plan, row['elicited'])}, "
                          f"{', '.join(by)} runs"
-                         + (": emerges with the least push on the ladder" if row["elicited"]
-                            == 0 else ""))
+                         + (": appears at L0, the lowest level run (the least push "
+                            "designed, which may not be none)" if row["elicited"] == 0
+                            else ""))
         else:
             ran = sorted(row["cells"])
             lines.append(f"- {sid}{tweak}: not elicited at any level run (L{ran[0]}–L{ran[-1]})")
@@ -422,8 +426,8 @@ def render(plan: Plan, found: Mapping[str, Any], measure: str,
     if found["least"]:
         lines.append(f"**Needs the least push: {', '.join(found['least'])}** (level "
                      f"{_level(plan, found['least_level'])})."
-                     + (f" Emergent (level 0, no push): {', '.join(found['emergent'])}."
-                        if found["emergent"] else ""))
+                     + (f" Appears at L0, the lowest level run: "
+                        f"{', '.join(found['emergent'])}." if found["emergent"] else ""))
     else:
         lines.append("No setting elicits the behaviour at any level run so far.")
     lines.append("These readings are descriptive: cells may pool variants from different "
@@ -466,7 +470,7 @@ def summary(plan: Plan, found: Mapping[str, Any]) -> str:
         return "not elicited at any push level run"
     return (f"least push: {', '.join(found['least'])} at level "
             f"{_level(plan, found['least_level'])} of 0–{plan.top}"
-            + (" (emergent: no push)" if found["emergent"] else ""))
+            + (" (appears at L0, the lowest level run)" if found["emergent"] else ""))
 
 
 def plan_lines(plan: Plan) -> list[str]:
@@ -503,3 +507,29 @@ def plan_text(plan: Plan) -> str:
                       "Settings:",
                       *[f"  {s.id} (on {s.base}): {s.tweak}" for s in plan.settings], "",
                       f"L2's rationale: {plan.rationale}"])
+
+
+def budget_check(plan: Plan, done: set[tuple[str, int]], available_usd: float,
+                 per_run_usd: float | None, epochs: int = CELL_EPOCHS) -> str:
+    """Whether the plan's cells not run yet fit what is left for experiments, at
+    ``epochs`` per cell and the cost per run so far: the ladder's fineness follows the
+    budget."""
+    cells = [(s.id, lv.level) for s in plan.settings for lv in plan.levels]
+    todo = [c for c in cells if c not in done]
+    head = (f"Budget check: {len(todo)} of {len(cells)} setting × level cells not run yet "
+            f"({len(plan.levels)} levels × {len(plan.settings)} settings); "
+            f"${available_usd:.2f} is available for experiments.")
+    if per_run_usd is None:
+        return (head + " No cost per run yet: bracket first (the two ends of the ladder in "
+                "one setting), then size the rest of the ladder to what is left. With a small "
+                "budget keep the ladder coarse (the two ends and one rung between).")
+    need = len(todo) * epochs * per_run_usd
+    line = (head + f" At {epochs} epochs per cell and ${per_run_usd:.4f} per run so far "
+            f"(models differ), the rest would cost about ${need:.2f}.")
+    if need > available_usd:
+        return line + (" It does not fit: drop rungs or settings (keep the two ends and the "
+                       "rungs around where the behaviour starts), or plan fewer cells.")
+    if need < available_usd / 3:
+        return line + (" There is room for a finer ladder: add rungs where the behaviour "
+                       "starts, or more settings.")
+    return line + " It fits."

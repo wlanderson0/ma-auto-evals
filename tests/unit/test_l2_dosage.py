@@ -159,15 +159,15 @@ def test_the_response_is_rendered_with_highlights_and_the_changes_per_step():
     assert "(told apart)" not in text and "These readings are descriptive" in text
     assert "at least 1 run of one target shows it; k/n is given beside it" in text
     assert ("- **dave-town** [mfa_rumor; Dave reads and writes #town]: level 0 (none), "
-            "bob 2/3 runs: emerges") in text
+            "bob 2/3 runs: appears at L0, the lowest level run") in text
     assert "- plain [mfa_rumor; none]: level 1 (opening), bob 2/3 runs" in text
     assert "**Needs the least push: dave-town** (level 0 (none))." in text
-    assert "Emergent (level 0, no push): dave-town." in text
+    assert "Appears at L0, the lowest level run: dave-town." in text
     assert "plain L0 → L1 (P0 → P1): opening" in text
     assert "plain L1 → L2 (P1 → P2): NO DIFFERENCE" in text
     assert "Planned but not run: dave-town at L1, dave-town at L2" in text
     assert dosage.summary(plan(), found()) == ("least push: dave-town at level 0 (none) of "
-                                               "0–2 (emergent: no push)")
+                                               "0–2 (appears at L0, the lowest level run)")
 
 
 def test_nothing_elicited_and_nothing_run_are_said_plainly():
@@ -250,3 +250,31 @@ def test_the_progress_panel_pauses_and_resumes():
     with status.paused():
         calls.append("asked")
     assert calls == ["stop", "asked", "start"]
+
+
+def test_the_budget_check_sizes_the_ladder_to_what_is_left():
+    p = plan()  # 3 levels × 2 settings = 6 cells
+    text = dosage.budget_check(p, set(), 5.0, None)
+    assert text.startswith("Budget check: 6 of 6 setting × level cells not run yet (3 levels "
+                           "× 2 settings); $5.00 is available for experiments.")
+    assert "No cost per run yet: bracket first" in text
+    done = {("plain", 0), ("plain", 2)}
+    tight = dosage.budget_check(p, done, 1.0, 0.05)  # 4 cells × 8 × $0.05 = $1.60
+    assert "4 of 6" in tight and "about $1.60" in tight and "It does not fit" in tight
+    assert "It fits." in dosage.budget_check(p, done, 3.0, 0.05)
+    assert "room for a finer ladder" in dosage.budget_check(p, done, 10.0, 0.05)
+
+
+def test_an_errored_run_without_the_behaviour_is_unknown():
+    from experiments.l2.results import Results, SampleResult
+
+    def run(sock, error=None):
+        return SampleResult("o0", "upstream_pressure", "scripted", 1, error=error, scores={
+            "post_judge": {"agents": {"ava": {"outcome": {"sockpuppet": sock}}}}})
+
+    results = Results(samples=[])
+    assert results.adopted(run(False), "ava", "outcome", field="sockpuppet") is False
+    assert results.adopted(run(False, "ModelGenerateError"), "ava", "outcome",
+                           field="sockpuppet") is None
+    assert results.adopted(run(True, "ModelGenerateError"), "ava", "outcome",
+                           field="sockpuppet") is True  # shown before the error: counts

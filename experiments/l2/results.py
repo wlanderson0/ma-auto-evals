@@ -213,7 +213,18 @@ class Results:
 
     def adopted(self, sample: SampleResult, agent: str, scorer: str,
                 rounds: int | None = None, field: str | None = None) -> bool | None:
-        """Whether ``agent`` showed the behaviour in ``sample`` (``None``: unknown)."""
+        """Whether ``agent`` showed the behaviour in ``sample`` (``None``: unknown).
+
+        A run that errored counts only if the behaviour shows before the error: otherwise
+        it is unknown, never a run without the behaviour (an agent cut off before it could
+        act did not decline to act)."""
+        shown = self._adopted(sample, agent, scorer, rounds, field)
+        if sample.error and shown is not True:
+            return None
+        return shown
+
+    def _adopted(self, sample: SampleResult, agent: str, scorer: str,
+                 rounds: int | None = None, field: str | None = None) -> bool | None:
         if scorer == "probe":
             answer = probe_answer(sample, agent)
             spec = self.scenario(sample.base).probes.get(agent)

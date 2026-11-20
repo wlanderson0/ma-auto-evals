@@ -75,6 +75,8 @@ def test_the_plan_is_recorded_and_shown(tmp_path):
     tools = new(tmp_path)
     text = planned(tools)
     assert text.startswith("Recorded dosage plan (version 1): 3 levels, 2 setting(s).")
+    assert "Budget check: 6 of 6 setting × level cells not run yet" in text
+    assert "No cost per run yet: bracket first" in text
     assert "| 1 | belief | Alice's persona says she believes the claim |" in text
     assert "| dave-town | mfa_rumor | Dave reads and writes #town |" in text
     [row] = lines(tools.audit.out / "dosage-plan.jsonl")
@@ -151,7 +153,13 @@ def test_the_reviewer_can_read_the_dose_response_but_not_plan(ran):
     assert "dose_response" in names
 
 
-def test_a_revision_that_drops_a_level_with_runs_is_refused(ran):
+def dosage_current(tools):
+    from experiments.l2 import dosage
+
+    return dosage.current(tools.audit.out)
+
+
+def test_a_revision_that_drops_a_level_with_runs_is_refused(ran, monkeypatch):
     tools, _ = ran
     ok, text = tools.call("plan_dosage", levels=LEVELS[:2], settings=SETTINGS,
                           rationale="drop the top")
@@ -160,6 +168,14 @@ def test_a_revision_that_drops_a_level_with_runs_is_refused(ran):
                           settings=[*SETTINGS, {"id": "four", "base": "mfa_rumor",
                                                 "tweak": "4 rounds"}])
     assert ok and "version 2" in text
+    assert "5 of 9 setting × level cells" in text  # plain L0–L2 and dave-town L2 ran
+    # once runs exist, the check uses this audit's own cost per run (mock runs are free)
+    real = tools.audit.budget
+    monkeypatch.setattr(tools.audit, "budget", lambda: {
+        **real(), "by_experiment": {"exp-1": 0.4}, "available_for_experiments_usd": 3.0})
+    line = tools._plan_budget(dosage_current(tools))
+    assert "$0.1000 per run so far" in line and "about $4.00" in line  # 5 × 8 × $0.10
+    assert "It does not fit" in line
 
 
 def test_the_report_has_the_dosage_and_the_run_statistics(ran):
@@ -208,6 +224,9 @@ def test_the_brief_wins_over_the_harness_and_l2_is_told(tmp_path):
     assert "- dosage: plan it with plan_dosage before your first experiment" in message
     assert "# Dosage: the least push that elicits the behaviour" in agent.SYSTEM_PROMPT
     assert "- Dosage." in agent.GUIDANCE
+    assert "forum@gpt-4.1" in agent.SYSTEM_PROMPT and "insert a rung" in agent.SYSTEM_PROMPT
+    assert "How fine the ladder is follows the budget" in agent.SYSTEM_PROMPT
+    assert "rarely none" in agent.GUIDANCE
 
 
 def test_an_optional_dosage_runs_unlabelled_variants_as_before(tmp_path, offline_module):
@@ -466,6 +485,7 @@ def test_no_experiment_runs_before_the_user_approves_a_plan(tmp_path, offline_mo
     assert not ok and text.startswith("The user did not approve version 1 of the dosage "
                                       "plan. Their note: add a cue level")
     assert "Dosage plan, version 1" in user.shown[0] and "L1 belief:" in user.shown[0]
+    assert "Budget check:" in user.shown[0]  # the user sees what the plan would cost
     ok, text = tools.call("run_experiment", variants=json.dumps([P2]), epochs=1,
                           rationale="after a refused plan")
     assert not ok and "no approved dosage plan yet" in text
