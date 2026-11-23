@@ -50,7 +50,7 @@ last two before you finish:
 ```bash
 uv sync --locked
 uv run --locked ruff check src tests experiments
-uv run --locked pytest -q --tb=short --durations=10
+uv run --locked pytest -q --tb=short --durations=10 -n auto --dist loadscope
 ```
 
 `pyproject.toml` sets the pytest defaults: `-m 'not live'`, strict markers and
@@ -60,6 +60,12 @@ per test. Markers:
 - `live`: real API calls; needs `--run-live -m live` and a key, and costs money.
 - `slow`: offline but long; runs by default. Skip it while iterating with
   `-m 'not live and not slow'`.
+
+`-n auto --dist loadscope` (pytest-xdist) runs the suite on every core, keeping
+each module on one worker so its module-scoped runs are shared; serially it takes
+about four times as long on a 4-core runner. Each worker gets its own scratch directory from
+`tests/conftest.py`, so a new test must not write to a fixed shared path. Leave
+`-n` off when running a single test or debugging with `pdb`.
 
 Ruff: line length 100, rules E, F, I, B and UP.
 
