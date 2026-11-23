@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from experiments.l2.brief import parse_brief
 from experiments.l2.cosmos import export
 from experiments.l2.cosmos_links import NotOnServer
 from experiments.l2.fake import DAVE_ON_TOWN, PROMPT, fake_model
-from experiments.l2.share import share
+from experiments.l2.share import cosmos_skipped, share
 from experiments.l2.study import AUDIT_RUN, export_audit, jsonl, study_of
 from experiments.l2.tools import Tools
 from tests.support.l2_audit import brief
@@ -225,6 +226,35 @@ def test_share_uploads_the_audit_run_beside_the_experiments_once(audit):
     assert len(cosmos.uploads) == 3
 
 
+def test_share_stops_before_the_audit_run_when_the_cli_would_skip_its_documents(audit):
+    cosmos = FakeCosmos()
+    asked = []
+
+    def skipped(folder):
+        asked.append(folder)
+        return ["l2/notes.txt", "writeup.md", "figures/a.png", "figures/b.png", "figures/c.png"]
+    with pytest.raises(SystemExit, match=r"leave out writeup.md, figures/a.png, figures/b.png "
+                                         r"and 1 more: .*uv tool upgrade cosmos-evals"):
+        share(audit, upload=cosmos.upload, get=cosmos.get, post=cosmos.post, base_url=BASE,
+              sleep=lambda s: None, say=lambda s: None, skipped=skipped)
+    assert asked == [audit / "cosmos" / AUDIT_RUN]
+    assert [name for _, name in cosmos.uploads] == ["board-audit exp-1", "board-audit exp-2"]
+    assert AUDIT_RUN not in json.loads((audit / "cosmos-runs.json").read_text())
+    said = []  # a CLI that takes them: shared as before; one that cannot say: a note, then shared
+    share(audit, upload=cosmos.upload, get=cosmos.get, post=cosmos.post, base_url=BASE,
+          sleep=lambda s: None, say=said.append, skipped=lambda folder: None)
+    assert any(s.startswith("could not check which files cosmos uploads") for s in said)
+    assert [name for _, name in cosmos.uploads][-1] == "board-audit audit"
+
+
+def test_cosmos_skipped_reads_the_dry_run(tmp_path, monkeypatch):
+    out = "{}\n  abc  12  results.json\n  skipped     writeup.md\n  skipped     figures/a.png\n"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert cosmos_skipped(tmp_path) == ["writeup.md", "figures/a.png"]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 2, "", "no"))
+    assert cosmos_skipped(tmp_path) is None
+
+
 def test_an_export_made_before_studies_gains_the_study_before_upload(audit):
     folder = audit / "cosmos" / "exp-1"
     export(audit / "experiments" / "exp-1", folder)
@@ -255,6 +285,19 @@ def test_review_json_is_copied_when_the_audit_has_one(audit, tmp_path):
     (audit / "review.json").write_text(json.dumps(review))
     out = export_audit(audit, tmp_path / "out")
     assert json.loads((out / "study" / "review.json").read_text()) == review
+
+
+def test_a_steered_audit_s_record_goes_with_the_audit_run(audit, tmp_path):
+    out = export_audit(audit, tmp_path / "out")
+    assert not (out / "study" / "steer.json").exists()  # not steered: nothing more
+    assert not (out / "study" / "report.json").exists()
+    rows = [{"id": "a", "kind": "pause", "state": "applied", "at_step": 2},
+            {"id": "b", "kind": None, "state": "refused", "reason": "malformed"}]
+    (audit / "steer.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (audit / "report.json").write_text(json.dumps({"steered": 1}))
+    out = export_audit(audit, tmp_path / "again")
+    assert json.loads((out / "study" / "steer.json").read_text()) == rows
+    assert json.loads((out / "study" / "report.json").read_text()) == {"steered": 1}
 
 
 def test_the_audit_run_carries_the_write_up_byte_for_byte_and_the_report(audit, tmp_path):
@@ -327,6 +370,28 @@ def test_the_figures_go_with_the_numbers_they_were_drawn_from(audit, tmp_path):
     assert figure["targets"]
 
 
+def test_a_link_planted_in_figures_is_never_written_or_read_through(audit, tmp_path):
+    """L2's code writes ``figures/``: a link it leaves there, named as the next figure or
+    a sidecar, never makes the tools write a file outside or the export read one."""
+    figures = audit / "figures"
+    png, sidecar = figures / "V1-vs-C0-probe.png", figures / "V1-vs-C0-probe.json"
+    figures.mkdir(exist_ok=True)
+    outside_png, outside_json = tmp_path / "victim.png", tmp_path / "victim.json"
+    outside_png.write_bytes(b"not a figure")
+    outside_json.write_text(json.dumps({"a": "secret", "b": "secret", "compared": {}}))
+    png.symlink_to(outside_png)
+    sidecar.symlink_to(outside_json)
+    compared_and_written(audit, "no images")
+    assert outside_png.read_bytes() == b"not a figure"
+    assert json.loads(outside_json.read_text())["a"] == "secret"
+    assert not png.is_symlink() and not sidecar.is_symlink() and png.is_file()
+    (figures / "planted.png").write_bytes(png.read_bytes())
+    (figures / "planted.json").symlink_to(outside_json)
+    out = export_audit(audit, tmp_path / "out")
+    entries = json.loads((out / "study" / "figures.json").read_text())
+    assert [e["path"] for e in entries] == ["figures/V1-vs-C0-probe.png"]
+
+
 def test_the_figure_s_call_is_the_first_scores_call_that_draws_it(audit, tmp_path):
     _, first = compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")
     compared_and_written(audit, "![x](figures/V1-vs-C0-probe.png)")  # drawn again
@@ -381,6 +446,31 @@ def test_no_image_from_outside_the_audit_is_carried(audit, tmp_path):
     writeup = json.loads((out / "study" / "writeup.json").read_text())
     assert writeup["missing"] == ["../secret.png", "figures/../../secret.png", str(secret),
                                   "figures/linked.png", "away/deep.png"]
+
+
+def test_a_link_in_figures_never_carries_another_file_of_the_audit(audit, tmp_path):
+    """``figures/`` is where L2's sandboxed code writes: a link there (one that outlived
+    the run's cleaning) is followed only to a file in ``figures/``, never to ``l2/``, nor
+    through a ``figures/`` that is itself a link."""
+    from experiments.l2.tools import embedded
+
+    compared_and_written(audit, "\n\n".join([
+        "![leak](figures/leak.png)", "![deep](figures/d/leak.png)",
+        "![fine](figures/V1-vs-C0-probe.png)"]))
+    (audit / "l2" / "secret.png").write_bytes(b"\x89PNG L2's own")
+    figures = audit / "figures"
+    (figures / "leak.png").symlink_to("../l2/secret.png")
+    (figures / "d").mkdir()
+    (figures / "d" / "leak.png").symlink_to("../../l2/secret.png")
+    out = export_audit(audit, tmp_path / "out")
+    carried = sorted(p.relative_to(out).as_posix() for p in out.rglob("*.png"))
+    assert carried == ["figures/V1-vs-C0-probe.png"]
+    assert embedded(audit, "figures/leak.png") is None
+    assert embedded(audit, "l2/secret.png") == (audit / "l2" / "secret.png").resolve()
+    shutil.move(figures, audit / "drawn")
+    figures.symlink_to("l2", target_is_directory=True)
+    assert embedded(audit, "figures/secret.png") is None
+    assert study_.images(audit) == []
 
 
 def test_a_figure_whose_image_is_left_out_has_no_entry(audit, tmp_path, monkeypatch):

@@ -10,6 +10,7 @@ import pytest
 from inspect_ai.log import read_eval_log, resolve_sample_attachments
 
 import experiments.l2.agent as agent
+from experiments.l2 import sandbox as sandbox_
 from experiments.l2.agent import MODEL, SYSTEM_PROMPT, brief_message, run_l2
 from experiments.l2.audit import Audit, main
 from experiments.l2.audit_report import write_report
@@ -125,12 +126,24 @@ def test_an_analysis_only_brief_message_has_no_controls(tmp_path):
     assert "what can and can't be concluded" in text
 
 
+def sandbox_holds(monkeypatch, held=True):
+    """A sandbox whose check passes (or fails) here, without running one."""
+    box = sandbox_.Sandbox("bwrap", "/usr/bin/bwrap")
+    monkeypatch.delenv("L2_SANDBOX", raising=False)
+    monkeypatch.setattr(sandbox_, "check", lambda: sandbox_.Check("bwrap", {
+        name: (held, "fine" if held else "bwrap (bubblewrap) is not installed")
+        for name in sandbox_.PROPERTIES}))
+    monkeypatch.setattr(sandbox_, "detect", lambda: box)
+    return box
+
+
 def test_the_cli_runs_the_llm_agent_with_the_prompt(tmp_path, monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(agent, "run_l2", lambda tools, model, prompt, time_limit: calls.append(
         (model, prompt, time_limit)))
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    sandbox_holds(monkeypatch)
     with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(tmp_path / "a"), "--mock",
               "--live", "--time-limit", "150"])
@@ -157,6 +170,57 @@ def test_nothing_spends_money_without_live(tmp_path, monkeypatch, extra, what):
     with pytest.raises(SystemExit, match=what or "exclude each other"):
         main(["--brief", str(brief(tmp_path, 1.0)), "--out", str(out), *extra])
     assert not out.exists()
+
+
+def test_an_audit_whose_l2_is_a_model_runs_its_code_in_the_sandbox_by_default(
+        tmp_path, monkeypatch, capsys):
+    """Contract test L2-27: L2's code is a model's, so it runs in the sandbox unless
+    ``--no-sandbox`` says otherwise, and the audit does not start where the sandbox does
+    not hold. A scripted audit is as before (``test_l2_fake``)."""
+    seen = []
+    monkeypatch.setattr(agent, "run_l2", lambda tools, *args, **kwargs: seen.append(
+        tools.audit.sandbox))
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    args = ["--brief", str(brief(tmp_path, 1.0)), "--mock", "--live", "--quiet"]
+    box = sandbox_holds(monkeypatch)
+    with pytest.raises(SystemExit):  # the stand-in never ends the audit
+        main([*args, "--out", str(tmp_path / "a")])
+    assert seen == [box] and "L2's code runs in the sandbox (bwrap)." in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        main([*args, "--out", str(tmp_path / "b"), "--no-sandbox"])
+    assert seen == [box, None]
+    assert "L2's code runs as you, outside a sandbox (--no-sandbox)." in capsys.readouterr().out
+    monkeypatch.setenv("L2_SANDBOX", "1")  # the flag wins over the environment
+    with pytest.raises(SystemExit):
+        main([*args, "--out", str(tmp_path / "c"), "--no-sandbox"])
+    assert seen == [box, None, None]
+    with pytest.raises(SystemExit, match="--no-sandbox, but --sandbox was given too"):
+        main([*args, "--out", str(tmp_path / "d"), "--no-sandbox", "--sandbox"])
+    monkeypatch.setenv("COSMOS_REQUIRE_SANDBOX", "1")
+    with pytest.raises(SystemExit, match="--no-sandbox, but COSMOS_REQUIRE_SANDBOX=1"):
+        main([*args, "--out", str(tmp_path / "e"), "--no-sandbox"])
+    monkeypatch.delenv("COSMOS_REQUIRE_SANDBOX")
+    sandbox_holds(monkeypatch, held=False)  # e.g. Linux without bubblewrap
+    with pytest.raises(SystemExit) as stop:
+        main([*args, "--out", str(tmp_path / "f")])
+    said = str(stop.value)
+    assert said.startswith("the sandbox does not hold here, so the audit does not start:")
+    assert "bubblewrap" in said and "or pass --no-sandbox" in said
+    with pytest.raises(SystemExit):  # the way out it names
+        main([*args, "--out", str(tmp_path / "g"), "--no-sandbox"])
+    assert seen == [box, None, None, None]
+    assert not any((tmp_path / name).exists() for name in "def")
+    capsys.readouterr()
+    scripted = ["--brief", args[1], "--quiet", "--model", "mockllm/l2"]
+    with pytest.raises(SystemExit):  # nothing live: as before, and no flag is blamed
+        main([*scripted, "--mock", "--out", str(tmp_path / "h")])
+    assert seen[4:] == [None] and "outside a sandbox (a scripted audit; --sandbox turns one " \
+        "on)." in capsys.readouterr().out
+    box = sandbox_holds(monkeypatch)
+    with pytest.raises(SystemExit):  # live experiments alone need --live too
+        main([*scripted, "--live", "--out", str(tmp_path / "i")])
+    assert seen[5:] == [box]
 
 
 def test_live_needs_a_key_before_anything_is_made(tmp_path, monkeypatch):

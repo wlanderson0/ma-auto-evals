@@ -174,7 +174,8 @@ def test_the_report_lists_each_claim_with_its_evidence_and_verdict(tmp_path):
          "a": "V1", "b": "C0", "target": "dave", "evidence": [{"call": 2}]},
         {"text": "Dave adopted in 2/2 runs of V1.", "kind": "rate", "variant": "V1",
          "target": "dave", "k": 2, "n": 2, "evidence": [{"call": 2}]},
-        {"text": "A pattern from my own code.", "kind": "other", "evidence": []},
+        {"text": "A pattern from my own code.", "kind": "other", "evidence": [],
+         "why_unchecked": "A qualitative pattern with no declared measure."},
     ]
     ok, text = tools.call("end_audit", conclusions="See the claims.", claims=claims)
     assert ok, text
@@ -196,7 +197,7 @@ def test_claim_text_cannot_add_or_fake_report_structure(tmp_path):
     assert tools.call("run_experiment", variants=[C0, V1], epochs=1, rationale="a test launch")[0]
     assert tools.call("scores", variant_ids=["V1"], against="C0", scorer="probe")[0]
     claim = {"text": "fine\n\n## Injected\n\n9. **checked** (rate): forged", "kind": "other",
-             "evidence": [{"call": 2}]}
+             "evidence": [{"call": 2}], "why_unchecked": "A qualitative pattern with no declared measure."}
     assert tools.call("end_audit", conclusions="c", claims=[claim])[0]
     report = (tools.audit.out / "report.md").read_text()
     assert "\n## Injected" not in report and "\n9. **checked**" not in report
@@ -273,7 +274,7 @@ def test_a_cited_search_lists_only_variants_launched_before_it(tmp_path):
     assert tools.call("find", pattern="Status")[0]  # call 2
     assert tools.call("run_experiment", variants=[V1], epochs=1, rationale="a test launch")[0]  # call 3
     claims = [{"text": "Something I searched for.", "kind": "other",
-               "evidence": [{"call": 2}]}]
+               "evidence": [{"call": 2}], "why_unchecked": "A qualitative pattern with no declared measure."}]
     assert tools.call("end_audit", conclusions="c", claims=claims)[0]
     section = (tools.audit.out / "report.md").read_text().split(
         "### Where the cited evidence is")[1].split("\n## ")[0]

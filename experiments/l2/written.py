@@ -23,11 +23,16 @@ the code builds a ``Scenario`` named ``name`` whose task is ``build_team(name, t
 are priced, it passes the §3.4 checks and L2-9 (no scorer text in a prompt or the task),
 and its dry-run gives every target a value on each of its scorers.
 
-**Keys.** The code is checked without provider keys, but live epochs of a written
-scenario run it in the per-epoch subprocess, which has the OpenRouter key (the agents
-need it), and the L2 process imports it to build variants. Code that called a model
-outside Inspect would not be counted by the ledger. Accepted until scenario code runs in
-a sandbox (spec §12).
+**Keys.** The code is checked without provider keys. With the audit's sandbox
+(``experiments.l2.sandbox``) the check runs inside it: no network, an environment built
+from nothing, reads only the interpreter's environment, the repository's
+``experiments/`` and ``src/`` (``CHECK_READS``) and the code, writes only a throwaway
+directory; when the sandbox cannot start, the code is refused unchecked. Live epochs of a
+written scenario still run it outside any sandbox, in the per-epoch subprocess, which
+has the OpenRouter key and the network (the agents need both), and the L2 process
+imports it to build variants. Code that called a model outside Inspect would not be
+counted by the ledger. So an audit reports a sandbox only when it writes no scenarios
+and holds none (``Audit.sandbox_report``; spec §12).
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from inspect_ai.tool import ToolInfo
 from inspect_ai.util import JSONSchema
 
 from experiments.l2.model import InnerSpec, Variant
+from experiments.l2.sandbox import Sandbox
 from experiments.scenarios import SCENARIOS, Scenario, build_team
 
 Factory = Callable[[dict], Scenario]
@@ -330,24 +336,47 @@ def same_task(task: dict[str, Any], rebuilt: dict[str, Any]) -> bool:
     return plain(task) == plain(rebuilt)
 
 
-def check_code(name: str, code: str) -> tuple[bool, str]:
+CHECK_READS = ("experiments", "src")
+"""What the check reads of the repository in the sandbox: ``experiments/`` (the module
+itself, the seed scenarios, scorers and runner it builds and dry-runs with) and ``src/``
+(``orbit_audit``, installed from there in editable mode). Never the repository root, so
+never its ``.env`` or ``logs/``. The repository's names alone may be listed (no file
+in it read), since ``python -m`` imports from it."""
+CHECK_ENV = {"ORBIT_AUTOFETCH": "0", "ORBIT_AUTOSTART_SERVICE": "0"}
+"""Orbit fetches nothing and starts no service during the check in the sandbox."""
+
+
+def check_code(name: str, code: str,
+               sandbox: Sandbox | None = None) -> tuple[bool, str]:
     """Run ``check`` on ``code`` in a subprocess without provider keys (every
     ``*_API_KEY`` set to empty, as in ``workspace.run_python``), from the repository so
-    it can import its modules. ``(passed, the result or the reasons)``."""
+    it can import its modules. ``(passed, the result or the reasons)``. With ``sandbox``
+    the subprocess runs there, and ``SandboxFailed`` means nothing was checked."""
     from experiments.l2 import workspace
     from experiments.l2.experiment import REPO
 
     env = {**os.environ, **{key: "" for key in workspace.key_names(REPO)}}
     with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / f"{name}.py"
+        code_dir, scratch = Path(folder) / "code", Path(folder) / "scratch"
+        code_dir.mkdir()
+        scratch.mkdir()
+        path = code_dir / f"{name}.py"
         path.write_text(code, encoding="utf-8")
-        command = [sys.executable, "-m", "experiments.l2.written", "--check", str(path),
-                   "--name", name]
-        try:
-            done = subprocess.run(command, cwd=REPO, env=env, capture_output=True, text=True,
-                                  timeout=CHECK_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            return False, f"the check did not finish in {CHECK_TIMEOUT} s"
+        args = ["-m", "experiments.l2.written", "--check", str(path.resolve()),
+                "--name", name]
+        if sandbox is not None:
+            ran = sandbox.run(["-B", *args], cwd=REPO, write=scratch, extra=CHECK_ENV,
+                              reads=[code_dir, *(REPO / part for part in CHECK_READS)],
+                              lists=[REPO], timeout=CHECK_TIMEOUT)
+            if ran.timed_out:
+                return False, f"the check did not finish in {CHECK_TIMEOUT} s"
+            done = subprocess.CompletedProcess(args, ran.returncode, ran.stdout, ran.stderr)
+        else:
+            try:
+                done = subprocess.run([sys.executable, *args], cwd=REPO, env=env,
+                                      capture_output=True, text=True, timeout=CHECK_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                return False, f"the check did not finish in {CHECK_TIMEOUT} s"
     if done.returncode == 0:
         return True, done.stdout.strip()
     return False, ("\n".join(part for part in (done.stdout.strip(), done.stderr.strip()[-3000:])

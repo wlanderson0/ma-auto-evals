@@ -29,8 +29,8 @@ epoch order), ``cost.json`` and the eval logs under ``logs/epoch-<e>/``. Results
 are read from the logs (``experiments.l2.results``), never from these files.
 
 The agents', judge's and probes' models carry ``RUN_CONFIG`` (``run_models``,
-``run_roles``), recorded in ``decisions.json``; an inner L0/L1 auditor keeps its own
-settings.
+``run_roles``), with a larger reply cap for reasoning models (``run_config``), recorded in
+``decisions.json``; an inner L0/L1 auditor keeps its own settings.
 """
 
 from __future__ import annotations
@@ -126,15 +126,31 @@ def build(variant: Variant, mock: bool, written: written_.WrittenScenarios = wri
 RUN_CONFIG = GenerateConfig(max_tokens=MAX_TOKENS, reasoning_effort="high")
 """The settings attached to every model of a run: the agents', the judge's and the
 probes'. Models without reasoning are expected to ignore the effort."""
+REASONING_MAX_TOKENS = 4000
+"""The reply cap of a model in ``REASONING_MODELS``, in place of ``MAX_TOKENS``: its
+reasoning counts against the cap, and at high effort gpt-5-nano spent all 1500 tokens
+reasoning and replied with nothing."""
+REASONING_MODELS = frozenset({
+    "openrouter/openai/gpt-5-nano", "openrouter/openai/gpt-5.4",
+    "openrouter/deepseek/deepseek-r1-0528", "openrouter/google/gemini-2.5-pro",
+})
+"""Models that reason before they reply (``cost.PRICES``' reasoning models)."""
+
+
+def run_config(model: str | Model) -> GenerateConfig:
+    """``RUN_CONFIG``, with ``REASONING_MAX_TOKENS`` for a reasoning model."""
+    name = model if isinstance(model, str) else str(model)
+    return (RUN_CONFIG.merge(GenerateConfig(max_tokens=REASONING_MAX_TOKENS))
+            if name in REASONING_MODELS else RUN_CONFIG)
 
 
 def configured(model: str | Model) -> Model:
-    """``model`` with ``RUN_CONFIG`` attached (uncached: Inspect's cached clients belong
-    to the event loop of the eval that made them)."""
+    """``model`` with its ``run_config`` attached (uncached: Inspect's cached clients
+    belong to the event loop of the eval that made them)."""
     if isinstance(model, str):
-        return get_model(model, config=RUN_CONFIG, memoize=False)
+        return get_model(model, config=run_config(model), memoize=False)
     attached = copy.copy(model)
-    attached.config = model.config.merge(RUN_CONFIG)
+    attached.config = model.config.merge(run_config(model))
     return attached
 
 
@@ -142,20 +158,24 @@ def run_models(built: Scenario, models: dict[str, Any]) -> tuple[Scenario, Model
     """``(built, default)``: the variant to run and its task's default model, with
     ``RUN_CONFIG`` attached (the judge's and probes' roles: ``run_roles``).
 
-    Orbit builds an agent's model from its name alone, without settings, so the
-    settings reach agents through the task's default model: when every agent runs on
-    one model, their names are cleared and that model is the default (probes then ask
-    it too, as the agent's own model). Agents on several models keep their names and
-    run without the settings (recorded in ``decisions.json``)."""
-    default = one_model(built, models["target"])
-    if default is None:
-        default = models["target"]
-    else:
-        setup = built.task["setup"]
-        setup = setup.model_copy(update={"agents": [
-            spec.model_copy(update={"model": None}) for spec in setup.agents]})
-        built = dataclasses.replace(built, task={**built.task, "setup": setup})
-    return built, configured(default)
+    Every agent's spec carries ``RUN_CONFIG`` (``run_config``: a reasoning model's reply
+    cap is ``REASONING_MAX_TOKENS``) as its ``generate_config``, which Orbit
+    merges over the agent's model, so agents on several models run under the same
+    settings as agents on one. Settings the scenario gave an agent itself
+    (``team_setup(generate_configs=...)``, e.g. a lower reasoning effort) win over
+    ``RUN_CONFIG``. When every agent runs on one model, their names are also
+    cleared and that model is the default (probes then ask it too, as the agent's own
+    model)."""
+    one = one_model(built, models["target"])
+    setup = built.task["setup"]
+    setup = setup.model_copy(update={"agents": [
+        spec.model_copy(update={
+            "generate_config": run_config(spec.model or models["target"]).merge(
+                spec.generate_config or GenerateConfig()),
+            **({"model": None} if one is not None else {})})
+        for spec in setup.agents]})
+    built = dataclasses.replace(built, task={**built.task, "setup": setup})
+    return built, configured(models["target"] if one is None else one)
 
 
 def run_roles(models: dict[str, Any]) -> dict[str, Model]:
@@ -474,7 +494,8 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
     decisions: dict[str, Any] = {
         "mode": brief.mode, "epochs": epochs, "mock": mock, "budget_usd": brief.budget_usd,
         "run_config": RUN_CONFIG.model_dump(exclude_none=True),
-        "without_run_config": [v.id for v, b in accepted if one_model(b, AUDITOR) is None],
+        "reasoning_models": {"max_tokens": REASONING_MAX_TOKENS,
+                             "models": sorted(REASONING_MODELS)},
         "estimate": guess, "over_budget": over, "confirmed": confirm,
         "launched": bool(accepted) and (not over or confirm),
         "accepted": [v.id for v, _ in accepted],

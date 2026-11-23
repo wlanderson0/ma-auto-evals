@@ -44,6 +44,23 @@ PRICES: dict[str, tuple[float, float]] = {
     # The board study's m2 and m3 (read 2026-10-30). Listed 0.006 / 7 and 0.07 / 1.40, but
     # OpenRouter routes them across many providers: these are the dearest seen.
     "openrouter/z-ai/glm-5.2": (2.31, 8.00),
+    # The capability ladder of "Scaling Laws for Strategic Interactions" (Zhang et al., 2026),
+    # with that paper's LMArena Elo (March 31, 2026). Read from OpenRouter's endpoint lists
+    # on 2026-11-05; where providers differ, the dearest listed rate.
+    "openrouter/meta-llama/llama-3.1-8b-instruct": (0.22, 0.287),  # Elo 1211
+    "openrouter/amazon/nova-micro-v1": (0.035, 0.14),  # Elo 1240
+    "openrouter/amazon/nova-pro-v1": (0.80, 3.20),  # Elo 1290
+    "openrouter/qwen/qwen-2.5-72b-instruct": (0.36, 0.40),  # Elo 1302
+    "openrouter/openai/gpt-5-nano": (0.055, 0.44),  # Elo 1337 (high reasoning)
+    "openrouter/deepseek/deepseek-chat": (0.32, 1.0287),  # DeepSeek V3, Elo 1358
+    "openrouter/deepseek/deepseek-r1-0528": (0.571, 2.286),  # Elo 1422
+    "openrouter/google/gemini-2.5-pro": (2.25, 18.00),  # Elo 1448
+    "openrouter/openai/gpt-5.4": (5.00, 30.00),  # Elo 1484 (high reasoning)
+    "openrouter/anthropic/claude-opus-4.6": (5.50, 27.50),  # Elo 1499 (1504 thinking)
+    "openrouter/anthropic/claude-sonnet-4.5": (3.00, 15.00),
+    # A cheaper L2 (listed rate on OpenRouter, 2026-11-17); a reasoning model, whose
+    # reasoning tokens bill as output.
+    "openrouter/openai/gpt-6.2-sol": (2.00, 10.00),
     # glm-5.3: was 2.80 / 8.80, the dearest seen in October; on 2026-11-17 its providers
     # list 0.0699-2.10 input and 1.40-6.60 output, and live L2 calls were routed to one
     # that charged about a quarter of the table. The dearest listed rate still errs high.

@@ -59,9 +59,8 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   (`PRICES`), or the audit refuses to start. The agents' models are L2's choice (the
   brief can fix them); written scenarios that name none get `openrouter/openai/gpt-4.1-mini`.
 - Every model of a run gets a 1500-token reply cap and reasoning effort "high"
-  (`RUN_CONFIG` in `experiments/l2/experiment.py`), except agents in a variant that
-  puts them on several different models, which run without them; each experiment's
-  `decisions.json` lists those variants (`without_run_config`).
+  (`RUN_CONFIG` in `experiments/l2/experiment.py`), including agents in a variant that
+  puts them on several different models (each agent's Orbit `generate_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
 - Each of L2's calls costs more as its conversation grows, so the reserve held back for
@@ -88,11 +87,97 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   runs $0.2290)`. `--quiet` shows neither.
 - Try a new L2 model or a new kind of brief with a small budget first.
 
+### Steering it while it runs
+
+Add `--steer` (or set `COSMOS_STEER=1`) to send requests to the audit while it runs, from
+another terminal on the same machine (or over SSH). The audit then reads a mailbox,
+`<audit>/l2/.cosmos-steer` (or `COSMOS_STEER_DIR`; spec §7.1). When L2 is a model, a
+steered audit starts only with a sandbox: without one, code L2 writes could write the
+mailbox itself, raise its own budget and answer its own questions. A scripted L2
+(`--fake`) can be steered without one, to try the commands:
+
+```bash
+uv run python -m experiments.l2.steer note "try the variant without the deadline"
+uv run python -m experiments.l2.steer pause      # no new experiment or epoch starts; L2 waits
+uv run python -m experiments.l2.steer resume
+uv run python -m experiments.l2.steer stop       # the running epoch finishes, then L2 concludes
+uv run python -m experiments.l2.steer budget 15.00
+uv run python -m experiments.l2.steer answer ask-1 Approve [--text "..."]
+uv run python -m experiments.l2.steer status
+```
+
+- Without `--dir` the command uses `COSMOS_STEER_DIR`, else the newest audit under
+  `logs/l2-audit/`. It prints `written <id> to <mailbox>`, or one line saying why it
+  refused.
+- The audit reads the mailbox after each of L2's turns and at the end of each epoch, so a
+  `pause` or a `stop` sent during a long experiment takes effect when the running epoch
+  finishes.
+- L2 reads a note after its current turn, framed as a note from you, and may answer with
+  `reply_researcher`. It may ask you a question with `ask_researcher`; the terminal shows
+  it with the command that answers it. Unanswered, its default applies when it times out.
+- `budget` needs `COSMOS_STEER_MAX_BUDGET_USD` (for example `25.00`) set when the audit
+  starts: the audit takes no raise above it, and none without it.
+- A steered audit whose L2 is a model always has a sandbox (below), and its brief must
+  leave `scenario` out of `allowed_changes`: a scenario L2 writes runs outside the
+  sandbox, where it could write the mailbox.
+- The terminal shows each note and text answer as it reaches L2.
+- Every request is recorded: `steer.jsonl` and the "Steering" section of `report.md`.
+
+### Running L2's code in a sandbox
+
+The Python L2 writes runs in a sandbox: `run_python`, and the check of a scenario L2
+writes. Inside it the code has no network, reads only the Python environment, the
+audit's runs and `figures/`, and writes only `figures/`. It cannot read the repository's
+`.env`, your home directory or the audit's `l2/` directory. If the sandbox cannot start,
+the tool is refused and the code does not run.
+
+The sandbox is on by default for every audit that needs `--live` (L2 is a model, or the
+experiments are live), and such an audit does not start on a machine where the sandbox
+does not hold. So a live audit on Linux needs bubblewrap installed (below). `--no-sandbox`
+is the way out: L2's code then runs as you, with the network and every file you can
+read, and where your provider key is added by a proxy outside the machine (some cloud
+containers) that code can call the provider. A scripted audit (`--fake` with `--mock`)
+runs without the sandbox unless you add `--sandbox` (or set `L2_SANDBOX=1`).
+
+Not everything is sandboxed. A scenario L2 writes is imported into the audit's process
+and runs in each epoch with the OpenRouter key and the network, because its agents need
+both. So an audit counts as sandboxed only when it writes no scenarios and has none to
+import: a brief whose `allowed_changes` leave out `scenario`, or an `--analysis-only`
+audit of runs whose audit wrote no scenarios.
+
+On Linux the sandbox is bubblewrap:
+
+```bash
+sudo apt-get install bubblewrap
+# Ubuntu 24.04 and later restrict unprivileged user namespaces. If the check fails with
+# "setting up uid map: Permission denied", allow them (or add an AppArmor profile for bwrap):
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+On macOS it is `sandbox-exec`, which ships with the system. The macOS backend is new;
+the check below is what proves it on your machine. There, `run_python` cannot start
+other processes: macOS has no way to stop one that leaves the process group, so it is
+not allowed to start. It can list the names in the audit directory and in `/`, but read
+no file there.
+
+Check it before an audit (the audit runs the same check at start and does not start
+when it fails):
+
+```bash
+uv run python -m experiments.l2.sandbox --check          # "sandbox ok: bwrap", exit 0
+uv run python -m experiments.l2.sandbox --check --json   # every property, as JSON
+```
+
+It exits 1 with one line per property that did not hold, e.g. `failed: no-local-tcp:
+connected to 127.0.0.1`. It writes a few files under `logs/` and in your home directory
+for the test, and removes them.
+
 The audit directory holds `writeup.md` (L2's write-up: a results report with tables and
 figures, under a table of the audit's facts; start here), `figures/`, `report.md` (L2's claims with their verdicts, its conclusions,
 the tables they rest on, every experiment with L2's reason for running it and its variants), `claims.json` (each claim with its
 evidence and the checker's reasons), `review.json` (the reviewer's critique and L2's response), `ledger.json` (spend), `trace.jsonl` (every tool call),
-`scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch).
+`scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch). A steered
+audit also has `steer.jsonl` (every request read from its mailbox) and `report.json`.
 
 ### Continuing an audit
 

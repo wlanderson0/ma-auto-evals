@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import json
 
-import anyio
 import pytest
 
 import experiments.l2.agent as agent
 from experiments.l2.agent import brief_message, run_l2
-from experiments.l2.audit import CARRIED, CLOSING_CALLS, REVIEW_SHARE, Audit, main
-from experiments.l2.audit_report import render, write_report
+from experiments.l2.audit import CARRIED, Audit, main
+from experiments.l2.audit_report import write_report
 from experiments.l2.fake import _CLAIMS, DAVE_ON_TOWN, FULL, PROMPT, REVIEW, fake_model
 from experiments.l2.tools import Tools
 from tests.support.l2_audit import brief
@@ -93,7 +92,7 @@ def test_continuing_numbers_new_experiments_and_calls_after_the_earlier_ones(
               ("request_review", conclude),
               ("end_audit", {**conclude, "response": "Kept."})]
     run_l2(tools, fake_model(script), PROMPT, prices=PRICES)
-    assert audit.ended and not tools.unrevised
+    assert audit.ended and tools.ended_by_harness is None
     assert [p.name for p in audit.experiments()] == ["exp-1", "exp-2"]
     rows = tools.trace()
     assert min(r["seq"] for r in rows[first:]) == first + 1
@@ -128,7 +127,7 @@ def test_the_cli_continues_with_the_earlier_brief(tmp_path, earlier, monkeypatch
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     with pytest.raises(SystemExit) as stop:  # the stand-in never ends the audit
         main(["--continue", str(earlier.out), "--out", str(tmp_path / "a"), "--mock",
-              "--live"])
+              "--live", "--no-sandbox"])
     assert stop.value.code == 2
     [audit] = seen
     assert audit.carried["experiments"] == ["exp-1"]
@@ -145,16 +144,6 @@ def test_the_cli_continues_with_the_earlier_brief(tmp_path, earlier, monkeypatch
 
 
 # --------------------------------------------------------- concluding (#54)
-def test_the_reserve_covers_what_concluding_costs(tmp_path):
-    audit = Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True)
-    assert audit.budget()["reserve_usd"] == pytest.approx(0.1)  # no call yet: the share
-    audit.set_l2_spend({"usd": 0.01, "by_model": {"m": {"calls": 1}}})
-    assert audit.budget()["reserve_usd"] == pytest.approx(0.1)  # the share is more
-    audit.set_l2_spend({"usd": 0.31, "by_model": {"m": {"calls": 2}}})  # a $0.30 call
-    closing = CLOSING_CALLS * 0.30 / (1 - REVIEW_SHARE)
-    assert audit.budget()["reserve_usd"] == pytest.approx(closing)
-    audit.set_l2_spend({"usd": 0.51, "by_model": {"m": {"calls": 4}}})  # $0.10 a call
-    assert audit.last_call_usd == pytest.approx(0.10)
 
 
 def test_an_end_audit_before_the_review_sends_the_draft_to_the_review(tmp_path,
@@ -171,43 +160,16 @@ def test_an_end_audit_before_the_review_sends_the_draft_to_the_review(tmp_path,
     assert all(r["ok"] for r in l2_rows)  # nothing refused, no turn lost
 
 
-def test_after_the_review_l2_gets_one_last_turn_past_the_budget(tmp_path, offline_module):
-    """The review spends what was left; L2 still revises and ends the audit."""
+def test_after_the_review_l2_revises_in_its_closing_turns(tmp_path, offline_module):
+    """The review spends what was left; L2 still revises and ends the audit in a closing
+    turn (``agent.CLOSING_OVERRUN``)."""
     audit = Audit.create(brief(tmp_path, 0.003), tmp_path / "audit", mock=True)
     tools = Tools(audit, on_end=write_report)
     run_l2(tools, fake_model([("request_review", DRAFT),
                               ("end_audit", {**FINAL, "response": "Kept."})]),
            PROMPT, prices=PRICES, token_limit=10**6)
-    assert audit.budget()["remaining_usd"] < 0  # the last turn went over
-    assert audit.ended and not tools.unrevised
+    assert audit.budget()["remaining_usd"] < 0  # the closing turn went over
+    assert audit.ended and tools.ended_by_harness is None
     assert tools.conclusions == "Final: nothing is concluded."
 
 
-def test_a_reviewed_draft_is_kept_when_l2_never_revises(tmp_path, offline_module):
-    """L2's last turn fails (no response), so its reviewed draft is kept, marked."""
-    audit = Audit.create(brief(tmp_path, 0.003), tmp_path / "audit", mock=True)
-    tools = Tools(audit, on_end=write_report)
-    run_l2(tools, fake_model([("request_review", DRAFT), ("end_audit", FINAL)]),
-           PROMPT, prices=PRICES, token_limit=10**6)
-    assert tools.unrevised and tools.conclusions == "Draft: nothing is concluded."
-    assert json.loads((audit.out / "claims.json").read_text()) == []
-    report = (audit.out / "report.md").read_text()
-    assert "its reviewed draft is kept as its conclusions and claims, not revised" in report
-    assert "## Conclusions (L2's reviewed draft, not revised" in report
-    assert "> Draft: nothing is concluded." in report
-    writeup = (audit.out / "writeup.md").read_text()
-    assert "**Draft:** L2 did not end the audit" in writeup
-    assert "its reviewed draft is kept" in writeup
-
-
-def test_without_a_review_nothing_is_adopted(tmp_path):
-    tools = Tools(Audit.create(brief(tmp_path, 1.0), tmp_path / "audit", mock=True))
-    tools.needs_review = True
-    assert not tools.adopt_draft() and tools.conclusions is None
-    assert "Status: not ended by L2: stopped" in render(tools, "stopped")
-
-    async def review(tools, draft):
-        return {"critique": "1. A point.", "calls": [], "cost_usd": 0.0, "stopped": None}
-
-    assert anyio.run(lambda: tools.reviewed_call(review, **DRAFT))[0]
-    assert tools.adopt_draft() and not tools.adopt_draft()  # once, then it has conclusions

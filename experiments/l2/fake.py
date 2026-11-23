@@ -10,7 +10,7 @@ from ``REVIEW`` instead, and submits ``REVIEW``'s critique when told to.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from inspect_ai.model import Model, ModelOutput, ModelUsage, get_model
@@ -64,7 +64,8 @@ ANALYSIS: list[tuple[str, dict[str, Any]]] = [
     *[(name, {"conclusions": ("Fake L2 (scripted, analysis only): nothing is concluded. "
                               "Search: 0 variants run, 1 scorer (probe), 1 comparison."),
               "claims": json.dumps([{"text": "M1 against M0, as read in call 3.",
-                                     "kind": "other", "evidence": [{"call": 3}]}]),
+                                     "kind": "other", "evidence": [{"call": 3}],
+                                     "why_unchecked": "Qualitative: no measure was declared."}]),
               "writeup": "Fake L2 (analysis only): nothing is concluded.\n\n"
                          "![M1 against M0](figures/M1-vs-M0-probe.png)", **more})
       for name, more in (("request_review", {}),
@@ -86,12 +87,16 @@ REVIEW: list[tuple[str, dict[str, Any]]] = [
 
 def fake_model(script: Sequence[tuple[str, dict[str, Any]]], name: str = "mockllm/l2",
                usage: ModelUsage = USAGE,
-               review: Sequence[tuple[str, dict[str, Any]]] = REVIEW) -> Model:
+               review: Sequence[tuple[str, dict[str, Any]]] = REVIEW,
+               before: Callable[[int], None] | None = None) -> Model:
     """A mock model whose n-th reply is the script's n-th call (``review``'s, when it is
-    the reviewer)."""
+    the reviewer). ``before`` is called with L2's turn (0, 1, ...) before each of its
+    replies, e.g. to send a request to a steered audit at a chosen point."""
     def reply(messages, tools, tool_choice, config) -> ModelOutput:
         turn = sum(m.role == "assistant" for m in messages)
         calls = review if any(t.name == "submit_review" for t in tools) else script
+        if before is not None and calls is script:
+            before(turn)
         if calls is review and "submit_review now" in messages[-1].text:
             calls, turn = REVIEW, len(REVIEW) - 1  # told to submit: it submits
         function, arguments = (calls[turn] if turn < len(calls) else

@@ -5,7 +5,7 @@ description = "Petri-style automated auditing for multi-agent evaluations on Orb
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "orbit",
+    "orbit[dcop]",
     "inspect-ai>=0.3.263,<0.4",
     "pydantic>=2",
     "anyio>=4,<5",
@@ -34,7 +34,7 @@ constraint-dependencies = ["inspect-ai==0.3.263"]
 [tool.uv.sources]
 # Pinned fork of wlanderson0/orbit. For local co-development against
 # ../orbit, see README ("Working on Orbit and orbit_audit together").
-orbit = { git = "https://github.com/Danhelo/orbit", rev = "dc4ea5ee56f0a8e2ec67ecbead5aecc30a7ba508" }
+orbit = { git = "https://github.com/jrhender/orbit", rev = "b233d86ddd979ff8e87162af07ec95ce447a1620" }
 
 [build-system]
 requires = ["hatchling>=1.25"]

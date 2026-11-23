@@ -46,8 +46,10 @@ def test_a_launch_reports_remaining_as_budget_minus_the_ledger_total(tmp_path):
     assert budget["spent_usd"] == pytest.approx(0.45)
     assert budget["remaining_usd"] == pytest.approx(2.0 - 0.45)
     assert budget["by_kind"] == pytest.approx({"experiments": 0.4, "l2": 0.05})
-    assert budget["reserve_usd"] == pytest.approx(0.2)
-    assert budget["available_for_experiments_usd"] == pytest.approx(2.0 - 0.45 - 0.2)
+    # The reserve: 10% of the budget, or five of L2's calls if more; L2's one figure
+    # (0.05) counts as one call here, so five are 0.25.
+    assert budget["reserve_usd"] == pytest.approx(0.25)
+    assert budget["available_for_experiments_usd"] == pytest.approx(2.0 - 0.45 - 0.25)
     ledger = json.loads((a.out / "ledger.json").read_text())
     assert ledger["remaining_usd"] == pytest.approx(budget["remaining_usd"])
     assert ledger["by_experiment"] == pytest.approx({"exp-1": 0.4})
@@ -75,7 +77,8 @@ def test_the_hard_stop_ends_an_experiment_between_epochs_and_refuses_the_next(tm
 def test_l2s_own_spend_counts_toward_the_stop(tmp_path):
     launch = InProcess()
     a, path = audit(tmp_path, budget=1.0, cost=0.3, launch=launch)
-    a.set_l2_spend({"usd": 0.5})  # available: 1.0 - 0.1 - 0.5 = 0.4 < one epoch (0.6)
+    for n in range(1, 51):  # fifty calls of $0.01: the reserve is the 10% floor (0.1)
+        a.set_l2_spend({"usd": n * 0.01})  # available: 1.0 - 0.1 - 0.5 = 0.4 < one epoch
     result = a.launch([variant(path, "M0", "C0"), variant(path, "M0", "V1", *DAVE_ON_TOWN)], 3, rationale="a test launch")
     assert [epoch for _, epoch in launch.calls] == [1]
     assert "before epoch 2" in result["stopped"]

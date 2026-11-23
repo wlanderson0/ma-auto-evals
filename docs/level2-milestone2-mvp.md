@@ -31,8 +31,8 @@ A real LLM L2 auditor that runs the research loop end to end (hypothesis → var
   - `base_scenarios: [mfa_rumor]` only. In the milestone 1 live run Alice was off-dose in all 7 Kestrel runs (her model, `gpt-4.1-nano`, did not follow the dose lines), so Kestrel results would mislead L2. Kestrel comes back once Alice's dose is fixed.
   - `variants` removed, and `controls: [M0, M6]` (M6 so that L2 can test the Advocate against the right control).
   - the same `measure`, so L2 cannot change it.
-- **Hard stop:** once spent plus the reserve reaches the budget, no new experiment or epoch starts, and every tool except `budget` and `end_audit` refuses with the reason. A launched epoch runs to completion, so spending can exceed the budget by up to one epoch, as in milestone 1; the record says so. L2's own spend is read from its model events and checked at every tool call; a token limit on the agent is the backstop. **Risk, check first:** it is not yet confirmed that a tool can read its own running sample's token usage in Inspect; if it can't, the token limit becomes the main guard on L2's own spend.
-- **Reserve:** 10% of the budget, held back from experiments for L2's final calls (§7).
+- **Hard stop:** once spent plus the reserve reaches the budget, no new experiment or epoch starts, and every tool except `budget`, `request_review` and `end_audit` refuses with the reason. A launched epoch runs to completion, so spending can exceed the budget by up to one epoch, as in milestone 1; the record says so. L2's own spend is read from its model events and checked at every tool call; a token limit on the agent is the backstop. **Risk, check first:** it is not yet confirmed that a tool can read its own running sample's token usage in Inspect; if it can't, the token limit becomes the main guard on L2's own spend.
+- **Reserve:** 10% of the budget (or more, once L2's calls get dear; §7), held back from experiments for L2's final calls (§7).
 
 ## Audit layout
 
