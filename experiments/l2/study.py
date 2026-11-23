@@ -36,13 +36,14 @@ The **audit run** is one more Cosmos run beside the experiments'. Its folder hol
   inside the audit directory, at the same relative path, never one that leads out of it
   (at most 400, the write-up's own first; one over 10 MB is left out with a note);
   ``report.html``, the audit's ``report.md`` as a page;
-  ``study/writeup.json`` (``{"final", "body_line", "facts": [{"name", "value"}],
+  ``study/writeup.json`` (``{"final", "body_line", "question", "facts": [{"name", "value"}],
   "embeds", "missing"}``: whether the write-up is final, the line of ``writeup.md`` where
-  L2's own text starts, the harness's facts above it, the images it embeds and those that
-  are not files); and ``study/figures.json``, one entry per comparison figure, from the
-  ``.json`` ``Tools._figure`` writes beside it (``{"path", "a", "b", "scorer", "field",
-  "rounds", "measure", "call", "targets": {"<agent>": {"a": {"k", "n", "incomplete"},
-  "b": {...}}}}``, ``call`` the first ``scores`` call that draws it). Those sidecars are
+  L2's own text starts, the brief's question and the harness's facts above it, the images
+  it embeds and those that are not files); and ``study/figures.json``, one entry per
+  comparison figure, from the ``.json`` ``Tools._figure`` writes beside it (``{"path",
+  "a", "b", "scorer", "field", "rounds", "measure", "call", "targets": {"<agent>": {"a":
+  {"k", "n", "incomplete"}, "b": {...}}}}``, ``call`` the first ``scores`` call that
+  draws it). Those sidecars are
   not sent: a ``.json`` outside ``study/`` would be read as results. A part that cannot
   be made is left out with a note, never failing the export.
 
@@ -299,23 +300,31 @@ def writeup_json(audit: Path) -> dict[str, Any] | None:
     parts = json.loads(kept.read_text()) if kept.is_file() else _parts_of(text)
     found = list(dict.fromkeys(embeds(text)))
     return {"final": bool(parts["final"]), "body_line": int(parts["body_line"]),
+            **({"question": parts["question"]} if isinstance(parts.get("question"), str)
+               else {}),
             "facts": parts["facts"], "embeds": found,
             "missing": [src for src in found if embedded(audit, src) is None]}
 
 
 def _parts_of(text: str) -> dict[str, Any]:
-    """The parts of a ``writeup.md`` as ``write_writeup`` wrote it: its facts table, the
-    draft marker, and the line after the ``---`` that ends the harness's part."""
+    """The parts of a ``writeup.md`` as ``write_writeup`` wrote it: its question section
+    (when it has one), its facts table, the draft marker, and the line after the ``---``
+    that ends the harness's part."""
     lines = text.split("\n")
-    end = lines.index("---") if "---" in lines else -2
+    # the facts start after the question, which may hold a table or a rule of its own
+    top = lines.index("## Audit facts") if "## Audit facts" in lines else 0
+    end = lines.index("---", top) if "---" in lines[top:] else -2
     facts = []
-    for line in lines[:max(end, 0)]:
+    for line in lines[top:max(end, 0)]:
         cells = re.fullmatch(r"\| (.+?) \| (.*) \|", line)
         if cells:  # a fact's row; the table's empty header and rule have no cells
             facts.append({"name": cells.group(1),
                           "value": cells.group(2).replace("\\|", "|")})
-    return {"final": not any(line.startswith("> **Draft:**") for line in lines[:max(end, 0)]),
-            "body_line": end + 3, "facts": facts}
+    head = lines[:max(end, 0)]
+    question = ({"question": "\n".join(head[head.index("## Question") + 1:top]).strip()}
+                if top and "## Question" in head[:top] else {})
+    return {"final": not any(line.startswith("> **Draft:**") for line in head),
+            "body_line": end + 3, **question, "facts": facts}
 
 
 def figures_json(audit: Path, out: Path,

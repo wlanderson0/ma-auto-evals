@@ -840,7 +840,6 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
     t = audit.clock_state()
     broken = tools.broken_embeds(text)
     return [
-        ("Question", " ".join(audit.brief.question.split())),
         ("L2", ", ".join(b["l2_by_model"]) or "unknown"),
         ("Budget", f"${b['budget_usd']:.2f}"
                    + (f" (raised from ${audit.brief.budget_usd:.2f})" if b.get("raised")
@@ -873,14 +872,17 @@ def _head(tools: Tools, facts: list[tuple[str, str]], final: bool) -> list[str]:
     return [f"# {tools.audit.out.name}: L2's write-up", "",
             *([f"> **Draft:** L2 {why_draft}, so this is the draft the reviewer read, not "
                "revised.", ""] if not final else []),
+            "## Question", "", *tools.audit.brief.question.strip().split("\n"), "",
+            "## Audit facts", "",
             "| | |", "|---|---|", *[f"| {name} | {_cell(value)} |" for name, value in facts],
-            "", "The table above is the harness's, from the record. Everything below is "
-            "L2's own: its numbers are not checked here; its checked claims, with their "
-            "evidence, are in `report.md`.", "", "---", ""]
+            "", "The question is the brief's and the table above is the harness's, from the "
+            "record. Everything below is L2's own: its numbers are not checked here; its "
+            "checked claims, with their evidence, are in `report.md`.", "", "---", ""]
 
 
 def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path | None:
-    """``writeup.md`` (spec §6.6): the audit's facts, from the record, then L2's write-up.
+    """``writeup.md`` (spec §6.6): the audit's question, as the brief gives it, and its
+    facts, from the record, then L2's write-up.
     ``writeup.json`` beside it keeps the parts (``writeup_parts``) for the Cosmos export."""
     parts = writeup_parts(tools, why_no_conclusions)
     if parts is None:
@@ -891,6 +893,7 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
     path.write_text("\n".join([*_head(tools, facts, final), text, ""]))
     (tools.audit.out / "writeup.json").write_text(json.dumps(
         {"final": final, "body_line": body_line,
+         "question": tools.audit.brief.question.strip(),
          "facts": [{"name": name, "value": value} for name, value in facts]},
         indent=2) + "\n")
     return path
