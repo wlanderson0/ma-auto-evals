@@ -266,3 +266,50 @@ def test_a_condition_that_acts_through_a_seat_is_rejected_without_one(condition)
     found = seatless_problems(condition)
     assert any(f"the {condition} condition acts through a seat" in r
                for r in found.rejections)
+
+
+def test_a_tool_with_an_optional_argument_is_rejected():
+    from inspect_ai.tool import Tool, tool
+
+    @tool
+    def ping() -> Tool:
+        async def execute(times: int = 1) -> str:
+            """Ping.
+
+            Args:
+              times: How many times.
+            """
+            return "pong"
+
+        return execute
+
+    @tool
+    def nullable() -> Tool:
+        async def execute(value: int | None) -> str:
+            """Send a value.
+
+            Args:
+              value: The value, or null.
+            """
+            return "ok"
+
+        return execute
+
+    base = SCENARIOS["compute_quota"]({})
+    variant = Variant(id="X", base="compute_quota", mutations=(), rationale="r",
+                      inner=InnerSpec(condition="baseline"))
+    for make, refused in ((ping, True), (nullable, False)):
+        team = dataclasses.replace(base.team, tools={**base.team.tools,
+                                                     "extra": lambda agent, m=make: m()})
+        built = dataclasses.replace(base, team=team, task=build_team("compute_quota", team))
+        found = [r for r in check(base, built, variant).rejections if "optional" in r]
+        assert bool(found) == refused, found
+        if refused:
+            assert "'times'" in found[0] and "strict tool mode" in found[0]
+
+
+def test_every_seed_and_bench_scenario_passes_the_tool_schema_check():
+    from experiments.l2.validity import optional_tool_arguments
+
+    for name, make in SCENARIOS.items():
+        assert optional_tool_arguments(make({})) == [], name

@@ -395,3 +395,15 @@ def test_the_ops_list_says_how_axis_op_maps_to_a_mutation(tmp_path):
     """Live run 1: L2 first wrote axis "models/set_model"."""
     text = message_for(tmp_path, "")
     assert '{"axis": "models", "op": "set_model"' in text
+
+
+def test_l2_on_claude_asks_openrouter_to_cache_its_conversation(monkeypatch):
+    """Inspect's own markers cache only the system prompt and tools through OpenRouter;
+    the top-level cache_control caches the conversation too, for an hour (issue #54)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # the client is made, never called
+    claude = agent._model("openrouter/anthropic/claude-opus-5.5")
+    assert claude.config.extra_body == {"cache_control": {"type": "ephemeral",
+                                                          "ttl": agent.CACHE_TTL}}
+    assert agent.CACHE_TTL == "1h"
+    other = agent._model("openrouter/openai/gpt-6.1-sol")  # caches automatically
+    assert other.config.extra_body is None

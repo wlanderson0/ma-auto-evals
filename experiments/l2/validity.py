@@ -102,6 +102,7 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
     elif built.intended_dose is not None and built.base not in DOSE_BASES:
         rejections.append(f"a seat dose is only measured on {list(DOSE_BASES)} (its "
                           f"classifier is kestrel_dose), not on {built.base!r}")
+    rejections.extend(optional_tool_arguments(built))
     if built.activations and built.mention is not None:
         rejections.append("a mention variant cannot have an activation in milestone 1: its "
                           "per-round counts need rounds of equal length")
@@ -142,6 +143,28 @@ def check(base: Scenario, built: Scenario | None, variant: Variant,
                 warnings.append(f"the target {target!r} cannot be reached from the seat "
                                 f"{seat!r}")
     return Problems(rejections=_unique(rejections), warnings=_unique(warnings))
+
+
+def optional_tool_arguments(built: Scenario) -> list[str]:
+    """Agent tools with an optional argument. Inspect sends tool schemas to OpenAI-style
+    models in strict mode, where every argument must be required: such a tool is refused
+    with a 400 before any call is made, so every live sample errors, while the mocks
+    (dry runs included) never check schemas. Reads the team's tool factories (scenarios
+    built with ``team_setup``); other scenarios are not checked."""
+    from inspect_ai.tool import ToolDef
+
+    if built.team is None or not built.team.roster:
+        return []
+    found = []
+    for name, make in built.team.tools.items():
+        params = ToolDef(make(built.team.roster[0])).parameters
+        if optional := sorted(set(params.properties) - set(params.required)):
+            found.append(
+                f"tool {name!r}: argument(s) {optional} are optional, and strict tool mode "
+                "(OpenAI models) refuses a tool unless every argument is required: make "
+                "them required (typed '... | None', with no default, if null must be "
+                "allowed)")
+    return found
 
 
 def reachable(seat: str, channels: list, relays: Iterable[str] | None = None) -> set[str]:

@@ -18,6 +18,7 @@ from __future__ import annotations
 import glob
 import json
 import re
+import urllib.parse
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -118,6 +119,26 @@ def proposals(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(best.values())
 
 
+def blocked_line(tools: Tools) -> str | None:
+    """How many of L2's replies its provider's safeguards withheld, if any (issue #55)."""
+    b = tools.blocked
+    if not b or not b["blocked"]:
+        return None
+    return (f"L2's model provider's safeguards withheld {b['blocked']} of its {b['calls']} "
+            "replies (stop_reason content_filter); what L2 meant to do in them is unknown.")
+
+
+def carried_line(audit: Any) -> str:
+    """What a continued audit took over from the earlier one (``carried.json``)."""
+    carried = audit.carried
+    spent = carried.get("spent_usd")
+    return (f"This audit continues {carried['from']}: its experiments "
+            f"({', '.join(carried.get('experiments') or []) or 'none'}), scenarios and calls "
+            f"1 to {carried.get('calls', 0)} were carried over"
+            + (f", and the ${spent:.4f} spent there is not counted in this audit's budget"
+               if spent is not None else "") + ".")
+
+
 def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
     audit = tools.audit
     brief = audit.brief
@@ -129,6 +150,10 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
              "Experiments ran on " + ("the offline mock models." if audit.mock else
                                       "live models."))
     out += [f"Status: {status}. {where}", ""]
+    if blocked := blocked_line(tools):
+        out += [blocked, ""]
+    if audit.carried is not None:
+        out += [carried_line(audit), ""]
     if audit.sandbox is not None:
         out += [f"L2's own code (`run_python`, the check of a written scenario) ran in a "
                 f"sandbox ({audit.sandbox.kind}): no network, writes only under `figures/`. "
@@ -162,7 +187,9 @@ def render(tools: Tools, why_no_conclusions: str | None = None) -> str:
             f"- Left to L2: {', '.join(open_) or 'none'}", ""]
 
     out += _claims(tools)
-    out += ["## Conclusions (L2's own words, quoted; not checked)", ""]
+    out += ["## Conclusions (L2's " + ("reviewed draft, not revised; its"
+                                       if tools.ended_by_harness is not None
+                                       else "own") + " words, quoted; not checked)", ""]
     if tools.conclusions is not None:
         out += [f"> {line}" if line.strip() else ">" for line in tools.conclusions.splitlines()]
     else:
@@ -398,19 +425,22 @@ def _claims(tools: Tools) -> list[str]:
                 "(kind other, marked below): the numbers are L2's own, from code or reading, "
                 "not a declared measure on the logs. Treat them as leads, not findings.", ""]
     links = _cosmos(tools)
-    if links:
-        out += ["Each claim links to its evidence on Cosmos: the messages it quotes, and every "
-                "run its counts come from (✓ the target showed the behaviour, ✗ it did not, "
-                "? unknown).", ""]
-    order = {v: i for i, v in enumerate(("contradicted", "invalid", "lead", "unchecked",
-                                         "checked"))}
-    for i, claim in sorted(enumerate(tools.claims, 1),
-                           key=lambda pair: order.get(pair[1]["verdict"], 0)):
+    out += [*claims_table(tools, links), ""]
+    every_run: list[str] = []
+    for i, claim in enumerate(tools.claims, 1):
         out += claim_lines(i, claim)
         try:
-            out += [f"   - {line}" for line in _claim_links(tools, claim, links)]
+            found = _claim_links(tools, claim, links)
         except Exception as error:  # the report is still written
-            out.append(f"   - (Cosmos links could not be made: {_inline(error)})")
+            found = [f"(Cosmos links could not be made: {_inline(error)})"]
+        out += [f"   - {line}" for line in found if not line.startswith(EACH_RUN)]
+        every_run += [f"- Claim {i}: {line[len(EACH_RUN):]}" for line in found
+                      if line.startswith(EACH_RUN)]
+    if every_run:
+        out += ["", "### Every run behind the claims, on Cosmos", "",
+                "For each claim on a rate or a comparison, the target in every run of its "
+                "variants: ✓ it showed the behaviour, ✗ it did not, ? unknown.", "",
+                *every_run]
     try:
         where = _where(tools)
     except Exception as error:  # the report is still written
@@ -418,6 +448,97 @@ def _claims(tools: Tools) -> list[str]:
                  f"(could not be worked out: {_inline(f'{type(error).__name__}: {error}')})",
                  ""]
     return out + ["", *where]
+
+
+EACH_RUN = "On Cosmos, "
+"""How a claim's per-run links start (``_claim_links``); the report lists them after the
+claims, so each claim stays short."""
+WRITEUP_CLAIMS = "<!-- checked claims: written by the harness, not by L2 -->"
+"""Where the harness's table of checked claims starts in ``writeup.md``."""
+
+
+def claims_table(tools: Tools, links: dict[str, Any] | None = None) -> list[str]:
+    """The claims at a glance: number, verdict, words, counts (the checker's own reading),
+    and where to see them on Cosmos (the experiment, and an example run or the message
+    quoted)."""
+    if not tools.claims:
+        return []
+    rows = ["| # | verdict | claim | counts | on Cosmos |", "|---|---|---|---|---|"]
+    for i, claim in enumerate(tools.claims, 1):
+        try:
+            where = _example_links(tools, claim, links or {})
+        except Exception:  # the table is still written
+            where = []
+        rows.append(f"| {i} | **{claim['verdict']}** | {_cell(_short(claim['text'], 160))} | "
+                    f"{_cell(_counts(claim))} | {' · '.join(where) or '-'} |")
+    return rows
+
+
+def _short(text: Any, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _counts(claim: dict[str, Any]) -> str:
+    """The claim's counts as the checker read them: the k/n part of its first reason."""
+    for reason in claim.get("reasons") or []:
+        found = (re.search(r"\S+ \d+/\d+ vs \S+ \d+/\d+", str(reason))
+                 or re.search(r"\d+/\d+", str(reason)))
+        if found:
+            return found.group(0).replace("\\", "")
+    if claim["kind"] == "rate" and "k" in claim and "n" in claim:
+        return f"{claim['k']}/{claim['n']}"
+    return ""
+
+
+def _example_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> list[str]:
+    """Where to look first on Cosmos: the experiment run holding the claim's variant, a
+    run where the target showed the behaviour (✓), and the first message it quotes."""
+    if not links:
+        return []
+    out = []
+    posts = [links["posts"].get(f"{r['variant']}/{r['epoch']}/{r['post']}")
+             for r in claim["evidence"] if "call" not in r]
+    if posts and posts[0]:
+        out.append(f"[quoted message]({posts[0]})")
+    if claim["kind"] not in ("rate", "difference", "no_difference"):
+        return out
+    vid = claim["variant"] if claim["kind"] == "rate" else claim["a"]
+    results = tools.results()
+    exp = tools._where.get(vid)
+    if exp and (run := links.get("runs", {}).get(exp)):
+        out.insert(0, f"[{exp}]({run})")
+    used = claims_.basis(tools, claim)
+    if used is None:
+        return out
+    for sample in sorted(results.of(vid), key=lambda s: s.epoch):
+        try:
+            did = results.adopted(sample, claim["target"], used["scorer"], used["rounds"],
+                                  used["field"])
+        except ValueError:
+            continue
+        url = links["samples"].get(f"{vid}/{sample.epoch}")
+        if did and url:
+            out.append(f"[{_inline(vid)} epoch {sample.epoch} ✓]({url})")
+            if used["scorer"] == "outcome" and (names := scenario_tools(tools, vid)):
+                calls = tools.tool_calls(sample, claim["target"], names)
+                if calls:
+                    out.append(f"[its first {_inline(calls[0]['function'])} call]"
+                               f"({call_url(url, claim['target'], calls[0])})")
+            break
+    return out
+
+
+def writeup_claims(tools: Tools, links: dict[str, Any] | None = None) -> list[str]:
+    """The harness's part at the end of ``writeup.md``: the checked claims at a glance,
+    with their evidence on Cosmos once the audit is shared."""
+    if not tools.claims:
+        return []
+    note = ("Each claim's evidence is linked on Cosmos." if links else
+            "Links to Cosmos are added when the audit is shared.")
+    return [WRITEUP_CLAIMS, "", "## Claims, as checked against the logs", "",
+            f"The harness's reading of L2's claims (details in `report.md`). {note}", "",
+            *claims_table(tools, links)]
 
 
 def claim_lines(i: int, claim: dict[str, Any]) -> list[str]:
@@ -520,11 +641,76 @@ def _claim_links(tools: Tools, claim: dict[str, Any], links: dict[str, Any]) -> 
             cells.append(f"[{sample.epoch} {mark}]({url})" if url else
                          f"{sample.epoch} {mark} (not on Cosmos)")
         if cells:
-            out.append(f"On Cosmos, {_inline(claim['target'])} in each run of "
+            out.append(f"{EACH_RUN}{_inline(claim['target'])} in each run of "
                        f"{_inline(vid)}, as call {used['call']} read it (epoch, then ✓/✗): "
                        + " ".join(cells))
         if used["scorer"] == "counts":
             out += _counted(tools, claim["target"], vid, used, links)
+        if used["scorer"] == "outcome":
+            out += _called(tools, claim["target"], vid, used, links)
+    return out
+
+
+CALLS_PER_RUN = 8
+"""Tool calls linked per run (``_called``); the rest are counted."""
+
+
+def scenario_tools(tools: Tools, vid: str) -> tuple[str, ...]:
+    """The tools the variant's scenario gives its agents (``outcome`` reads their record),
+    by the names agents call them; none for a scenario without a team setup."""
+    results = tools.results()
+    team = getattr(results.scenario(results.base(vid)), "team", None)
+    return tuple(team.tools) if team is not None else ()
+
+
+def call_url(sample_url: str, agent: str, call: dict[str, Any]) -> str:
+    """A Cosmos link that opens at a tool call, in the agent's own conversation."""
+    query = urllib.parse.urlencode({"branch": call["branch"], "kind": "agent",
+                                    "agent": agent})
+    return f"{sample_url}?{query}#call-{urllib.parse.quote(str(call['id']), safe='')}"
+
+
+def _call_label(call: dict[str, Any]) -> str:
+    """The call's name and its first short text argument (e.g. a username)."""
+    first = next((v for v in call["arguments"].values()
+                  if isinstance(v, str) and v and not v.startswith("attachment:")), None)
+    return call["function"] + (f" {_short(first, 24)}" if first else "")
+
+
+def _called(tools: Tools, target: str, vid: str, used: dict[str, Any],
+            links: dict[str, Any]) -> list[str]:
+    """For a claim on a scenario's ``outcome``, each run where the target showed the
+    behaviour, with the target's calls to the scenario's own tools linked on Cosmos (the
+    calls whose record the outcome reads)."""
+    names = scenario_tools(tools, vid)
+    if not names:
+        return []
+    results, runs, off = tools.results(), [], []
+    for sample in sorted(results.of(vid), key=lambda s: s.epoch):
+        try:
+            did = results.adopted(sample, target, used["scorer"], used["rounds"],
+                                  used["field"])
+        except ValueError:
+            continue
+        url = links["samples"].get(f"{vid}/{sample.epoch}")
+        if not did or not url:
+            continue
+        try:
+            calls = tools.tool_calls(sample, target, names)
+        except Exception:  # an unreadable log: this run only
+            off.append(f"epoch {sample.epoch} (its log could not be read)")
+            continue
+        cells = [f"[{_inline(_call_label(c))}]({call_url(url, target, c)})"
+                 for c in calls[:CALLS_PER_RUN]]
+        more = len(calls) - CALLS_PER_RUN
+        runs.append(f"epoch {sample.epoch}: " + (", ".join(cells) or "no calls")
+                    + (f" (+{more} more)" if more > 0 else ""))
+    out = []
+    if runs:
+        out.append(f"{EACH_RUN}{_inline(target)}'s calls to the scenario's tools in each run "
+                   f"of {_inline(vid)} where it showed the behaviour: " + "; ".join(runs))
+    if off:
+        out.append(f"Tool calls not linked in {_inline(vid)}: " + "; ".join(off))
     return out
 
 
@@ -781,6 +967,14 @@ def relink(out: Path) -> Path:
         tools.claims = json.loads((out / "claims.json").read_text())
     section = "\n".join(_claims(tools))
     report.write_text(text[:start] + section.rstrip("\n") + "\n" + text[end:])
+    writeup = out / "writeup.md"
+    if writeup.exists():  # its table of claims, with the links (L2's text is kept as it is)
+        body = writeup.read_text()
+        cut = body.find(WRITEUP_CLAIMS)
+        body = body if cut < 0 else body[:cut]
+        tail = writeup_claims(tools, _cosmos(tools))
+        writeup.write_text(body.rstrip("\n") + "\n\n" + "\n".join(tail) + "\n" if tail
+                           else body)
     return report
 
 
@@ -847,7 +1041,9 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
                       else "") + f"; ${b['spent_usd']:.4f} spent "
                    f"(${usd['l2']:.4f} on L2's own calls"
                    + (f", of which ${reviewer:.4f} the reviewer" if reviewer else "")
-                   + f"; ${usd['experiments']:.4f} on runs)"),
+                   + f"; ${usd['experiments']:.4f} on runs)"
+                   + (f"; ${b['carried_usd']:.4f} spent by the audit it continues, not "
+                      "counted" if b.get("carried_usd") is not None else "")),
         ("Time", f"{t['elapsed_s'] / 60:.1f} min" + (
             f" of a {t['time_limit_s'] / 60:.1f}-min limit" if t["time_limit_s"] else "")
          if t["elapsed_s"] is not None else "not recorded"),
@@ -858,6 +1054,9 @@ def _facts(tools: Tools, text: str, why_no_conclusions: str | None) -> list[tupl
          if tools.conclusions is not None and tools.ended_by_harness is None
          else how_it_ended(tools, why_no_conclusions)),
         ("Stopped", b["stopped"] or b["halted"] or "no"),
+        *([("Withheld by L2's provider", f"{tools.blocked['blocked']} of "
+            f"{tools.blocked['calls']} replies (content_filter)")]
+          if tools.blocked and tools.blocked["blocked"] else []),
         ("Claims", (claims_.summary(tools.claims) if tools.claims is not None
                     else "none recorded") + " (see report.md)"),
         *([("Images that will not show", ", ".join(broken))] if broken else []),
@@ -888,7 +1087,9 @@ def write_writeup(tools: Tools, why_no_conclusions: str | None = None) -> Path |
     facts, final, body_line = parts
     text, _ = writeup_text(tools) or ("", final)
     path = tools.audit.out / "writeup.md"
-    path.write_text("\n".join([*_head(tools, facts, final), text, ""]))
+    tail = writeup_claims(tools, _cosmos(tools))
+    path.write_text("\n".join([*_head(tools, facts, final), text, "",
+                               *([*tail, ""] if tail else [])]))
     (tools.audit.out / "writeup.json").write_text(json.dumps(
         {"final": final, "body_line": body_line,
          "facts": [{"name": name, "value": value} for name, value in facts]},

@@ -11,7 +11,7 @@ from inspect_ai.log import read_eval_log, resolve_sample_attachments
 
 from experiments.l2.agent import run_l2
 from experiments.l2.audit import Audit
-from experiments.l2.audit_report import write_report, writeup_parts
+from experiments.l2.audit_report import WRITEUP_CLAIMS, write_report, writeup_parts
 from experiments.l2.fake import FULL, PROMPT, fake_model
 from experiments.l2.figures import figure_name, wilson
 from experiments.l2.tools import Tools
@@ -51,7 +51,10 @@ def test_every_comparison_draws_a_figure_and_names_it(written):
 def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
     tools, _ = written
     text = (tools.audit.out / "writeup.md").read_text()
-    facts, body = text.split("\n---\n", 1)
+    facts, rest = text.split("\n---\n", 1)
+    body, tail = rest.split(WRITEUP_CLAIMS)  # L2's text, then the harness's claims table
+    assert "## Claims, as checked against the logs" in tail and "| 1 | **checked** |" in tail
+    assert "Links to Cosmos are added when the audit is shared." in tail
     assert "| Runs (variant × epochs run) | exp-1: C0 × 2, V1 × 2 |" in facts
     assert "| Claims | 1 checked (see report.md) |" in facts
     assert "| How it ended | L2 ended the audit |" in facts
@@ -60,7 +63,8 @@ def test_the_write_up_is_the_audit_s_facts_then_l2_s_text(written):
     assert body.strip() == FULL[-1][1]["writeup"].strip()
     facts, final, body_line = writeup_parts(tools)
     assert final and ("How it ended", "L2 ended the audit") in facts
-    assert "\n".join(text.split("\n")[body_line - 1:]).strip() == body.strip()
+    assert "\n".join(text.split("\n")[body_line - 1:]).split(WRITEUP_CLAIMS)[0].strip() \
+        == body.strip()
     assert json.loads((tools.audit.out / "writeup.json").read_text()) == {
         "final": True, "body_line": body_line,
         "facts": [{"name": name, "value": value} for name, value in facts]}

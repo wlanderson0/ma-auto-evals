@@ -40,6 +40,15 @@ also stops a running experiment before its next epoch; a first Ctrl-C lets it fi
 (spec §9.4). It stops runs the same way: what is available for experiments is capped
 by what is left of it, so the between-epoch check stops at it, and once it is spent
 no new experiment starts. The query tools still work, since only runs are capped.
+
+**Continuing an audit.** ``Audit.create(..., carry=<earlier audit>)`` starts a new audit
+from where an earlier one stopped: its written scenarios, experiments and record of
+calls (``trace.jsonl``, ``launches.jsonl``, ``proposed.jsonl``, ``decisions.jsonl``,
+``figures/``) are copied in, so L2 reads and cites them as its own, and new
+experiments and calls are numbered after them. ``carried.json`` says what came from
+where; the earlier spend is recorded there and not counted against the new budget. The
+earlier review and claims, if any, are kept as ``carried-review.json`` and
+``carried-claims.json``: L2 is shown them, but they are not this audit's.
 """
 
 from __future__ import annotations
@@ -75,6 +84,11 @@ CLOSING_TURNS = 5
 two of the reviewer's, L2's end_audit turn and one spare. Each is priced at the dearest
 of L2's latest calls (``turn_usd``), since L2's context, and so its cost per call, grows
 through the audit."""
+CARRIED = "carried.json"
+"""What a continued audit took over from the earlier one (``Audit.create(carry=...)``)."""
+CARRIED_FILES = ("trace.jsonl", "launches.jsonl", "proposed.jsonl", "decisions.jsonl")
+"""The earlier audit's record a continued audit copies, beside its experiments,
+scenarios and figures."""
 TIME_RESERVE = 0.10
 """Share of the time limit held back for L2's report: once only this is left, no new
 experiment or epoch starts (spec §7)."""
@@ -138,6 +152,8 @@ class Audit:
         """Whether a launch is running (its record is still to be written)."""
         self.notes: list[str] = []
         """Problems with the ledger itself (e.g. L2's log could not be priced)."""
+        self.carried: dict[str, Any] | None = _json(self.out / CARRIED) or None
+        """What this audit continues from (``carried.json``), if it continues one."""
         self.progress = progress
         """Called with each progress event (``say``); the CLI shows them
         (``experiments.l2.progress``). None: silent."""
@@ -146,8 +162,10 @@ class Audit:
         ``None``: outside any sandbox, as before (``experiments.l2.sandbox``)."""
 
     @classmethod
-    def create(cls, brief_path: str | Path, out: str | Path, **options: Any) -> Audit:
-        """A new audit in ``out`` (new or empty), with a copy of the brief."""
+    def create(cls, brief_path: str | Path, out: str | Path, *, carry: str | Path | None = None,
+               **options: Any) -> Audit:
+        """A new audit in ``out`` (new or empty), with a copy of the brief. ``carry``: an
+        earlier L2 audit this one continues (see the module docstring)."""
         brief_path, out = Path(brief_path), Path(out)
         brief = parse_brief(brief_path)
         if out.exists() and any(out.iterdir()):
@@ -155,8 +173,17 @@ class Audit:
         analysis = options.get("analysis")
         if analysis is not None and not (Path(analysis) / "runs.jsonl").exists():
             raise FileNotFoundError(f"{analysis} is not a milestone 1 audit (no runs.jsonl)")
+        if carry is not None:
+            if analysis is not None:
+                raise ValueError("an analysis-only audit cannot continue another audit")
+            carry = Path(carry)
+            if not (carry / "trace.jsonl").exists() or not (carry / "brief.md").exists():
+                raise FileNotFoundError(f"{carry} is not an L2 audit (no trace.jsonl or "
+                                        "brief.md)")
         out.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(brief_path, out / "brief.md")
+        if carry is not None:
+            carry_over(carry, out)
         audit = cls(out, brief, **options)
         audit.write_ledger()
         return audit
@@ -234,8 +261,13 @@ class Audit:
 
     # ---------------------------------------------------------------- ledger
     def experiment_spend(self) -> dict[str, float]:
+        """Each experiment's spend, the carried-over ones (``carried.json``) left out: the
+        earlier audit paid for them."""
         spend = {}
+        carried = set((self.carried or {}).get("experiments", ()))
         for exp in self.experiments():
+            if exp.name in carried:
+                continue
             cost = exp / "cost.json"
             spend[exp.name] = (json.loads(cost.read_text())["spent_usd"] if cost.exists()
                                else 0.0)
@@ -364,6 +396,7 @@ class Audit:
             "run_budget_usd": cap, "run_budget_left_usd": None if cap is None else cap - runs,
             "by_kind": {"experiments": sum(experiments.values()), "l2": self.l2["usd"]},
             "by_experiment": experiments, "l2_by_model": self.l2["by_model"],
+            "carried_usd": None if self.carried is None else self.carried["spent_usd"],
             **self.clock_state(), "halted": self.halted,
             "stopped": self.stop_reason(spent, reserve, total),
             **({"raised": list(self.raises)} if self.raises else {})}
@@ -631,11 +664,51 @@ def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+def _calls(by_model: dict[str, Any]) -> int:
+    """How many model calls a ``by_model`` spend row counts."""
+    return sum(int(row.get("calls") or 0) for row in by_model.values()
+               if isinstance(row, dict))
+
+
+def carry_over(earlier: Path, out: Path) -> dict[str, Any]:
+    """Copy what an audit continuing ``earlier`` takes over into ``out``, and write
+    ``carried.json``: where it came from, the experiments taken over, what the earlier
+    audit spent (not counted against the new budget), and how many calls its record holds
+    (new calls are numbered after them). The earlier audit is only read."""
+    for name in CARRIED_FILES:
+        if (earlier / name).exists():
+            shutil.copyfile(earlier / name, out / name)
+    for folder in ("experiments", "figures"):
+        if (earlier / folder).is_dir():
+            shutil.copytree(earlier / folder, out / folder)
+    if (earlier / "scenarios").is_dir():
+        (out / "scenarios").mkdir()
+        for path in (earlier / "scenarios").iterdir():  # the code and its hashes only
+            if path.is_file() and path.suffix in (".py", ".sha256"):
+                shutil.copyfile(path, out / "scenarios" / path.name)
+    experiments = sorted((p.name for p in (out / "experiments").iterdir()
+                          if p.is_dir() and p.name.startswith("exp-") and p.name[4:].isdigit()),
+                         key=lambda name: int(name[4:])) if (out / "experiments").is_dir() else []
+    for name in ("review.json", "claims.json"):  # shown to L2, not part of the new record
+        if (earlier / name).exists():
+            shutil.copyfile(earlier / name, out / f"carried-{name}")
+    ledger = _json(earlier / "ledger.json")
+    trace = (earlier / "trace.jsonl").read_text().splitlines()
+    carried = {"from": str(earlier.resolve()), "experiments": experiments,
+               "spent_usd": ledger.get("spent_usd"),
+               "by_kind": ledger.get("by_kind"), "calls": sum(1 for line in trace if line.strip())}
+    (out / CARRIED).write_text(json.dumps(carried, indent=1, sort_keys=True) + "\n")
+    return carried
+
+
 # --------------------------------------------------------------------- CLI
 def main(argv: Sequence[str] | None = None) -> None:
     """``python -m experiments.l2.audit (--brief <brief> | --question <text> --budget <usd>)
     [--mock] [--fake] [--model M] [--analysis-only <milestone 1 audit dir>]
-    [--sandbox | --no-sandbox] [--steer]``.
+    [--sandbox | --no-sandbox] [--steer] [--continue <L2 audit dir>]``.
+
+    ``--continue`` starts a new audit from an earlier one (``Audit.create(carry=...)``),
+    with ``--brief`` or, without it, the earlier audit's brief.
 
     ``--question`` with ``--budget`` is the shortest brief: the question and the budget,
     everything else left to L2 (spec §1.1); the audit keeps it as its ``brief.md``.
@@ -665,7 +738,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     from experiments.l2.tools import Tools
 
     parser = argparse.ArgumentParser(description="Run an L2 audit (milestone 2).")
-    given = parser.add_mutually_exclusive_group(required=True)
+    given = parser.add_mutually_exclusive_group()
     given.add_argument("--brief", type=Path)
     given.add_argument("--question", help="a plain-text brief: the question alone, with "
                                           "--budget; L2 decides everything else")
@@ -687,6 +760,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                              "--mock); without it, anything that would spend money stops")
     parser.add_argument("--analysis-only", type=Path, default=None, metavar="AUDIT",
                         help="read this milestone 1 audit; run_experiment is off")
+    parser.add_argument("--continue", dest="carry", type=Path, default=None, metavar="AUDIT",
+                        help="continue this earlier L2 audit: its scenarios, experiments and "
+                             "calls are carried over, its spend is not counted against the "
+                             "new budget, and L2 is shown its draft and the review; the "
+                             "brief is --brief, or the earlier audit's")
     parser.add_argument("--share", action="store_true",
                         help="when the audit ends, upload its experiments to Cosmos and link "
                              "the report to them (experiments.l2.share)")
@@ -713,6 +791,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if (args.question is None) != (args.budget is None):
         parser.error("--question and --budget go together (a --brief sets its own budget)")
+    if args.carry is not None:
+        if args.question is not None or args.analysis_only is not None:
+            parser.error("--continue takes --brief (or the earlier audit's brief), not "
+                         "--question or --analysis-only")
+        if args.brief is None:
+            args.brief = args.carry / "brief.md"
+    elif args.brief is None and args.question is None:
+        parser.error("one of --brief, --question or --continue is required")
     if args.time_limit is not None and not args.time_limit > 0:
         parser.error("--time-limit must be a positive number of seconds")
     if args.fake and args.model:
@@ -742,6 +828,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise SystemExit(f"{what} need OPENROUTER_API_KEY (environment or .env)")
     out = args.out or Path(f"logs/l2-audit/{time.strftime('%Y%m%d-%H%M%S')}"
                            + ("-analysis" if args.analysis_only else "")
+                           + ("-continued" if args.carry else "")
                            + ("-mock" if args.mock else "") + ("-fake" if args.fake else ""))
     try:  # refused before anything is made
         steering = steer_.configure(out, flag=args.steer)
@@ -798,7 +885,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                 raise SystemExit(f"the mailbox {steering[0].path} is inside {inside}, which "
                                  "the sandbox can read: put it outside (COSMOS_STEER_DIR)")
         audit = Audit.create(brief_path, out, mock=args.mock, analysis=args.analysis_only,
-                             history=args.history, sandbox=sandbox)
+                             history=args.history, sandbox=sandbox,
+                                 carry=args.carry)
     if steering is not None:
         mailbox, limit = steering
         audit.steering = steer_.Steering(mailbox, audit, max_budget=limit,
