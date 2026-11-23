@@ -18,6 +18,10 @@ A second problem showed up while comparing them: the six claim kinds mix two dif
 
 Three layers, each with one job: questions say what we want to know, typed hypotheses say what would answer it and get a verdict, and descriptive claims give the numbers.
 
+![The layers: a research question is answered by typed hypotheses, which are checked on runs and supported by descriptive claims; runs are labelled by the dosage plan](images/2026-11-22-l2-hypothesis-layers.png)
+
+The class diagram below gives the same structure in full, with each hypothesis and claim type and their fields.
+
 ```mermaid
 classDiagram
     direction TB
