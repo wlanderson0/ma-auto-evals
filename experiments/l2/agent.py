@@ -647,14 +647,19 @@ def _model(model: str | Model | None) -> str | Model | None:
         # rounds), which OpenAI then rejects with a 400 before any call is made.
         config = GenerateConfig()
         if model.startswith("openrouter/anthropic/"):
-            # Inspect marks only the system prompt and the tools for caching through
-            # OpenRouter: its per-message marker needs list content, and L2's messages
-            # are strings. OpenRouter's automatic caching (a top-level cache_control)
-            # moves the breakpoint forward as the conversation grows, where the provider
-            # honours it: in live runs (2026-11-17/18) OpenRouter routed every call to
-            # Amazon Bedrock, which did not, so the conversation is still not cached
-            # (#54). Other providers cache automatically.
-            config = GenerateConfig(extra_body={"cache_control": {
+            # OpenRouter's automatic caching: a top-level cache_control, which it turns
+            # into a breakpoint at the end of the prompt, so the whole conversation is
+            # cached and the breakpoint moves forward as it grows. Inspect's own markers
+            # are turned off: in 0.3.263 they put 5-minute breakpoints on the system
+            # prompt and tools, and with them our 1-hour top-level field had no effect
+            # (a 5-minute one did), so only those were ever cached (#54). Anthropic wants
+            # longer-TTL breakpoints first; later Inspect versions also mark the history,
+            # which would leave no breakpoint free. L2 needs 1 hour: it waits 10-15 min
+            # on experiments. Checked with experiments.l2.cache_probe (2026-11-19/20):
+            # each call reads the previous prompt from the cache on Claude Platform on
+            # AWS and on Bedrock; pinned to Bedrock, still after a 400 s pause, billed
+            # at the 1-hour write rate.
+            config = GenerateConfig(cache_prompt=False, extra_body={"cache_control": {
                 "type": "ephemeral", "ttl": CACHE_TTL}})
         return get_model(model, strict_tools=False, config=config)
     return model

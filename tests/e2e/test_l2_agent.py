@@ -6,8 +6,14 @@ Offline: the agent runs on the fake model, and the CLI's live path is checked wi
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
+
 import pytest
 from inspect_ai.log import read_eval_log, resolve_sample_attachments
+from inspect_ai.model import ChatMessageSystem, ChatMessageTool, ChatMessageUser
+from inspect_ai.tool import ToolInfo, ToolParams
 
 import experiments.l2.agent as agent
 from experiments.l2 import sandbox as sandbox_
@@ -398,12 +404,40 @@ def test_the_ops_list_says_how_axis_op_maps_to_a_mutation(tmp_path):
 
 
 def test_l2_on_claude_asks_openrouter_to_cache_its_conversation(monkeypatch):
-    """Inspect's own markers cache only the system prompt and tools through OpenRouter;
-    the top-level cache_control caches the conversation too, for an hour (issue #54)."""
+    """The top-level cache_control caches the whole conversation, for an hour; Inspect's
+    own 5-minute markers are off, since with them only the system prompt and tools were
+    cached (issue #54)."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # the client is made, never called
     claude = agent._model("openrouter/anthropic/claude-opus-5.5")
     assert claude.config.extra_body == {"cache_control": {"type": "ephemeral",
                                                           "ttl": agent.CACHE_TTL}}
     assert agent.CACHE_TTL == "1h"
+    assert claude.config.cache_prompt is False
     other = agent._model("openrouter/openai/gpt-6.1-sol")  # caches automatically
     assert other.config.extra_body is None
+    assert other.config.cache_prompt is None
+
+
+def test_l2_on_claude_sends_only_the_top_level_cache_control(monkeypatch):
+    """What leaves the process: no per-block breakpoints, so none with a shorter TTL can
+    come before the trailing 1-hour one (issue #54)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # the client is made, never called
+    claude = agent._model("openrouter/anthropic/claude-opus-5.5")
+    sent = {}
+
+    async def create(**request):
+        sent.update(request)
+        raise RuntimeError("not sent")
+
+    # monkeypatch: _model's model is memoized, so a plain assignment would outlive the test
+    monkeypatch.setattr(claude.api.client.chat.completions, "create", create)
+    messages = [ChatMessageSystem(content="sys"), ChatMessageUser(content="brief"),
+                ChatMessageTool(content="result", tool_call_id="c1", function="run")]
+    tools = [ToolInfo(name="run", description="run", parameters=ToolParams())]
+    # the provider's own generate: the offline guard on Model.generate would stop the
+    # call before the request is built
+    with contextlib.suppress(RuntimeError):
+        asyncio.run(claude.api.generate(messages, tools, "auto", claude.config))
+    assert sent["extra_body"] == {"cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    assert "cache_control" not in json.dumps(sent["messages"])
+    assert all("cache_control" not in t for t in sent["tools"])
