@@ -67,6 +67,9 @@ PRICES: dict[str, tuple[float, float]] = {
     "openrouter/z-ai/glm-5.3": (2.10, 6.60),
     # An L2 to compare providers' safeguards (issue #55): listed rate, read 2026-11-17.
     "openrouter/openai/gpt-6.1-sol": (2.00, 10.00),
+    # The LLM-collusion replication's firms (listed rate on OpenRouter, 2026-11-18); a
+    # reasoning model, whose reasoning tokens bill as output.
+    "openrouter/openai/gpt-5.6-luna": (0.20, 1.20),
 }
 CACHE_RATES_CHECKED = "2026-11-17"
 """When ``CACHE_RATES`` was read from OpenRouter's prompt-caching guide."""
