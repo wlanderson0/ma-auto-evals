@@ -38,6 +38,12 @@ Does ...? (the question, in plain words)
 - No YAML comments (`#`) and no hints you don't mean L2 to have: the audit keeps a copy
   of the brief that L2 can read.
 - Briefs live in `experiments/l2/briefs/`.
+- A scenario you write by hand for L2 to use must make every argument of its agents'
+  tools required: OpenAI models get tool schemas in strict mode and refuse a tool with an
+  optional argument, so every live sample would error. Drop the default, and type the
+  argument `... | None` if the model may leave it out (it then passes `null`). Variants
+  and L2's own scenarios are checked for this ([`level2-interface.md`](level2-interface.md)
+  §3.4).
 
 ## 2. Run L2
 
@@ -57,6 +63,15 @@ uv run python -m experiments.l2.audit --brief experiments/l2/briefs/<brief>.md -
   puts them on several different models (each agent's Orbit `generate_config`).
 - It runs until L2 ends the audit or the budget runs out; keep the terminal open and
   the machine awake.
+- Each of L2's calls costs more as its conversation grows, so the reserve held back for
+  its review and report grows with it: 10% of the budget, or four of its calls at its
+  latest price plus the reviewer's share, if that is more. To leave L2 room to think,
+  cap the runs in the brief with `run_budget_usd` (e.g. 6 on a $10 budget).
+- A model provider's safeguards can withhold replies (`stop_reason` `content_filter`),
+  for example Anthropic's cyber safeguards on a brief about an attack (issue #55). L2 is
+  told when one of its replies was withheld, and not to reword it to get past the
+  safeguard; after three in a row the agent loop stops, and the report says so. For the
+  agents, a launch labels samples with withheld replies as blocked, not as refusals.
 - To stop it early with a report, press Ctrl-C once: the experiment running now
   finishes, then L2 has its draft reviewed and writes its report. Ctrl-C twice stops at
   once (the ledger and report are still written).
@@ -164,13 +179,37 @@ evidence and the checker's reasons), `review.json` (the reviewer's critique and 
 `scenarios/` (the code L2 wrote) and `experiments/exp-<n>/` (one per launch). A steered
 audit also has `steer.jsonl` (every request read from its mailbox) and `report.json`.
 
+### Continuing an audit
+
+An audit that stopped before it was finished (out of budget, out of time, or stopped by
+hand) can be continued in a new audit, without running its experiments again:
+
+```bash
+uv run python -m experiments.l2.audit --continue logs/l2-audit/<earlier> --live \
+    --model openrouter/anthropic/claude-opus-5.5 --out logs/l2-audit/<name>
+```
+
+- The new audit takes over the earlier one's written scenarios, experiments and calls:
+  L2 reads and cites them as its own, their variant ids are taken, and new experiments
+  and calls are numbered after them. The earlier audit is only read.
+- What the earlier audit spent is recorded in `carried.json` and in the report, and is
+  not counted against the new budget.
+- L2 is shown the earlier draft conclusions and claims, their verdicts, and the
+  reviewer's critique, if there was a review, and is asked to build on them.
+- The brief is the earlier audit's, or `--brief` for a new one, e.g. with a new budget or
+  a `run_budget_usd`.
+
 ## 3. Read it critically
 
 - Read `writeup.md` for the story, then check it against `report.md`: the write-up is
   L2's own and unchecked (the reviewer read its draft), the claims are checked.
-- Start from the claims at the top of `report.md`. Each was read again from the logs
-  (spec §6.4): only *checked* claims are findings; a *lead* falls short (e.g. not told
-  apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
+- Start from the claims at the top of `report.md`: a table gives each claim's verdict,
+  its counts as the checker read them, and where to see it on Cosmos (its experiment, a
+  run where the target showed the behaviour, or the message it quotes); each claim
+  follows in L2's order, and the links to every run behind each claim come at the end
+  of the section. `writeup.md` ends with the same table.
+- Each claim was read again from the logs (spec §6.4): only *checked* claims are
+  findings; a *lead* falls short (e.g. not told apart from chance); *contradicted* and *invalid* ones are wrong as stated; *unchecked*
   ones (kind `other`, e.g. a result of L2's own code) and anything stated only in the
   prose need reading by hand, against the call or post they cite.
 - To check a claim yourself, use "Where the cited evidence is" under the claims: for
@@ -247,11 +286,15 @@ Step by step, the annotations are not posted.
   every run its counts come from (✓ or ✗ for what the target did there, read as the
   claim's checked call read it) and to each message it quotes. A claim on a count of
   posts (`counts`: a target's uses of a name in its own words) also links, run by run,
-  every message that was counted. A claim on probe answers links to the runs only: the
+  every message that was counted, and a claim on a scenario's `outcome` (what a target
+  did with the scenario's tools) links, run by run, every call the target made to those
+  tools (`#call-<id>`, opening at the call in the agent's own conversation). A claim on
+  probe answers links to the runs only: the
   answer is given in a private interview after the run, not in a message. A slug that is not its
-  experiment's run (another commit, start time or set of samples) is refused. The
-  report uploaded to Cosmos ("Open report") was made before the links existed, so it
-  has none.
+  experiment's run (another commit, start time or set of samples) is refused.
+  `--share` (and `experiments.l2.share`) resolves the links before it uploads the audit
+  run, so the report and write-up on Cosmos ("Open report") have them too. An audit
+  whose audit run was uploaded before this keeps an unlinked copy there.
 
 The same export works for a fixed grid run by hand with the milestone 1 CLI
 (`uv run python -m experiments.l2.experiment --brief ... --out <dir>`): pass `<dir>`.

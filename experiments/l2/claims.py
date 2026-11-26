@@ -40,8 +40,15 @@ otherwise the best verdict.
   come from different epochs of one variant (recurrence, spec §6.3); else *checked*.
   The quote shows that the words recur in the target's own posts; whether those words are
   the behaviour claimed is for the reader (the report shows them).
-- ``other``: anything else, e.g. a result from L2's own code (``run_python``). Recorded
-  with its evidence, *unchecked*.
+- ``other`` (``why_unchecked``): anything that cannot be recounted, e.g. a qualitative
+  finding or something L2 noticed that no measure was declared for. It must say in
+  ``why_unchecked`` why it cannot be a comparison, rate or existence claim (at least
+  ``WHY_WORDS`` words). Recorded with its evidence and that reason, *unchecked*. A claim
+  whose words carry figures (a count, a percentage or a decimal) is *quantitative*: the
+  report flags it, because a figure computed in ``run_python`` can be a declared measure
+  instead (expose it as the scenario's ``outcome`` field, record it with
+  ``note_decision(field="measure", value="outcome.<field>")`` before launching, and claim
+  it as a ``difference``, ``no_difference`` or ``rate``), and then it is recounted.
 
 An accepted measure, for comparisons (spec §1, §6.3): the brief's, if it fixes one and a
 scorer is known to read it on the scenario (``report.SCORER``); if none is known, a
@@ -77,21 +84,25 @@ from experiments.l2.report import SCORER as MEASURE_SCORER
 if TYPE_CHECKING:
     from experiments.l2.tools import Tools
 
-KINDS = ("difference", "no_difference", "rate", "existence", "other")
+KINDS = ("difference", "no_difference", "rate", "mean", "existence", "other")
 FIELDS: dict[str, tuple[str, ...]] = {
     "difference": ("a", "b", "target", "direction"),
     "no_difference": ("a", "b", "target"),
     "rate": ("variant", "target", "k", "n"),
+    "mean": ("variant", "target", "mean", "n"),
     "existence": ("target",),
     "other": (),
 }
-OPTIONAL = ("text", "kind", "evidence")
+WHY_WORDS = 5
+"""An ``other`` claim's ``why_unchecked`` has at least this many words."""
+OPTIONAL = ("text", "kind", "evidence", "why_unchecked")
 DIRECTIONS = ("higher", "lower")
 CITABLE = ("scores", "transcript", "find", "run_python", "list_runs")
 """Tools whose results a claim may cite."""
 VERDICTS = ("checked", "lead", "contradicted", "invalid", "unchecked")
 FIGURE = re.compile(r"(?<![\d/.])(\d+)\s*/\s*(\d+)(?![\d/]|\.\d)")
 OF = re.compile(r"(?<![\d.])(\d+)\s+(?:of|out of|in)\s+(\d+)(?!\d|\.\d)", re.I)
+DECIMAL = re.compile(r"(?<![\w.])\d+\.\d+(?![\w.])")
 PERCENT = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:%|percent\b|per cent\b)", re.I)
 NOT_A_COUNT = re.compile(r"(?:round|epoch|turn|step|post|call)s?\s*$", re.I)
 """Words before ``k of n`` that make it a position, not a count (e.g. "round 3 of 5")."""
@@ -100,6 +111,15 @@ NOT_A_RATE = re.compile(r"(?:\bp\s*[<=>≤]\s*$)|(?:^\s*(?:CI\b|confidence))", r
 ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 QUOTE_WORDS = 3
 """An existence claim's quote has at least this many words."""
+
+
+def quantitative(text: str) -> bool:
+    """Whether a claim's words carry figures: a ``k/n``, ``k of n``, a percentage or a
+    decimal (positions such as "round 3 of 5" and significance levels do not count)."""
+    figures = [m for m in (*FIGURE.finditer(text), *OF.finditer(text))
+               if not NOT_A_COUNT.search(text[:m.start()])]
+    rates = [m for m in PERCENT.finditer(text) if not NOT_A_RATE.search(text[:m.start()])]
+    return bool(figures or rates or DECIMAL.search(text))
 
 
 class ClaimError(ValueError):
@@ -114,6 +134,25 @@ def _int(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value) if value == value and abs(value) != float("inf") else None
+    try:
+        return _number(float(value.strip())) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _decimals(shown: str) -> int:
+    """How many decimals a stated number has (``0.84`` is 2)."""
+    text = shown.strip().lower()
+    if "e" in text:
+        return max(0, -int(text.split("e")[1]) + len(text.split("e")[0].partition(".")[2]))
+    return len(text.partition(".")[2])
 
 
 def _post_key(value: Any) -> int | str | None:
@@ -161,6 +200,14 @@ def parse_claims(raw: Any, tools: Tools) -> list[dict[str, Any]]:
                 value = _int(value)
                 if value is None or value < 0:
                     problems.append(f"{where}: {name} must be a whole number")
+            elif name == "mean":
+                shown = value if isinstance(value, str) else repr(value)
+                value = _number(value)
+                if value is None:
+                    problems.append(f"{where}: mean must be a number (the average, at the "
+                                    "precision you state it)")
+                else:
+                    claim["decimals"] = _decimals(shown)
             elif name == "direction":
                 if value not in DIRECTIONS:
                     problems.append(f"{where}: direction must be 'higher' or 'lower' (a's "
@@ -171,6 +218,19 @@ def parse_claims(raw: Any, tools: Tools) -> list[dict[str, Any]]:
             else:
                 value = value.strip()
             claim[name] = value
+        if kind == "other":
+            why = item.get("why_unchecked")
+            if not isinstance(why, str) or len(why.split()) < WHY_WORDS:
+                problems.append(
+                    f"{where}: an other claim needs why_unchecked: at least {WHY_WORDS} words "
+                    "on why it cannot be a difference, no_difference, rate, mean or "
+                    "existence claim "
+                    "(a figure from your own code can be: expose it as the scenario's outcome "
+                    "field, record it with note_decision(field='measure', "
+                    "value='outcome.<field>') before launching, and compare it with scores)")
+            else:
+                claim["why_unchecked"] = " ".join(why.split())
+            claim["quantitative"] = quantitative(str(text or ""))
         if kind == "rate" and claim.get("k") is not None and claim.get("n") is not None \
                 and claim["k"] > claim["n"]:
             problems.append(f"{where}: k is more than n")
@@ -415,11 +475,23 @@ def _check(tools: Tools, claim: Mapping[str, Any]) -> tuple[str, list[str], Any,
     verdict was read from (``_used``; ``None`` for kinds not read from a call)."""
     kind = claim["kind"]
     if kind == "other":
-        return ("unchecked", ["kind other: not checked mechanically; read its evidence"],
-                None, None)
+        reasons = ["kind other: not checked mechanically; read its evidence",
+                   f"why it cannot be recounted (L2's words): {claim.get('why_unchecked', '')}"]
+        if claim.get("quantitative"):
+            reasons.append("quantitative claim that was not recounted: its figures are L2's "
+                           "own, not a declared measure on the logs")
+        return "unchecked", reasons, None, None
     if kind == "existence":
         return (*_check_existence(tools, claim), None)
     rows = _scores_rows(tools, claim)
+    if kind == "mean":
+        vid = claim["variant"]
+        usable = [r for r in rows if vid in r["args"]["variant_ids"]
+                  or r["args"].get("against") == vid]
+        if not usable:
+            return "invalid", [f"no cited scores call read {vid}"], None, None
+        return _best([(*_mean(tools, claim, r["seq"], r["args"]), _used(r["seq"], r["args"]))
+                      for r in usable])
     if kind == "rate":
         vid = claim["variant"]
         usable = [r for r in rows if vid in r["args"]["variant_ids"]
@@ -460,6 +532,31 @@ def _rate(tools: Tools, claim: Mapping[str, Any], seq: int,
                                 + (f"; {unknown} unknown" if unknown else "")], None
     return "checked", [f"{k}/{n} ({what})" + (f"; {unknown} more unknown" if unknown
                                               else "")], [(k, n)]
+
+
+def _mean(tools: Tools, claim: Mapping[str, Any], seq: int,
+          args: Mapping[str, Any]) -> tuple[str, list[str], Any]:
+    vid, target = claim["variant"], claim["target"]
+    scorer, field = args.get("scorer"), args.get("field")
+    if scorer != "outcome" or field is None:
+        return "invalid", [f"call {seq} read {scorer}, which holds no number to average "
+                           "(outcome with field)"], None
+    results = tools.results()
+    if target not in results.targets(vid):
+        return "invalid", [f"{target} is not a target of {vid}"], None
+    values = [results.outcome_value(s, target, field) for s in results.of(vid)]
+    known = [v for v in values if v is not None]
+    unknown = len(values) - len(known)
+    what = f"{vid}, {target}, outcome.{field}, call {seq}"
+    if not known:
+        return "invalid", [f"no number in {what}"], None
+    mean, d = sum(known) / len(known), claim["decimals"]
+    note = f"; {unknown} unknown" if unknown else ""
+    if len(known) != claim["n"] or abs(mean - claim["mean"]) > 0.5 * 10 ** -d + 1e-9:
+        return "contradicted", [f"the logs give mean {mean:.{max(d, 2)}f} over {len(known)} "
+                                f"({what}), not {claim['mean']:.{d}f} over {claim['n']}"
+                                + note], None
+    return "checked", [f"mean {mean:.{max(d, 2)}f} over {len(known)} ({what})" + note], []
 
 
 def _comparison(tools: Tools, claim: Mapping[str, Any], seq: int,

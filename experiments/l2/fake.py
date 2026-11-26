@@ -64,7 +64,8 @@ ANALYSIS: list[tuple[str, dict[str, Any]]] = [
     *[(name, {"conclusions": ("Fake L2 (scripted, analysis only): nothing is concluded. "
                               "Search: 0 variants run, 1 scorer (probe), 1 comparison."),
               "claims": json.dumps([{"text": "M1 against M0, as read in call 3.",
-                                     "kind": "other", "evidence": [{"call": 3}]}]),
+                                     "kind": "other", "evidence": [{"call": 3}],
+                                     "why_unchecked": "Qualitative: no measure was declared."}]),
               "writeup": "Fake L2 (analysis only): nothing is concluded.\n\n"
                          "![M1 against M0](figures/M1-vs-M0-probe.png)", **more})
       for name, more in (("request_review", {}),

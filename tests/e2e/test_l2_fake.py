@@ -116,8 +116,9 @@ def test_running_out_of_budget_stops_l2_and_the_report_says_why(tmp_path):
     assert json.loads((audit.out / "ledger.json").read_text())["final"]
 
 
-def test_the_token_backstop_is_the_budget_at_the_input_rate(tmp_path):
-    assert token_backstop(0.5, "openrouter/openai/gpt-4.1-mini") == int(0.5e6 / 0.4)
+def test_the_token_backstop_is_the_budget_at_the_cache_read_rate(tmp_path):
+    # gpt-4.1-mini: $0.40/M input, read from the cache at half that
+    assert token_backstop(0.5, "openrouter/openai/gpt-4.1-mini") == int(0.5e6 / 0.2)
     assert token_backstop(0.5, "mockllm/l2") is None
     # Applied by default: $0.001 at $1/M input is 1000 tokens, under one fake call (1100).
     audit = Audit.create(brief(tmp_path, 0.001), tmp_path / "audit", mock=True)

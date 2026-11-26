@@ -11,11 +11,12 @@ OpenRouter routes each model to one of several providers at different prices, an
 the budget is enforced from these numbers, so the table errs high: per model, the
 dearest of OpenRouter's listed rate and the providers live runs were routed to (from
 their reported costs in ``logs/live`` and ``logs/l2``). Inspect's ``input_tokens``
-leaves out cached input (``input_tokens_cache_read`` / ``_write``), charged at the full input
-rate. A usage that carries its own ``total_cost`` is charged that instead (Inspect
-0.3.263's OpenRouter provider never fills it in). A model missing from the table
-raises ``UnknownPrice`` rather than counting as free; offline mocks (``mockllm/``)
-are free.
+leaves out cached input (``input_tokens_cache_read`` / ``_write``), which is charged at the
+provider's cache rates (``CACHE_RATES``, multiples of the input rate; the full input rate
+for a provider not listed there). A usage that carries its own ``total_cost`` is
+charged that instead (Inspect 0.3.263's OpenRouter provider never fills it in). A model
+missing from the table raises ``UnknownPrice`` rather than counting as free; offline
+mocks (``mockllm/``) are free.
 """
 
 from __future__ import annotations
@@ -43,7 +44,6 @@ PRICES: dict[str, tuple[float, float]] = {
     # The board study's m2 and m3 (read 2026-10-30). Listed 0.006 / 7 and 0.07 / 1.40, but
     # OpenRouter routes them across many providers: these are the dearest seen.
     "openrouter/z-ai/glm-5.2": (2.31, 8.00),
-    "openrouter/z-ai/glm-5.3": (2.80, 8.80),
     # The capability ladder of "Scaling Laws for Strategic Interactions" (Zhang et al., 2026),
     # with that paper's LMArena Elo (March 31, 2026). Read from OpenRouter's endpoint lists
     # on 2026-11-05; where providers differ, the dearest listed rate.
@@ -61,9 +61,33 @@ PRICES: dict[str, tuple[float, float]] = {
     # A cheaper L2 (listed rate on OpenRouter, 2026-11-17); a reasoning model, whose
     # reasoning tokens bill as output.
     "openrouter/openai/gpt-6.2-sol": (2.00, 10.00),
+    # glm-5.3: was 2.80 / 8.80, the dearest seen in October; on 2026-11-17 its providers
+    # list 0.0699-2.10 input and 1.40-6.60 output, and live L2 calls were routed to one
+    # that charged about a quarter of the table. The dearest listed rate still errs high.
+    "openrouter/z-ai/glm-5.3": (2.10, 6.60),
+    # An L2 to compare providers' safeguards (issue #55): listed rate, read 2026-11-17.
+    "openrouter/openai/gpt-6.1-sol": (2.00, 10.00),
     # The LLM-collusion replication's firms (listed rate on OpenRouter, 2026-11-18); a
     # reasoning model, whose reasoning tokens bill as output.
     "openrouter/openai/gpt-5.6-luna": (0.20, 1.20),
+}
+CACHE_RATES_CHECKED = "2026-11-17"
+"""When ``CACHE_RATES`` was read from OpenRouter's prompt-caching guide."""
+CACHE_RATES: dict[str, tuple[float, float]] = {
+    # provider prefix: (cache read, cache write), as multiples of the model's input rate.
+    # Where the guide gives a range or a choice, the dearer end: the budget errs high.
+    # Anthropic: reads 0.1x; writes 1.25x for 5 minutes, 2x for 1 hour (what L2 asks
+    # for, agent.CACHE_TTL), so writes are charged at 2x.
+    "openrouter/anthropic/": (0.10, 2.00),
+    # OpenAI: automatic; reads 0.25x or 0.5x by model; writes free before GPT-5.6,
+    # 1.25x from it.
+    "openrouter/openai/": (0.50, 1.25),
+    # Z.ai GLM: automatic; reads about 0.2x; writes free for now (charged at the input
+    # rate in case that ends).
+    "openrouter/z-ai/": (0.20, 1.00),
+    # DeepSeek: reads 0.1x, writes at the input rate. Moonshot: reads 0.25x, writes free.
+    "openrouter/deepseek/": (0.10, 1.00),
+    "openrouter/moonshotai/": (0.25, 1.00),
 }
 FREE_PREFIXES = ("mockllm/",)
 """Offline mock models: no provider, no cost."""
@@ -84,12 +108,24 @@ def price(model: str, prices: Mapping[str, tuple[float, float]] = PRICES) -> tup
                        f"(checked {PRICES_CHECKED})")
 
 
+def cache_rates(model: str) -> tuple[float, float]:
+    """``(read, write)``: what a cached input token costs, as a multiple of the model's
+    input rate (``CACHE_RATES``; the full rate for a provider not listed)."""
+    for prefix, rates in CACHE_RATES.items():
+        if model.startswith(prefix):
+            return rates
+    return 1.0, 1.0
+
+
 def usage_cost(model: str, usage: ModelUsage,
                prices: Mapping[str, tuple[float, float]] = PRICES) -> float:
     if usage.total_cost is not None:
         return usage.total_cost
     per_input, per_output = price(model, prices)
-    return (input_tokens(usage) * per_input + usage.output_tokens * per_output) / 1_000_000
+    read, write = cache_rates(model)
+    inputs = (usage.input_tokens + (usage.input_tokens_cache_read or 0) * read
+              + (usage.input_tokens_cache_write or 0) * write)
+    return (inputs * per_input + usage.output_tokens * per_output) / 1_000_000
 
 
 def input_tokens(usage: ModelUsage) -> int:

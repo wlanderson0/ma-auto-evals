@@ -547,6 +547,34 @@ def run_experiment(brief_path: Path, epochs: int, out: Path, *, mock: bool = Fal
     return state.write(out, decisions, brief)
 
 
+SAFEGUARD_MARKS = ("content_filter", "safeguards flagged")
+"""Text in an error that a model provider's safeguards caused it (e.g. Anthropic's "Cyber
+safeguards flagged this message", sent back as the reply)."""
+
+
+def safeguard_blocks(sample: Any) -> str | None:
+    """How a model provider's safeguards blocked this sample, in words, or ``None``: the
+    model calls whose reply was withheld (``stop_reason`` ``content_filter``), by model,
+    and whether the sample's error comes from them. A blocked reply is not a refusal by
+    the model: the provider withheld it, so the agent's behaviour there is unknown."""
+    counts: dict[str, int] = {}
+    for event in sample.events or []:
+        if getattr(event, "event", None) != "model" or event.output is None:
+            continue
+        if any(choice.stop_reason == "content_filter" for choice in event.output.choices):
+            counts[event.model] = counts.get(event.model, 0) + 1
+    error = sample.error.message if sample.error is not None else ""
+    from_error = any(mark in error.lower() for mark in SAFEGUARD_MARKS)
+    if not counts and not from_error:
+        return None
+    by_model = ", ".join(f"{n} from {model}" for model, n in sorted(counts.items()))
+    return ("blocked by the model provider's safeguards: "
+            + (f"replies withheld ({by_model})" if counts else "")
+            + ("; " if counts and from_error else "")
+            + ("the sample's error comes from a blocked reply" if from_error else "")
+            + "; the agent's behaviour there is unknown, not a refusal")
+
+
 class _State:
     """Logs, spend and errors per variant, as the epochs come in."""
 
@@ -562,8 +590,12 @@ class _State:
         for vid, path in paths.items():
             self.logs[vid].append(path)
             self.spent[vid] += costs[vid]
-            self.errors[vid].extend(f"epoch {epoch}: {s.error.message}"
-                                    for s in logs[vid].samples or [] if s.error is not None)
+            for sample in logs[vid].samples or []:
+                blocked = safeguard_blocks(sample)
+                if blocked:
+                    self.errors[vid].append(f"epoch {epoch}: {blocked}")
+                if sample.error is not None:
+                    self.errors[vid].append(f"epoch {epoch}: {sample.error.message}")
             if logs[vid].status != "success" and not logs[vid].samples:
                 self.errors[vid].append(f"epoch {epoch}: log status {logs[vid].status}")
         self.by_epoch.append({"epoch": epoch, "usd": sum(costs.values())})
